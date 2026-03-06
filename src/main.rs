@@ -1,6 +1,9 @@
 use std::fs;
 use std::process;
 
+use ariadne::{Color, Label, Report, ReportKind, Source};
+use chumsky::prelude::Simple;
+
 use crate::machine::{translate::translate, Strategy};
 
 mod machine;
@@ -55,14 +58,54 @@ fn main() {
     });
 
     let ast = parser::parse(&src).unwrap_or_else(|errs| {
-        for err in errs {
-            eprintln!("Parse error: {err}");
-        }
+        report_errors(&file_path, &src, errs);
         process::exit(1);
     });
 
     let (main_comp, env) = translate(ast);
     machine::eval(main_comp, env.into(), strategy);
+}
+
+fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
+    let source = Source::from(src);
+    for err in errs {
+        let span = err.span();
+        let msg = match err.reason() {
+            chumsky::error::SimpleReason::Unexpected => {
+                let found = err
+                    .found()
+                    .map(|c| format!("'{c}'"))
+                    .unwrap_or_else(|| "end of input".to_string());
+                let expected: Vec<_> = err
+                    .expected()
+                    .map(|e| match e {
+                        Some(c) => format!("'{c}'"),
+                        None => "end of input".to_string(),
+                    })
+                    .collect();
+                if expected.is_empty() {
+                    format!("unexpected {found}")
+                } else {
+                    format!("found {found}, expected {}", expected.join(", "))
+                }
+            }
+            chumsky::error::SimpleReason::Unclosed { span: _, delimiter } => {
+                format!("unclosed delimiter '{delimiter}'")
+            }
+            chumsky::error::SimpleReason::Custom(msg) => msg.clone(),
+        };
+
+        Report::build(ReportKind::Error, filename, span.start)
+            .with_message(&msg)
+            .with_label(
+                Label::new((filename, span))
+                    .with_message(&msg)
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint((filename, source.clone()))
+            .unwrap();
+    }
 }
 
 #[cfg(test)]
