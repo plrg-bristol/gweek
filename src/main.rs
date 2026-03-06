@@ -41,7 +41,12 @@ fn main() {
 
 fn interpret(src: &mut String) {
 
-    let ast = parser::parse(src).unwrap();
+    let ast = parser::parse(src).unwrap_or_else(|errs| {
+        for err in errs {
+            eprintln!("Parse error: {}", err);
+        }
+        process::exit(1);
+    });
     let (main, env) = translate(ast);
     machine::eval(main, env.into());
 }
