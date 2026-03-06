@@ -1,7 +1,10 @@
 use std::rc::Rc;
+use smallvec::{smallvec, SmallVec};
 use crate::machine::{lvar, senv, senv::SuspAt, value_type::ValueType};
 use super::{lvar::LogicEnv, mterms::{MComputation, MValue}, senv::SuspEnv, unify::UnifyError, Env, Ident, VClosure};
 use crate::machine::unify::unify;
+
+pub type StepResult = SmallVec<[Machine; 2]>;
     
 #[derive(Clone, Debug)]
 enum StkFrame {
@@ -50,7 +53,7 @@ fn eval_susp_then(a : SuspAt, m : Machine) -> Machine {
 
 impl Machine {
 
-    pub fn step(self) -> Vec<Machine> {
+    pub fn step(self) -> StepResult {
         let m = self;
         
         match &*m.comp {
@@ -59,8 +62,8 @@ impl Machine {
                 match &*m.stack {
                     Stack::Nil => {
                         match m.senv.next() {
-                            Some(a) => vec![ eval_susp_then(a, m) ],
-                            None => vec![Machine { done: true, ..m }],
+                            Some(a) => smallvec![ eval_susp_then(a, m) ],
+                            None => smallvec![Machine { done: true, ..m }],
                         }
                     }
                     Stack::Cons(stk_clos, stk_tail) => {
@@ -69,12 +72,12 @@ impl Machine {
                             StkFrame::Value(_) => unreachable!("return throws value to a value"),
                             StkFrame::To(cont) => {
                                 let new_env = stk_env.extend_val(val.clone(), m.env.clone());
-                                vec![Machine { comp: cont.clone(), stack: stk_tail.clone(), env: new_env, ..m }]
+                                smallvec![Machine { comp: cont.clone(), stack: stk_tail.clone(), env: new_env, ..m }]
                             }
                             StkFrame::Set(i, cont) => {
                                 let mut senv = m.senv;
                                 senv.set(&i, val, &m.env);
-                                vec![Machine { comp: cont.clone(), stack: stk_tail.clone(), env: stk_env.clone(), senv, ..m }]
+                                smallvec![Machine { comp: cont.clone(), stack: stk_tail.clone(), env: stk_env.clone(), senv, ..m }]
                             }
                         }
                     }
@@ -85,14 +88,14 @@ impl Machine {
                 match &**comp {
                     MComputation::Return(v) => {
                         let env = m.env.extend_val(v.clone(), m.env.clone());
-                        vec![Machine { comp : cont.clone(), env, ..m }]
+                        smallvec![Machine { comp : cont.clone(), env, ..m }]
                     },
                     _ => {
                         let mut senv = m.senv;
                         let env = &m.env;
                         let ident = senv.fresh(&comp, &m.env);
                         let env = env.extend_susp(ident);
-                        vec![Machine { comp : cont.clone(), env, senv : senv, ..m}]
+                        smallvec![Machine { comp : cont.clone(), env, senv : senv, ..m}]
                     }
                 }
             },
@@ -104,7 +107,7 @@ impl Machine {
                         match vclos {
                             VClosure::Clos { val, env } => {
                                 match &*val {
-                                    MValue::Thunk(t) => vec![Machine { comp : t.clone(), env : env.clone(), ..m}],
+                                    MValue::Thunk(t) => smallvec![Machine { comp : t.clone(), env : env.clone(), ..m}],
                                 _ => panic!("shouldn't be forcing a non-thunk value")
                                 } 
                             },
@@ -112,7 +115,7 @@ impl Machine {
                             VClosure::Susp { ident } => unreachable!("shouldn't be forcing a suspension"),
                         }
                     Err(a) => {
-                        vec![Machine { comp : a.comp, env : a.env, stack : m.stack.push_susp(a.ident, m.comp, m.env), ..m  }]
+                        smallvec![Machine { comp : a.comp, env : a.env, stack : m.stack.push_susp(a.ident, m.comp, m.env), ..m  }]
                     },
                 }
             },
@@ -122,7 +125,7 @@ impl Machine {
                     Stack::Cons(StkClosure { stk_frame, stk_env }, tail) => {
                         if let StkFrame::Value(val) = stk_frame {
                             let env = m.env.extend_val(val.clone(), stk_env.clone());
-                            vec![Machine { comp: body.clone(), stack: tail.clone(), env, ..m }]
+                            smallvec![Machine { comp: body.clone(), stack: tail.clone(), env, ..m }]
                         } else {
                             panic!("lambda but no value StkFrame in the stack")
                         }
@@ -132,7 +135,7 @@ impl Machine {
             },
 
             MComputation::App { op, arg } =>
-                vec![Machine { comp: op.clone(), stack: m.stack.push_closure(StkFrame::Value(arg.clone()), m.env.clone()), ..m }],
+                smallvec![Machine { comp: op.clone(), stack: m.stack.push_closure(StkFrame::Value(arg.clone()), m.env.clone()), ..m }],
 
             MComputation::Choice(choices) => 
               choices.iter().map(|c| Machine { comp: c.clone(), ..m.clone()}).collect(),
@@ -140,28 +143,28 @@ impl Machine {
             MComputation::Exists { ptype, body } => {
                 let mut lenv = m.lenv;
                 let ident = lenv.fresh(ptype.clone());
-                vec![Machine { comp : body.clone(), env : m.env.extend_lvar(ident), lenv : lenv, ..m}]
+                smallvec![Machine { comp : body.clone(), env : m.env.extend_lvar(ident), lenv : lenv, ..m}]
             }
 
             MComputation::Equate { lhs, rhs, body } => {
                 let mut lenv = m.lenv;
                 match unify(&lhs, &rhs, &m.env, &mut lenv, &m.senv) {
-                    Ok(()) => vec![ Machine { comp : body.clone(), lenv : lenv, ..m } ],
-                    Err(UnifyError::Susp(a)) => vec![ eval_susp_then(a, Machine { lenv : lenv, ..m }) ],
-                    Err(_) => vec![]
+                    Ok(()) => smallvec![ Machine { comp : body.clone(), lenv : lenv, ..m } ],
+                    Err(UnifyError::Susp(a)) => smallvec![ eval_susp_then(a, Machine { lenv : lenv, ..m }) ],
+                    Err(_) => smallvec![]
                 }
             },
 
             MComputation::Ifz { num, zk, sk } => {
                 let vclos = VClosure::mk_clos(num, &m.env);
                 match vclos.close_head(&m.lenv, &m.senv) {
-                    Err(a) => vec![ eval_susp_then(a, m) ],
+                    Err(a) => smallvec![ eval_susp_then(a, m) ],
                     Ok(VClosure::Clos { val, env }) => {
                         match &*val {
-                            MValue::Zero => vec![Machine { comp: zk.clone(), ..m}],
+                            MValue::Zero => smallvec![Machine { comp: zk.clone(), ..m}],
                             MValue::Succ(v) => {
                                 let env = m.env.extend_val(v.clone(), env.clone());
-                                vec![Machine { comp: sk.clone(), env, ..m}]
+                                smallvec![Machine { comp: sk.clone(), env, ..m}]
                             }
                             _ => panic!("Ifz on {}", &*val)
                         }
@@ -188,7 +191,7 @@ impl Machine {
                             Machine { comp: sk.clone(), lenv : lenv, env : new_env, ..m.clone()}
                         };
 
-                        vec![m_zero, m_succ]
+                        smallvec![m_zero, m_succ]
                     },
                     Ok(VClosure::Susp { ident }) => unreachable!("shouldn't be encountering a suspension here")
                 }
@@ -198,15 +201,15 @@ impl Machine {
                 let vclos = VClosure::mk_clos(list, &m.env);
                 let closed_list = vclos.close_head(&m.lenv, &m.senv);
                 match closed_list {
-                    Err(a) => vec![ eval_susp_then(a, m) ],
+                    Err(a) => smallvec![ eval_susp_then(a, m) ],
                     Ok(vclos) => 
                         match vclos {
                             VClosure::Clos { val, env } => {
                                 match &*val {
-                                    MValue::Nil => vec![Machine { comp: nilk.clone(), ..m}],
+                                    MValue::Nil => smallvec![Machine { comp: nilk.clone(), ..m}],
                                     MValue::Cons(v, w) => {
                                         let env = m.env.extend_val(v.clone(), env.clone()).extend_val(w.clone(), env.clone());
-                                        vec![Machine { comp: consk.clone(), env, ..m}]
+                                        smallvec![Machine { comp: consk.clone(), env, ..m}]
                                     },
                                     _ => panic!("Match on non-list")
                                 }
@@ -241,7 +244,7 @@ impl Machine {
 
                                     Machine { comp: consk.clone(), lenv, env, ..m.clone()}
                                 };
-                                vec![m_nil, m_cons]
+                                smallvec![m_nil, m_cons]
                             }
                             VClosure::Susp { ident } => unreachable!("shouldn't be matching on a suspension"),
                         }
@@ -251,7 +254,7 @@ impl Machine {
                 let vclos = VClosure::mk_clos(sum, &m.env);
                 let closed_sum = vclos.close_head(&m.lenv, &m.senv);
                 match closed_sum {
-                    Err(a) => vec![ eval_susp_then(a, m) ],
+                    Err(a) => smallvec![ eval_susp_then(a, m) ],
                     Ok(vclos) => 
                         match vclos {
                             VClosure::Clos { val, env } => {
@@ -259,12 +262,12 @@ impl Machine {
                                     MValue::Inl(v) => {
                                         let old_env = env.clone();
                                         let new_env = m.env.extend_val(v.clone(), old_env.clone());
-                                        vec![Machine { comp: inlk.clone(), env : new_env, ..m}]
+                                        smallvec![Machine { comp: inlk.clone(), env : new_env, ..m}]
                                     },
                                     MValue::Inr(v) => {
                                         let old_env = env.clone();
                                         let new_env = m.env.extend_val(v.clone(), old_env.clone());
-                                        vec![Machine { comp: inrk.clone(), env : new_env, ..m}]
+                                        smallvec![Machine { comp: inrk.clone(), env : new_env, ..m}]
                                     },
                                     _ => panic!("Match on non-list")
                                 }
@@ -304,7 +307,7 @@ impl Machine {
                                     Machine { comp: inrk.clone(), lenv, env, ..m.clone()}
                                 };
 
-                                vec![m_inl, m_inr]
+                                smallvec![m_inl, m_inr]
                             }
                             VClosure::Susp { ident } => unreachable!("oops")
                         }
@@ -312,7 +315,7 @@ impl Machine {
             },
             MComputation::Rec { body } => {
                 let env = m.env.extend_val(m.comp.thunk(), m.env.clone());
-                vec![Machine { comp : body.clone(), env, ..m }] 
+                smallvec![Machine { comp : body.clone(), env, ..m }] 
             },
         }
     }

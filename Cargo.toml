@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 im = "15.1.0"
 chumsky = "0.9"
+smallvec = "1.15.1"
 
 [lints.rust]
 unused = "allow"

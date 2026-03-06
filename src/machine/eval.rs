@@ -8,28 +8,26 @@ use super::step::{Stack, Machine};
 use super::vclosure::VClosure;
 
 pub fn eval(comp: MComputation, env: Rc<Env>) {
-    let m = Machine { comp: comp.into(), env: env.clone(), stack: Stack::empty_stack(), lenv: LogicEnv::new().into(), senv: SuspEnv::new().into(), done: false };
+    let m = Machine { comp: comp.into(), env: env.clone(), stack: Stack::empty_stack(), lenv: LogicEnv::new(), senv: SuspEnv::new(), done: false };
     let mut machines = vec![m];
+    let mut next = Vec::new();
     let mut solns = 0;
     while !machines.is_empty() {
-        let (done, ms): (Vec<Machine>, Vec<Machine>) = machines.into_iter()
-            .flat_map(|m| m.step())
-            .partition(|m| m.done);
-
-        let mut dones = done.iter();
-        while let Some(m) = dones.next() {
-            match &*m.comp {
-                MComputation::Return(v) => {
-                    let out = output(v.clone(), m.env.clone(), &m.lenv, &m.senv);
-                    match out {
-                        Some(xs) => { println!("> {}", xs); solns += 1 }
-                        None => ()
+        for m in machines.drain(..) {
+            for m in m.step() {
+                if m.done {
+                    if let MComputation::Return(v) = &*m.comp {
+                        if let Some(s) = output(v.clone(), m.env.clone(), &m.lenv, &m.senv) {
+                            println!("> {}", s);
+                            solns += 1;
+                        }
                     }
-                },
-                _ => unreachable!()
+                } else {
+                    next.push(m);
+                }
             }
         }
-        machines = ms;
+        std::mem::swap(&mut machines, &mut next);
     }
 
     println!(">>> {} solutions", solns);
