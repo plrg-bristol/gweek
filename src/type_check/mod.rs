@@ -1,9 +1,4 @@
-use type_error::TypeError;
-
-use crate::parser::syntax::decl::Decl;
-
 pub mod type_error;
+mod check;
 
-pub fn check_type(ast: Vec<Decl>) -> Result<(), TypeError> {
-    Ok(())
-}
+pub use check::check_type;
