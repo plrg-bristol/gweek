@@ -17,13 +17,17 @@ pub enum Strategy {
 }
 
 pub fn eval(comp: MComputation, env: Rc<Env>, strategy: Strategy) {
-    let solns = match strategy {
-        Strategy::Bfs => eval_bfs(comp, env),
-        Strategy::Dfs => eval_dfs(comp, env),
-        Strategy::Iddfs => eval_iddfs(comp, env),
-        Strategy::Fair => eval_fair(comp, env),
-    };
+    let solns = run(comp, env, strategy, true);
     println!(">>> {} solutions", solns);
+}
+
+pub fn run(comp: MComputation, env: Rc<Env>, strategy: Strategy, print: bool) -> usize {
+    match strategy {
+        Strategy::Bfs => eval_bfs(comp, env, print),
+        Strategy::Dfs => eval_dfs(comp, env, print),
+        Strategy::Iddfs => eval_iddfs(comp, env, print),
+        Strategy::Fair => eval_fair(comp, env, print),
+    }
 }
 
 fn fresh_machine(comp: MComputation, env: Rc<Env>) -> Machine {
@@ -37,16 +41,18 @@ fn fresh_machine(comp: MComputation, env: Rc<Env>) -> Machine {
     }
 }
 
-fn handle_done(m: &Machine, solns: &mut usize) {
+fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
     if let MComputation::Return(v) = &*m.comp {
         if let Some(s) = output(v.clone(), m.env.clone(), &m.lenv, &m.senv) {
-            println!("> {}", s);
+            if print {
+                println!("> {}", s);
+            }
             *solns += 1;
         }
     }
 }
 
-fn eval_bfs(comp: MComputation, env: Rc<Env>) -> usize {
+fn eval_bfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     let mut machines = vec![fresh_machine(comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
@@ -54,7 +60,7 @@ fn eval_bfs(comp: MComputation, env: Rc<Env>) -> usize {
         for m in machines.drain(..) {
             for m in m.step() {
                 if m.done {
-                    handle_done(&m, &mut solns);
+                    record_solution(&m, &mut solns, print);
                 } else {
                     next.push(m);
                 }
@@ -65,13 +71,13 @@ fn eval_bfs(comp: MComputation, env: Rc<Env>) -> usize {
     solns
 }
 
-fn eval_dfs(comp: MComputation, env: Rc<Env>) -> usize {
+fn eval_dfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     let mut stack = vec![fresh_machine(comp, env)];
     let mut solns = 0;
     while let Some(m) = stack.pop() {
         for m in m.step().into_iter().rev() {
             if m.done {
-                handle_done(&m, &mut solns);
+                record_solution(&m, &mut solns, print);
             } else {
                 stack.push(m);
             }
@@ -80,7 +86,7 @@ fn eval_dfs(comp: MComputation, env: Rc<Env>) -> usize {
     solns
 }
 
-fn eval_iddfs(comp: MComputation, env: Rc<Env>) -> usize {
+fn eval_iddfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
     let mut seen = HashSet::new();
@@ -99,7 +105,9 @@ fn eval_iddfs(comp: MComputation, env: Rc<Env>) -> usize {
                     if let MComputation::Return(v) = &*m.comp {
                         if let Some(s) = output(v.clone(), m.env.clone(), &m.lenv, &m.senv) {
                             if seen.insert(s.clone()) {
-                                println!("> {}", s);
+                                if print {
+                                    println!("> {}", s);
+                                }
                                 solns += 1;
                             }
                         }
@@ -118,7 +126,7 @@ fn eval_iddfs(comp: MComputation, env: Rc<Env>) -> usize {
     solns
 }
 
-fn eval_fair(comp: MComputation, env: Rc<Env>) -> usize {
+fn eval_fair(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     const QUOTA: usize = 10000;
     let mut queue = VecDeque::new();
     queue.push_back(fresh_machine(comp, env));
@@ -135,7 +143,7 @@ fn eval_fair(comp: MComputation, env: Rc<Env>) -> usize {
             steps += 1;
             for m in m.step().into_iter().rev() {
                 if m.done {
-                    handle_done(&m, &mut solns);
+                    record_solution(&m, &mut solns, print);
                 } else {
                     local.push(m);
                 }

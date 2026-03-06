@@ -1,6 +1,10 @@
 use std::rc::Rc;
 
-use super::{env::Env, mterms::{MComputation, MValue}, Ident, VClosure};
+use super::env::Env;
+use super::mterms::MComputation;
+use super::{Ident, VClosure};
+
+use super::mterms::MValue;
 
 type CClosure = (Rc<MComputation>, Rc<Env>);
 
@@ -18,15 +22,12 @@ pub struct SuspAt {
 }
 
 impl SuspEnv {
-
     pub fn new() -> SuspEnv {
         SuspEnv {
             entries: Rc::new(Vec::new()),
             next_pending: 0,
         }
     }
-
-    pub fn size(&self) -> usize { self.entries.len() }
 
     pub fn fresh(&mut self, comp: &Rc<MComputation>, env: &Rc<Env>) -> Ident {
         let entries = Rc::make_mut(&mut self.entries);
@@ -38,7 +39,11 @@ impl SuspEnv {
     pub fn lookup(&self, ident: &Ident) -> Result<VClosure, SuspAt> {
         match &self.entries[*ident] {
             Ok(vclos) => Ok(vclos.clone()),
-            Err((comp, env)) => Err(SuspAt { ident: *ident, comp: comp.clone(), env: env.clone() }),
+            Err((comp, env)) => Err(SuspAt {
+                ident: *ident,
+                comp: comp.clone(),
+                env: env.clone(),
+            }),
         }
     }
 
@@ -50,11 +55,13 @@ impl SuspEnv {
         while self.next_pending < self.entries.len() {
             match &self.entries[self.next_pending] {
                 Ok(_) => self.next_pending += 1,
-                Err((comp, env)) => return Some(SuspAt {
-                    ident: self.next_pending,
-                    comp: comp.clone(),
-                    env: env.clone(),
-                }),
+                Err((comp, env)) => {
+                    return Some(SuspAt {
+                        ident: self.next_pending,
+                        comp: comp.clone(),
+                        env: env.clone(),
+                    })
+                }
             }
         }
         None

@@ -64,3 +64,46 @@ fn main() {
     let (main_comp, env) = translate(ast);
     machine::eval(main_comp, env.into(), strategy);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::{run, Strategy};
+
+    fn run_example(path: &str, strategy: Strategy) -> usize {
+        let src = fs::read_to_string(path).unwrap();
+        let ast = parser::parse(&src).unwrap();
+        let (comp, env) = translate(ast);
+        run(comp, env.into(), strategy, false)
+    }
+
+    #[test]
+    fn perm_bfs() {
+        assert_eq!(run_example("examples/perm.gwk", Strategy::Bfs), 720);
+    }
+
+    #[test]
+    fn perm_fair() {
+        assert_eq!(run_example("examples/perm.gwk", Strategy::Fair), 720);
+    }
+
+    #[test]
+    fn find_list_bfs() {
+        assert_eq!(run_example("examples/find_list.gwk", Strategy::Bfs), 462);
+    }
+
+    #[test]
+    fn find_list_fair() {
+        assert_eq!(run_example("examples/find_list.gwk", Strategy::Fair), 462);
+    }
+
+    #[test]
+    fn nqueens_bfs() {
+        assert_eq!(run_example("examples/nqueens.gwk", Strategy::Bfs), 40);
+    }
+
+    #[test]
+    fn nqueens_fair() {
+        assert_eq!(run_example("examples/nqueens.gwk", Strategy::Fair), 40);
+    }
+}

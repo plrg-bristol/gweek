@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use crate::machine::value_type::ValueType;
 
-use super::{env::Env, mterms::MValue, union_find::UnionFind, Ident, VClosure};
+use super::union_find::UnionFind;
+use super::{Ident, VClosure};
 
 #[derive(Clone)]
 pub struct LogicEnv {
@@ -11,15 +12,12 @@ pub struct LogicEnv {
 }
 
 impl LogicEnv {
-
     pub fn new() -> LogicEnv {
         LogicEnv {
             entries: Rc::new(Vec::new()),
             union_vars: Rc::new(UnionFind::new()),
         }
     }
-
-    pub fn size(&self) -> usize { self.entries.len() }
 
     pub fn fresh(&mut self, ptype: ValueType) -> Ident {
         let next = self.entries.len();
@@ -30,11 +28,7 @@ impl LogicEnv {
 
     pub fn lookup(&self, ident: Ident) -> Option<VClosure> {
         let root = self.union_vars.find(ident);
-        if let Some((_, Some(vclos))) = self.entries.get(root) {
-            Some(vclos.clone())
-        } else {
-            None
-        }
+        self.entries.get(root)?.1.clone()
     }
 
     pub fn set_vclos(&mut self, ident: Ident, vclos: VClosure) {
