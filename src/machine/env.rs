@@ -1,26 +1,32 @@
 use std::rc::Rc;
-use im::Vector;
 use super::Ident;
 use super::{mterms::MValue, VClosure};
 
 #[derive(Clone, Debug)]
 pub struct Env {
-    vec : Vector<VClosure>
+    vec : Vec<VClosure>
 }
 
 impl Env {
 
-    pub fn empty() -> Rc<Env> { 
-        Env { vec : Vector::new() }.into()
+    pub fn empty() -> Rc<Env> {
+        Env { vec : Vec::new() }.into()
     }
 
     pub fn lookup(&self, i : usize) -> Option<VClosure> {
-        self.vec.get(i).map(|v| v.clone())
+        let len = self.vec.len();
+        if i < len {
+            Some(self.vec[len - 1 - i].clone())
+        } else {
+            None
+        }
     }
-    
+
+    pub fn size(&self) -> usize { self.vec.len() }
+
     fn extend(&self, vclos : VClosure) -> Env {
         let mut vec = self.vec.clone();
-        vec.push_front(vclos);
+        vec.push(vclos);
         Env { vec }
     }
 
