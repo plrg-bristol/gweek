@@ -54,7 +54,7 @@ fn eval_susp_then(a : SuspAt, m : Machine) -> Machine {
 impl Machine {
 
     pub fn step(self) -> StepResult {
-        let m = self;
+        let mut m = self;
         
         match &*m.comp {
 

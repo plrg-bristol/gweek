@@ -1,0 +1,28 @@
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+leq :: Nat -> Nat -> Nat
+leq a b = exists d :: Nat. add a d =:= b. 0.
+
+insert :: Nat -> [Nat] -> [Nat]
+insert x xs = case xs of
+    [] -> [x]
+  | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
+
+perm :: [Nat] -> [Nat]
+perm xs = case xs of
+    [] -> []
+  | (z:zs) -> insert z (perm zs).
+
+guard_sorted :: [Nat] -> Nat
+guard_sorted xs = case xs of
+    [] -> 0
+  | (y:ys) -> (case ys of
+      [] -> 0
+    | (z:zs) -> (let c = leq y z in guard_sorted (z:zs))).
+
+let ys = perm [5, 3, 1, 4, 2] in
+let c = guard_sorted ys in
+ys.

@@ -157,7 +157,7 @@ fn statement_parser() -> impl Parser<char, Stm, Error = Simple<char>> + Clone {
         let case = keyword("case")
             .ignore_then(expr.clone())
             .then_ignore(keyword("of"))
-            .then(cases_parser(expr.clone()))
+            .then(cases_parser(expr.clone(), stmt.clone()))
             .map(|(e, cases)| Stm::Case { expr: e, cases });
 
         let expr_stmt = expr.clone().then(
@@ -319,10 +319,11 @@ fn primary_expr(
 
 fn cases_parser(
     expr: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
+    stmt: impl Parser<char, Stm, Error = Simple<char>> + Clone + 'static,
 ) -> impl Parser<char, Cases, Error = Simple<char>> + Clone {
     let single_case = expr.clone()
         .then_ignore(sym("->"))
-        .then(expr);
+        .then(stmt);
 
     single_case.clone()
         .separated_by(just('|').padded())

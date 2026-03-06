@@ -12,6 +12,6 @@ mod eval;
 
 pub(crate) use env::Env;
 pub(crate) use vclosure::VClosure;
-pub use eval::eval;
+pub use eval::{eval, Strategy};
 
 pub type Ident = usize;

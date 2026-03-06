@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::rc::Rc;
 
 use super::{env::Env, mterms::{MComputation, MValue}, Ident, VClosure};
@@ -7,8 +6,8 @@ type CClosure = (Rc<MComputation>, Rc<Env>);
 
 #[derive(Clone)]
 pub struct SuspEnv {
-    entries: Vec<Result<VClosure, CClosure>>,
-    pending: VecDeque<Ident>,
+    entries: Rc<Vec<Result<VClosure, CClosure>>>,
+    next_pending: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -22,17 +21,17 @@ impl SuspEnv {
 
     pub fn new() -> SuspEnv {
         SuspEnv {
-            entries: Vec::new(),
-            pending: VecDeque::new(),
+            entries: Rc::new(Vec::new()),
+            next_pending: 0,
         }
     }
 
     pub fn size(&self) -> usize { self.entries.len() }
 
     pub fn fresh(&mut self, comp: &Rc<MComputation>, env: &Rc<Env>) -> Ident {
-        let next = self.entries.len();
-        self.entries.push(Err((comp.clone(), env.clone())));
-        self.pending.push_back(next);
+        let entries = Rc::make_mut(&mut self.entries);
+        let next = entries.len();
+        entries.push(Err((comp.clone(), env.clone())));
         next
     }
 
@@ -44,15 +43,18 @@ impl SuspEnv {
     }
 
     pub fn set(&mut self, ident: &Ident, val: &Rc<MValue>, env: &Rc<Env>) {
-        self.entries[*ident] = Ok(VClosure::mk_clos(val, env));
+        Rc::make_mut(&mut self.entries)[*ident] = Ok(VClosure::mk_clos(val, env));
     }
 
-    pub fn next(&self) -> Option<SuspAt> {
-        for &ident in &self.pending {
-            if self.entries[ident].is_err() {
-                if let Err((comp, env)) = &self.entries[ident] {
-                    return Some(SuspAt { ident, comp: comp.clone(), env: env.clone() });
-                }
+    pub fn next(&mut self) -> Option<SuspAt> {
+        while self.next_pending < self.entries.len() {
+            match &self.entries[self.next_pending] {
+                Ok(_) => self.next_pending += 1,
+                Err((comp, env)) => return Some(SuspAt {
+                    ident: self.next_pending,
+                    comp: comp.clone(),
+                    env: env.clone(),
+                }),
             }
         }
         None

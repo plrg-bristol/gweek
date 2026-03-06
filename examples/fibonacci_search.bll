@@ -1,0 +1,13 @@
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+fib :: Nat -> Nat
+fib n = case n of
+    Z -> Z  
+  | S m -> case m of
+      Z -> S Z
+    | S k -> add (fib (S k)) (fib k).
+
+exists n :: Nat. fib n =:= 13. n.

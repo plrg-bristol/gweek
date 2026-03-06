@@ -1,0 +1,32 @@
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+add3 :: Nat -> Nat -> Nat -> Nat
+add3 a b c = add a (add b c).
+
+insert :: Nat -> [Nat] -> [Nat]
+insert x xs = case xs of
+    [] -> [x]
+  | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
+
+perm :: [Nat] -> [Nat]
+perm xs = case xs of
+    [] -> []
+  | (z:zs) -> insert z (perm zs).
+
+exists a :: Nat. exists b :: Nat. exists c :: Nat.
+exists d :: Nat. exists e :: Nat. exists f :: Nat.
+exists g :: Nat. exists h :: Nat. exists i :: Nat.
+let sq = perm [1,2,3,4,5,6,7,8,9] in
+sq =:= [a, b, c, d, e, f, g, h, i].
+add3 a b c =:= 15.
+add3 d e f =:= 15.
+add3 g h i =:= 15.
+add3 a d g =:= 15.
+add3 b e h =:= 15.
+add3 c f i =:= 15.
+add3 a e i =:= 15.
+add3 c e g =:= 15.
+sq.

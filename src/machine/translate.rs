@@ -22,7 +22,9 @@ impl TEnv {
 }
 
 pub fn translate(ast: Vec<Decl>) -> (MComputation, Rc<Env>) {
-    
+
+    let ast = reorder_decls(ast);
+
     let mut env = Env::empty();
     let mut tenv = TEnv::new();
     let mut main = None;
@@ -32,18 +34,175 @@ pub fn translate(ast: Vec<Decl>) -> (MComputation, Rc<Env>) {
             Decl::FuncType { name: _, r#type: _ } => (),
             Decl::Func { name, args, body } => {
                 let result : Rc<MValue> = translate_func(&name, args, body, &mut tenv).into();
-                // println!("[DEBUG] definition: {} = {}", name, *result);
                 tenv.bind(&name);
                 env = env.extend_val(result.clone(), env.clone())
             },
             Decl::Stm(stm) => {
                 let stmt = translate_stm(stm, &mut tenv);
-                // println!("[DEBUG] final stmt : {}", stmt);
-                // println!("[DEBUG] in env : {:?}", tenv.to_string());
                 main = Some(stmt)
             }
         });
     (main.expect("empty program"), env)
+}
+
+fn reorder_decls(ast: Vec<Decl>) -> Vec<Decl> {
+    use std::collections::HashSet;
+
+    // Collect all declared function names
+    let func_names: HashSet<String> = ast.iter().filter_map(|d| match d {
+        Decl::Func { name, .. } => Some(name.clone()),
+        _ => None,
+    }).collect();
+
+    // Separate declarations into func groups (type sig + body) and statements
+    let mut func_decls: Vec<(String, Vec<Decl>)> = Vec::new();
+    let mut stms: Vec<Decl> = Vec::new();
+    let mut pending_type: Option<Decl> = None;
+
+    for decl in ast {
+        match &decl {
+            Decl::FuncType { .. } => {
+                pending_type = Some(decl);
+            }
+            Decl::Func { name, body, .. } => {
+                let mut group = Vec::new();
+                if let Some(t) = pending_type.take() { group.push(t); }
+                let deps = collect_refs_stm(body, &func_names);
+                let nm = name.clone();
+                group.push(decl);
+                func_decls.push((nm, group));
+            }
+            Decl::Stm(_) => {
+                if let Some(t) = pending_type.take() { stms.push(t); }
+                stms.push(decl);
+            }
+        }
+    }
+
+    // Build name→index map
+    let name_to_idx: HashMap<String, usize> = func_decls.iter().enumerate()
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect();
+
+    // Build dependency graph and topologically sort
+    let n = func_decls.len();
+    let mut deps: Vec<HashSet<usize>> = Vec::with_capacity(n);
+    for (name, group) in &func_decls {
+        let body = group.iter().find_map(|d| match d {
+            Decl::Func { body, .. } => Some(body),
+            _ => None,
+        }).unwrap();
+        let refs = collect_refs_stm(body, &func_names);
+        let dep_indices: HashSet<usize> = refs.iter()
+            .filter(|r| *r != name) // exclude self-recursion
+            .filter_map(|r| name_to_idx.get(r).copied())
+            .collect();
+        deps.push(dep_indices);
+    }
+
+    // Kahn's algorithm
+    let mut in_degree: Vec<usize> = vec![0; n];
+    for d in &deps {
+        for &j in d {
+            in_degree[j] += 0; // j is depended ON, not the one with the in-edge
+        }
+    }
+    // Actually: deps[i] = set of indices that i depends on
+    // Edge: i → j means "i depends on j", so j must come before i
+    // In-degree: number of things that must come before i = deps[i].len()... no
+    // Let's think of it as: edge j → i means j must come before i
+    // In-degree of i = number of j such that i depends on j = deps[i].len()
+    // No wait, in Kahn's we need the reverse: "successors" of j = all i that depend on j
+
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut in_deg: Vec<usize> = vec![0; n];
+    for i in 0..n {
+        for &j in &deps[i] {
+            successors[j].push(i);
+            in_deg[i] += 1;
+        }
+    }
+
+    let mut queue: std::collections::VecDeque<usize> = (0..n).filter(|&i| in_deg[i] == 0).collect();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    while let Some(j) = queue.pop_front() {
+        order.push(j);
+        for &i in &successors[j] {
+            in_deg[i] -= 1;
+            if in_deg[i] == 0 {
+                queue.push_back(i);
+            }
+        }
+    }
+
+    if order.len() < n {
+        // Cycle — just use original order (self-recursion is fine, mutual recursion won't work)
+        order = (0..n).collect();
+    }
+
+    // Rebuild declaration list in sorted order
+    let mut result: Vec<Decl> = Vec::new();
+    // Convert func_decls to indexable, consuming the groups
+    let mut func_groups: Vec<Option<Vec<Decl>>> = func_decls.into_iter().map(|(_, g)| Some(g)).collect();
+    for idx in order {
+        if let Some(group) = func_groups[idx].take() {
+            result.extend(group);
+        }
+    }
+    result.extend(stms);
+    result
+}
+
+fn collect_refs_stm(stm: &Stm, names: &std::collections::HashSet<String>) -> std::collections::HashSet<String> {
+    let mut refs = std::collections::HashSet::new();
+    walk_stm(stm, names, &mut refs);
+    refs
+}
+
+fn walk_stm(stm: &Stm, names: &std::collections::HashSet<String>, refs: &mut std::collections::HashSet<String>) {
+    match stm {
+        Stm::Expr(e) => walk_expr(e, names, refs),
+        Stm::Let { val, body, .. } => { walk_stm(val, names, refs); walk_stm(body, names, refs); }
+        Stm::Exists { body, .. } => walk_stm(body, names, refs),
+        Stm::Equate { lhs, rhs, body } => { walk_expr(lhs, names, refs); walk_expr(rhs, names, refs); walk_stm(body, names, refs); }
+        Stm::Choice(exprs) => { for e in exprs { walk_expr(e, names, refs); } }
+        Stm::Case { expr, cases } => {
+            walk_expr(expr, names, refs);
+            if let Some(nc) = &cases.nat_case {
+                if let Some(zk) = &nc.zk { walk_stm(zk, names, refs); }
+                if let Some(sk) = &nc.sk { walk_stm(&sk.body, names, refs); }
+            }
+            if let Some(lc) = &cases.list_case {
+                if let Some(nk) = &lc.nilk { walk_stm(nk, names, refs); }
+                if let Some(ck) = &lc.consk { walk_stm(&ck.body, names, refs); }
+            }
+        }
+        Stm::If { cond, then, r#else } => { walk_stm(cond, names, refs); walk_stm(then, names, refs); walk_stm(r#else, names, refs); }
+    }
+}
+
+fn walk_expr(expr: &Expr, names: &std::collections::HashSet<String>, refs: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Ident(s) => { if names.contains(s) { refs.insert(s.clone()); } }
+        Expr::App(a, b) => { walk_expr(a, names, refs); walk_expr(b, names, refs); }
+        Expr::Cons(a, b) => { walk_expr(a, names, refs); walk_expr(b, names, refs); }
+        Expr::Pair(a, b) => { walk_expr(a, names, refs); walk_expr(b, names, refs); }
+        Expr::Succ(e) => walk_expr(e, names, refs),
+        Expr::Lambda(_, body) => walk_stm(body, names, refs),
+        Expr::List(es) => { for e in es { walk_expr(e, names, refs); } }
+        Expr::BExpr(b) => walk_bexpr(b, names, refs),
+        Expr::Stm(s) => walk_stm(s, names, refs),
+        _ => {}
+    }
+}
+
+fn walk_bexpr(bexpr: &BExpr, names: &std::collections::HashSet<String>, refs: &mut std::collections::HashSet<String>) {
+    match bexpr {
+        BExpr::Eq(a, b) | BExpr::NEq(a, b) | BExpr::And(a, b) | BExpr::Or(a, b) => {
+            walk_expr(a, names, refs); walk_expr(b, names, refs);
+        }
+        BExpr::Not(e) => walk_expr(e, names, refs),
+    }
 }
 
 fn translate_func(name : &String, args: Vec<Arg>, body: Stm, env : &mut TEnv) -> MValue {
@@ -135,20 +294,20 @@ fn translate_stm(stm: Stm, env : &mut TEnv) -> MComputation {
             let cont = match cases.r#type.unwrap() {
                 CasesType::Nat => {
                     let nat_case = cases.nat_case.unwrap();
-                    let zk = translate_expr(nat_case.zk.unwrap(), env).into();
+                    let zk = translate_stm(*nat_case.zk.unwrap(), env).into();
                     let succ_case = nat_case.sk.unwrap();
                     env.bind(&succ_case.var);
-                    let sk = translate_expr(succ_case.expr, env).into();
+                    let sk = translate_stm(*succ_case.body, env).into();
                     env.unbind();
                     MComputation::Ifz { num: MValue::Var(0).into(), zk, sk }
                 },
                 CasesType::List => {
                     let list_case = cases.list_case.unwrap();
-                    let nilk = translate_expr(list_case.nilk.unwrap(), env).into();
+                    let nilk = translate_stm(*list_case.nilk.unwrap(), env).into();
                     let cons_case = list_case.consk.unwrap();
                     env.bind(&cons_case.x);
                     env.bind(&cons_case.xs);
-                    let consk = translate_expr(cons_case.expr, env).into();
+                    let consk = translate_stm(*cons_case.body, env).into();
                     env.unbind();
                     env.unbind();
                     MComputation::Match { list: MValue::Var(0).into(), nilk, consk }

@@ -1,4 +1,4 @@
-use crate::parser::expr::Expr;
+use super::stm::Stm;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cases {
@@ -12,19 +12,19 @@ pub enum CasesType { Nat, List }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CasesNat {
-    pub zk: Option<Expr>,
+    pub zk: Option<Box<Stm>>,
     pub sk: Option<CasesNatSucc>
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CasesNatSucc {
     pub var: String,
-    pub expr: Expr,
+    pub body: Box<Stm>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CasesList {
-    pub nilk: Option<Expr>,
+    pub nilk: Option<Box<Stm>>,
     pub consk: Option<CasesListCons>
 }
 
@@ -32,7 +32,7 @@ pub struct CasesList {
 pub struct CasesListCons {
     pub x: String,
     pub xs: String,
-    pub expr: Expr
+    pub body: Box<Stm>
 }
 
 impl Cases {
@@ -61,28 +61,28 @@ impl Cases {
         }
     }
 
-    pub fn set_nat_zero(&mut self, expr: Expr) {
+    pub fn set_nat_zero(&mut self, body: Stm) {
         self.initialize_nat_case();
         if self.nat_case.as_ref().unwrap().zk.is_some() { panic!("zero case already set") }
-        self.nat_case.as_mut().unwrap().zk = Some(expr);
+        self.nat_case.as_mut().unwrap().zk = Some(Box::new(body));
     }
 
-    pub fn set_nat_succ(&mut self, var: String, expr: Expr) {
+    pub fn set_nat_succ(&mut self, var: String, body: Stm) {
         self.initialize_nat_case();
         if self.nat_case.as_ref().unwrap().sk.is_some() { panic!("succ case already set") }
-        self.nat_case.as_mut().unwrap().sk = Some(CasesNatSucc { var, expr })
+        self.nat_case.as_mut().unwrap().sk = Some(CasesNatSucc { var, body: Box::new(body) })
     }
 
-    pub fn set_list_nil(&mut self, expr: Expr) {
+    pub fn set_list_nil(&mut self, body: Stm) {
         self.initialize_list_case();
         if self.list_case.as_ref().unwrap().nilk.is_some() { panic!("nil case already set") }
-        self.list_case.as_mut().unwrap().nilk = Some(expr);
+        self.list_case.as_mut().unwrap().nilk = Some(Box::new(body));
     }
 
-    pub fn set_list_cons(&mut self, x: String, xs: String, expr: Expr) {
+    pub fn set_list_cons(&mut self, x: String, xs: String, body: Stm) {
         self.initialize_list_case();
         if self.list_case.as_ref().unwrap().consk.is_some() { panic!("cons case already set") }
-        self.list_case.as_mut().unwrap().consk = Some(CasesListCons { x, xs, expr })
+        self.list_case.as_mut().unwrap().consk = Some(CasesListCons { x, xs, body: Box::new(body) })
     }
 }
 

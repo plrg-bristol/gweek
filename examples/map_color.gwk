@@ -1,0 +1,32 @@
+absurd :: Nat -> Nat
+absurd n = 0 =:= 1. 0.
+
+neq :: Nat -> Nat -> Nat
+neq a b = case a of
+    Z -> (case b of
+        Z -> absurd 0
+      | S n -> 0)
+  | S m -> (case b of
+        Z -> 0
+      | S n -> neq m n).
+
+color :: Nat -> Nat
+color n = 0 <> 1 <> 2.
+
+let wa = color 0 in
+let nt = color 0 in
+let sa = color 0 in
+let q = color 0 in
+let nsw = color 0 in
+let v = color 0 in
+let t = color 0 in
+let c1 = neq wa nt in
+let c2 = neq wa sa in
+let c3 = neq nt sa in
+let c4 = neq nt q in
+let c5 = neq sa q in
+let c6 = neq sa nsw in
+let c7 = neq sa v in
+let c8 = neq q nsw in
+let c9 = neq nsw v in
+[wa, nt, sa, q, nsw, v, t].

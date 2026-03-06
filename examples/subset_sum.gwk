@@ -1,0 +1,17 @@
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+sum :: [Nat] -> Nat
+sum xs = case xs of
+    [] -> 0
+  | (z:zs) -> add z (sum zs).
+
+subset :: [Nat] -> [Nat]
+subset xs = case xs of
+    [] -> []
+  | (y:ys) -> ((y : subset ys) <> subset ys).
+
+let s = subset [3, 7, 1, 8, 2, 4] in
+sum s =:= 10. s.
