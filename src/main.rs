@@ -1,79 +1,66 @@
-use std::env;
+use std::fs;
 use std::process;
-use std::fs::File;
-use std::io::{self, Read};
 
-use crate::machine::translate::translate;
-use crate::machine::Strategy;
+use crate::machine::{translate::translate, Strategy};
 
-mod parser;
 mod machine;
+mod parser;
+
+const USAGE: &str = "\
+Usage: gweek [OPTIONS] <source_file>
+
+Options:
+  --bfs     Breadth-first search (default)
+  --dfs     Depth-first search (fast, but incomplete on infinite branches)
+  --iddfs   Iterative deepening DFS (complete, re-explores)
+  --fair    Fair round-robin DFS (complete, no re-exploration)
+  --help    Show this help message";
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
     let mut strategy = Strategy::Bfs;
-    let mut file_name = None;
+    let mut file_path = None;
 
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
             "--bfs" => strategy = Strategy::Bfs,
             "--dfs" => strategy = Strategy::Dfs,
             "--iddfs" => strategy = Strategy::Iddfs,
-            other if other.starts_with("--") => {
-                eprintln!("Error: Unknown flag '{}'", other);
-                eprintln!("Usage: {} [--bfs|--dfs|--iddfs] source_file", args[0]);
+            "--fair" => strategy = Strategy::Fair,
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return;
+            }
+            s if s.starts_with('-') => {
+                eprintln!("Unknown option: {s}\n{USAGE}");
                 process::exit(1);
             }
             _ => {
-                if file_name.is_some() {
-                    eprintln!("Error: Multiple source files provided.");
-                    eprintln!("Usage: {} [--bfs|--dfs|--iddfs] source_file", args[0]);
+                if file_path.is_some() {
+                    eprintln!("Error: multiple source files provided.\n{USAGE}");
                     process::exit(1);
                 }
-                file_name = Some(&args[i]);
+                file_path = Some(arg);
             }
         }
-        i += 1;
     }
 
-    let file_name = match file_name {
-        Some(f) => f,
-        None => {
-            eprintln!("Error: No source file provided.");
-            eprintln!("Usage: {} [--bfs|--dfs|--iddfs] source_file", args[0]);
-            process::exit(1);
-        }
-    };
+    let file_path = file_path.unwrap_or_else(|| {
+        eprintln!("Error: no source file provided.\n{USAGE}");
+        process::exit(1);
+    });
 
-    let mut file = match File::open(file_name) {
-        Ok(file) => file,
-        Err(error) => {
-            eprintln!("Error: Could not open file '{}': {}", file_name, error);
-            process::exit(1);
-        }
-    };
+    let src = fs::read_to_string(&file_path).unwrap_or_else(|e| {
+        eprintln!("Error: could not read '{file_path}': {e}");
+        process::exit(1);
+    });
 
-    let mut src = String::new();
-
-    match file.read_to_string(&mut src) {
-        Ok(_) => { interpret(&mut src, strategy); }
-        Err(error) => {
-            eprintln!("Error: Could not read file '{}': {}", file_name, error);
-            process::exit(1);
-        }
-    };
-}
-
-fn interpret(src: &mut String, strategy: Strategy) {
-
-    let ast = parser::parse(src).unwrap_or_else(|errs| {
+    let ast = parser::parse(&src).unwrap_or_else(|errs| {
         for err in errs {
-            eprintln!("Parse error: {}", err);
+            eprintln!("Parse error: {err}");
         }
         process::exit(1);
     });
-    let (main, env) = translate(ast);
-    machine::eval(main, env.into(), strategy);
+
+    let (main_comp, env) = translate(ast);
+    machine::eval(main_comp, env.into(), strategy);
 }

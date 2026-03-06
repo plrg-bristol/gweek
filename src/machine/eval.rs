@@ -1,22 +1,29 @@
+use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
-use std::collections::VecDeque;
 
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
 use super::senv::SuspEnv;
-use super::step::{Stack, Machine};
+use super::step::{Machine, Stack};
 use super::vclosure::VClosure;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Strategy { Bfs, Dfs, Iddfs }
+pub enum Strategy {
+    Bfs,
+    Dfs,
+    Iddfs,
+    Fair,
+}
 
 pub fn eval(comp: MComputation, env: Rc<Env>, strategy: Strategy) {
-    match strategy {
+    let solns = match strategy {
         Strategy::Bfs => eval_bfs(comp, env),
         Strategy::Dfs => eval_dfs(comp, env),
         Strategy::Iddfs => eval_iddfs(comp, env),
-    }
+        Strategy::Fair => eval_fair(comp, env),
+    };
+    println!(">>> {} solutions", solns);
 }
 
 fn fresh_machine(comp: MComputation, env: Rc<Env>) -> Machine {
@@ -39,7 +46,7 @@ fn handle_done(m: &Machine, solns: &mut usize) {
     }
 }
 
-fn eval_bfs(comp: MComputation, env: Rc<Env>) {
+fn eval_bfs(comp: MComputation, env: Rc<Env>) -> usize {
     let mut machines = vec![fresh_machine(comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
@@ -55,15 +62,14 @@ fn eval_bfs(comp: MComputation, env: Rc<Env>) {
         }
         std::mem::swap(&mut machines, &mut next);
     }
-    println!(">>> {} solutions", solns);
+    solns
 }
 
-fn eval_dfs(comp: MComputation, env: Rc<Env>) {
+fn eval_dfs(comp: MComputation, env: Rc<Env>) -> usize {
     let mut stack = vec![fresh_machine(comp, env)];
     let mut solns = 0;
     while let Some(m) = stack.pop() {
-        let results = m.step();
-        for m in results.into_iter().rev() {
+        for m in m.step().into_iter().rev() {
             if m.done {
                 handle_done(&m, &mut solns);
             } else {
@@ -71,15 +77,15 @@ fn eval_dfs(comp: MComputation, env: Rc<Env>) {
             }
         }
     }
-    println!(">>> {} solutions", solns);
+    solns
 }
 
-fn eval_iddfs(comp: MComputation, env: Rc<Env>) {
+fn eval_iddfs(comp: MComputation, env: Rc<Env>) -> usize {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     loop {
-        let mut stack: Vec<(Machine, usize)> = vec![(fresh_machine(comp.clone(), env.clone()), 0)];
+        let mut stack = vec![(fresh_machine(comp.clone(), env.clone()), 0)];
         let mut cutoff = false;
         while let Some((m, depth)) = stack.pop() {
             if depth >= depth_limit {
@@ -87,8 +93,7 @@ fn eval_iddfs(comp: MComputation, env: Rc<Env>) {
                 continue;
             }
             let results = m.step();
-            let n = results.len();
-            let is_branch = n > 1;
+            let is_branch = results.len() > 1;
             for m in results.into_iter().rev() {
                 if m.done {
                     if let MComputation::Return(v) = &*m.comp {
@@ -105,10 +110,39 @@ fn eval_iddfs(comp: MComputation, env: Rc<Env>) {
                 }
             }
         }
-        if !cutoff { break; }
+        if !cutoff {
+            break;
+        }
         depth_limit *= 2;
     }
-    println!(">>> {} solutions", solns);
+    solns
+}
+
+fn eval_fair(comp: MComputation, env: Rc<Env>) -> usize {
+    const QUOTA: usize = 10000;
+    let mut queue = VecDeque::new();
+    queue.push_back(fresh_machine(comp, env));
+    let mut solns = 0;
+    while let Some(m) = queue.pop_front() {
+        let mut local = vec![m];
+        let mut steps = 0;
+        while let Some(m) = local.pop() {
+            if steps >= QUOTA {
+                queue.push_back(m);
+                queue.extend(local.drain(..));
+                break;
+            }
+            steps += 1;
+            for m in m.step().into_iter().rev() {
+                if m.done {
+                    handle_done(&m, &mut solns);
+                } else {
+                    local.push(m);
+                }
+            }
+        }
+    }
+    solns
 }
 
 fn output(val: Rc<MValue>, env: Rc<Env>, lenv: &LogicEnv, senv: &SuspEnv) -> Option<String> {
