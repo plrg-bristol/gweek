@@ -287,6 +287,7 @@ fn translate_vtype(ptype: Type) -> ValueType {
         Type::Product(t1, t2) => {
             ValueType::Product(Box::new(translate_vtype(*t1)), Box::new(translate_vtype(*t2)))
         }
+        Type::Any => panic!("cannot translate unresolved type"),
     }
 }
 

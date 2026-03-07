@@ -8,6 +8,7 @@ use crate::machine::{translate::translate, Strategy};
 
 mod machine;
 mod parser;
+mod type_check;
 
 const USAGE: &str = "\
 Usage: gweek [OPTIONS] <source_file>
@@ -61,6 +62,13 @@ fn main() {
         report_errors(&file_path, &src, errs);
         process::exit(1);
     });
+
+    if let Err(errs) = type_check::type_check(&ast) {
+        for e in errs {
+            eprintln!("Type error: {e}");
+        }
+        process::exit(1);
+    }
 
     let (main_comp, env) = translate(ast);
     machine::eval(main_comp, env.into(), strategy);
@@ -142,11 +150,11 @@ mod tests {
 
     #[test]
     fn nqueens_bfs() {
-        assert_eq!(run_example("examples/nqueens.gwk", Strategy::Bfs), 40);
+        assert_eq!(run_example("examples/nqueens.gwk", Strategy::Bfs), 92);
     }
 
     #[test]
     fn nqueens_fair() {
-        assert_eq!(run_example("examples/nqueens.gwk", Strategy::Fair), 40);
+        assert_eq!(run_example("examples/nqueens.gwk", Strategy::Fair), 92);
     }
 }

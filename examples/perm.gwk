@@ -1,9 +1,9 @@
-insert :: [Int] -> [Int]
+insert :: Nat -> [Nat] -> [Nat]
 insert x xs = case xs of
                   [] -> [x]
                 | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
 
-perm :: [Int] -> [Int]
+perm :: [Nat] -> [Nat]
 perm xs = case xs of 
                [] -> []
             |  (z:zs) -> insert z (perm zs).

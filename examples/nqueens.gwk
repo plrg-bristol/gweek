@@ -1,6 +1,9 @@
 absurd :: Nat -> Nat
 absurd n = 0 =:= 1. 0.
 
+absurdl :: Nat -> [Nat]
+absurdl n = 0 =:= 1. [].
+
 neq :: Nat -> Nat -> Nat
 neq a b = case a of
     Z -> (case b of
@@ -15,16 +18,6 @@ add n m = case m of
     Z -> n
   | S z -> S (add n z).
 
-insert :: Nat -> [Nat] -> [Nat]
-insert x xs = case xs of
-    [] -> [x]
-  | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
-
-perm :: [Nat] -> [Nat]
-perm xs = case xs of
-    [] -> []
-  | (z:zs) -> insert z (perm zs).
-
 safe :: Nat -> Nat -> [Nat] -> Nat
 safe q d rest = case rest of
     [] -> 0
@@ -32,11 +25,23 @@ safe q d rest = case rest of
                let c2 = neq (add r d) q in
                safe q (S d) rs.
 
-all_safe :: [Nat] -> Nat
-all_safe qs = case qs of
-    [] -> 0
-  | (q:rest) -> let c = safe q 1 rest in all_safe rest.
+revappend :: [Nat] -> [Nat] -> [Nat]
+revappend xs ys = case xs of
+    [] -> ys
+  | (z:zs) -> revappend zs (z : ys).
 
-let qs = perm [1,2,3,4,5,6,7] in
-let c = all_safe qs in
-qs.
+queens :: [Nat] -> [Nat] -> [Nat] -> [Nat]
+queens skipped rest placed = case rest of
+    [] -> (case skipped of
+        [] -> placed
+      | (y:ys) -> absurdl 0)
+  | (q:qs) ->
+      (let c = safe q 1 placed in
+       let remaining = revappend skipped qs in
+       case remaining of
+         [] -> (q : placed)
+       | (y:ys) -> queens [] remaining (q : placed))
+      <>
+      (queens (q : skipped) qs placed).
+
+queens [] [1,2,3,4,5,6,7,8] [].
