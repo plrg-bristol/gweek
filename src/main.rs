@@ -18,11 +18,13 @@ Options:
   --dfs     Depth-first search (fast, but incomplete on infinite branches)
   --iddfs   Iterative deepening DFS (complete, re-explores)
   --fair    Fair round-robin DFS (complete, no re-exploration)
+  -o        Enable peephole optimizer
   --help    Show this help message";
 
 fn main() {
     let mut strategy = Strategy::Bfs;
     let mut file_path = None;
+    let mut opt = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
@@ -30,6 +32,7 @@ fn main() {
             "--dfs" => strategy = Strategy::Dfs,
             "--iddfs" => strategy = Strategy::Iddfs,
             "--fair" => strategy = Strategy::Fair,
+            "-o" => opt = true,
             "--help" | "-h" => {
                 println!("{USAGE}");
                 return;
@@ -71,7 +74,14 @@ fn main() {
     }
 
     let (main_comp, env) = translate(ast);
-    machine::eval(main_comp, env.into(), strategy);
+    let (main_comp, env) = if opt {
+        let comp = machine::optimize::optimize(main_comp);
+        let env = machine::map_env_vals(&env, &machine::optimize::optimize_val);
+        (comp, env)
+    } else {
+        (main_comp, env)
+    };
+    machine::eval(main_comp, env, strategy);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
@@ -119,13 +129,27 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::{run, Strategy};
+    use crate::machine::{map_env_vals, run, Strategy};
 
     fn run_example(path: &str, strategy: Strategy) -> usize {
+        run_example_inner(path, strategy, false)
+    }
+
+    fn run_example_opt(path: &str, strategy: Strategy) -> usize {
+        run_example_inner(path, strategy, true)
+    }
+
+    fn run_example_inner(path: &str, strategy: Strategy, opt: bool) -> usize {
         let src = fs::read_to_string(path).unwrap();
         let ast = parser::parse(&src).unwrap();
         let (comp, env) = translate(ast);
-        run(comp, env.into(), strategy, false)
+        if opt {
+            let comp = machine::optimize::optimize(comp);
+            let env = map_env_vals(&env, &machine::optimize::optimize_val);
+            run(comp, env, strategy, false)
+        } else {
+            run(comp, env, strategy, false)
+        }
     }
 
     #[test]
@@ -156,5 +180,21 @@ mod tests {
     #[test]
     fn nqueens_fair() {
         assert_eq!(run_example("examples/nqueens.gwk", Strategy::Fair), 92);
+    }
+
+    // Optimized variants — same results expected
+    #[test]
+    fn perm_bfs_opt() {
+        assert_eq!(run_example_opt("examples/perm.gwk", Strategy::Bfs), 720);
+    }
+
+    #[test]
+    fn find_list_bfs_opt() {
+        assert_eq!(run_example_opt("examples/find_list.gwk", Strategy::Bfs), 462);
+    }
+
+    #[test]
+    fn nqueens_bfs_opt() {
+        assert_eq!(run_example_opt("examples/nqueens.gwk", Strategy::Bfs), 92);
     }
 }

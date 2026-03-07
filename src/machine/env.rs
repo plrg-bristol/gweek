@@ -3,6 +3,24 @@ use std::rc::Rc;
 use super::mterms::MValue;
 use super::{Ident, VClosure};
 
+/// Apply a transformation to every MValue in the environment.
+pub fn map_env_vals<F: Fn(&Rc<MValue>) -> Rc<MValue>>(env: &Rc<Env>, f: &F) -> Rc<Env> {
+    Env {
+        vec: env
+            .vec
+            .iter()
+            .map(|vc| match vc {
+                VClosure::Clos { val, env } => VClosure::Clos {
+                    val: f(val),
+                    env: env.clone(),
+                },
+                other => other.clone(),
+            })
+            .collect(),
+    }
+    .into()
+}
+
 #[derive(Clone, Debug)]
 pub struct Env {
     vec: Vec<VClosure>,

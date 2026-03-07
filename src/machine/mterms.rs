@@ -120,6 +120,42 @@ impl MComputation {
     pub fn thunk(self: &Rc<MComputation>) -> Rc<MValue> {
         MValue::Thunk(self.clone()).into()
     }
+
+    pub fn count_nodes(&self) -> usize {
+        match self {
+            MComputation::Return(v) => 1 + v.count_nodes(),
+            MComputation::Bind { comp, cont } => 1 + comp.count_nodes() + cont.count_nodes(),
+            MComputation::Force(v) => 1 + v.count_nodes(),
+            MComputation::Lambda { body } => 1 + body.count_nodes(),
+            MComputation::App { op, arg } => 1 + op.count_nodes() + arg.count_nodes(),
+            MComputation::Choice(cs) => 1 + cs.iter().map(|c| c.count_nodes()).sum::<usize>(),
+            MComputation::Exists { body, .. } => 1 + body.count_nodes(),
+            MComputation::Equate { lhs, rhs, body } => {
+                1 + lhs.count_nodes() + rhs.count_nodes() + body.count_nodes()
+            }
+            MComputation::Ifz { num, zk, sk } => {
+                1 + num.count_nodes() + zk.count_nodes() + sk.count_nodes()
+            }
+            MComputation::Match { list, nilk, consk } => {
+                1 + list.count_nodes() + nilk.count_nodes() + consk.count_nodes()
+            }
+            MComputation::Case { sum, inlk, inrk } => {
+                1 + sum.count_nodes() + inlk.count_nodes() + inrk.count_nodes()
+            }
+            MComputation::Rec { body } => 1 + body.count_nodes(),
+        }
+    }
+}
+
+impl MValue {
+    pub fn count_nodes(&self) -> usize {
+        match self {
+            MValue::Var(_) | MValue::Zero | MValue::Nil => 1,
+            MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => 1 + v.count_nodes(),
+            MValue::Pair(a, b) | MValue::Cons(a, b) => 1 + a.count_nodes() + b.count_nodes(),
+            MValue::Thunk(c) => 1 + c.count_nodes(),
+        }
+    }
 }
 
 impl Display for MComputation {

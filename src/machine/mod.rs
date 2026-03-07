@@ -1,4 +1,5 @@
 pub mod mterms;
+pub mod optimize;
 pub mod translate;
 mod env;
 mod eval;
@@ -11,6 +12,7 @@ mod value_type;
 mod vclosure;
 
 pub(crate) use env::Env;
+pub use env::map_env_vals;
 pub(crate) use vclosure::VClosure;
 pub use eval::{eval, run, Strategy};
 
