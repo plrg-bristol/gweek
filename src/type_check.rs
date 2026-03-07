@@ -217,6 +217,8 @@ fn synth_stm(ctx: &mut Ctx, stm: &Stm) -> TResult {
             synth_stm(ctx, body)
         }
 
+        Stm::Fail => Ok(Type::Any),
+
         Stm::Choice(exprs) => {
             let mut ty = None;
             for e in exprs {

@@ -11,40 +11,34 @@ revappend xs ys = case xs of
     [] -> ys
   | (z:zs) -> revappend zs (z : ys).
 
-absurd :: Nat -> Nat
-absurd n = 0 =:= 1. 0.
-
-absurdl :: Nat -> [Nat]
-absurdl n = 0 =:= 1. [].
-
 pick :: [Nat] -> [Nat] -> [Nat]
 pick skipped rest = case rest of
-    [] -> absurdl 0
+    [] -> fail
   | (x:xs) -> (x : revappend skipped xs)
               <> (pick (x : skipped) xs).
 
 exists a :: Nat. exists b :: Nat. exists c :: Nat.
 exists d :: Nat. exists e :: Nat. exists f :: Nat.
 exists g :: Nat. exists h :: Nat. exists i :: Nat.
-case pick [] [1,2,3,4,5,6,7,8,9] of [] -> absurdl 0 | (a1:r1) ->
+case pick [] [1,2,3,4,5,6,7,8,9] of [] -> fail | (a1:r1) ->
 a1 =:= a.
-case pick [] r1 of [] -> absurdl 0 | (b1:r2) ->
+case pick [] r1 of [] -> fail | (b1:r2) ->
 b1 =:= b.
-case pick [] r2 of [] -> absurdl 0 | (c1:r3) ->
+case pick [] r2 of [] -> fail | (c1:r3) ->
 c1 =:= c.
 add3 a b c =:= 15.
-case pick [] r3 of [] -> absurdl 0 | (d1:r4) ->
+case pick [] r3 of [] -> fail | (d1:r4) ->
 d1 =:= d.
-case pick [] r4 of [] -> absurdl 0 | (e1:r5) ->
+case pick [] r4 of [] -> fail | (e1:r5) ->
 e1 =:= e.
-case pick [] r5 of [] -> absurdl 0 | (f1:r6) ->
+case pick [] r5 of [] -> fail | (f1:r6) ->
 f1 =:= f.
 add3 d e f =:= 15.
-case pick [] r6 of [] -> absurdl 0 | (g1:r7) ->
+case pick [] r6 of [] -> fail | (g1:r7) ->
 g1 =:= g.
-case pick [] r7 of [] -> absurdl 0 | (h1:r8) ->
+case pick [] r7 of [] -> fail | (h1:r8) ->
 h1 =:= h.
-case pick [] r8 of [] -> absurdl 0 | (i1:r9) ->
+case pick [] r8 of [] -> fail | (i1:r9) ->
 i1 =:= i.
 add3 g h i =:= 15.
 add3 a d g =:= 15.

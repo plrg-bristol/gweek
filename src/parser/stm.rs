@@ -29,5 +29,6 @@ pub enum Stm {
         expr: Expr,
         cases: Cases
     },
+    Fail,
     Expr(Expr)
 }

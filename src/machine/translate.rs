@@ -170,6 +170,7 @@ fn walk_stm(stm: &Stm, names: &HashSet<String>, refs: &mut HashSet<String>) {
             walk_stm(val, names, refs);
             walk_stm(body, names, refs);
         }
+        Stm::Fail => (),
         Stm::Exists { body, .. } => walk_stm(body, names, refs),
         Stm::Equate { lhs, rhs, body } => {
             walk_expr(lhs, names, refs);
@@ -335,6 +336,7 @@ fn translate_stm(stm: Stm, tenv: &mut TEnv) -> MComputation {
                 .into(),
             }
         }
+        Stm::Fail => MComputation::Choice(vec![]),
         Stm::Choice(exprs) => MComputation::Choice(
             exprs
                 .into_iter()

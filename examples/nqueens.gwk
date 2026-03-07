@@ -1,13 +1,7 @@
-absurd :: Nat -> Nat
-absurd n = 0 =:= 1. 0.
-
-absurdl :: Nat -> [Nat]
-absurdl n = 0 =:= 1. [].
-
 neq :: Nat -> Nat -> Nat
 neq a b = case a of
     Z -> (case b of
-        Z -> absurd 0
+        Z -> fail
       | S n -> 0)
   | S m -> (case b of
         Z -> 0
@@ -24,8 +18,8 @@ safe q d rest = case rest of
   | (r:rs) -> case neq (add q d) r of
         Z -> (case neq (add r d) q of
             Z -> safe q (S d) rs
-          | S n -> absurd 0)
-      | S n -> absurd 0.
+          | S n -> fail)
+      | S n -> fail.
 
 revappend :: [Nat] -> [Nat] -> [Nat]
 revappend xs ys = case xs of
@@ -36,14 +30,14 @@ queens :: [Nat] -> [Nat] -> [Nat] -> [Nat]
 queens skipped rest placed = case rest of
     [] -> (case skipped of
         [] -> placed
-      | (y:ys) -> absurdl 0)
+      | (y:ys) -> fail)
   | (q:qs) ->
       (case safe q 1 placed of
          Z -> (let remaining = revappend skipped qs in
                case remaining of
                  [] -> (q : placed)
                | (y:ys) -> queens [] remaining (q : placed))
-       | S n -> absurdl 0)
+       | S n -> fail)
       <>
       (queens (q : skipped) qs placed).
 

@@ -26,7 +26,7 @@ fn ident() -> impl Parser<char, String, Error = Simple<char>> + Clone {
     text::ident().padded().try_map(|s: String, span| {
         match s.as_str() {
             "if" | "then" | "else" | "let" | "in" | "exists" | "case" | "of"
-            | "true" | "false" => Err(Simple::custom(span, format!("{s} is a keyword"))),
+            | "true" | "false" | "fail" => Err(Simple::custom(span, format!("{s} is a keyword"))),
             _ => Ok(s),
         }
     })
@@ -160,6 +160,8 @@ fn statement_parser() -> impl Parser<char, Stm, Error = Simple<char>> + Clone {
             .then(cases_parser(expr.clone(), stmt.clone()))
             .map(|(e, cases)| Stm::Case { expr: e, cases });
 
+        let fail = keyword("fail").to(Stm::Fail);
+
         let expr_stmt = expr.clone().then(
             choice((
                 sym("=:=")
@@ -196,6 +198,7 @@ fn statement_parser() -> impl Parser<char, Stm, Error = Simple<char>> + Clone {
             let_,
             exists,
             case,
+            fail,
             expr_stmt,
         ))
     })
