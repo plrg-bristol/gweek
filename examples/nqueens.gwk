@@ -21,9 +21,11 @@ add n m = case m of
 safe :: Nat -> Nat -> [Nat] -> Nat
 safe q d rest = case rest of
     [] -> 0
-  | (r:rs) -> let c1 = neq (add q d) r in
-               let c2 = neq (add r d) q in
-               safe q (S d) rs.
+  | (r:rs) -> case neq (add q d) r of
+        Z -> (case neq (add r d) q of
+            Z -> safe q (S d) rs
+          | S n -> absurd 0)
+      | S n -> absurd 0.
 
 revappend :: [Nat] -> [Nat] -> [Nat]
 revappend xs ys = case xs of
@@ -36,11 +38,12 @@ queens skipped rest placed = case rest of
         [] -> placed
       | (y:ys) -> absurdl 0)
   | (q:qs) ->
-      (let c = safe q 1 placed in
-       let remaining = revappend skipped qs in
-       case remaining of
-         [] -> (q : placed)
-       | (y:ys) -> queens [] remaining (q : placed))
+      (case safe q 1 placed of
+         Z -> (let remaining = revappend skipped qs in
+               case remaining of
+                 [] -> (q : placed)
+               | (y:ys) -> queens [] remaining (q : placed))
+       | S n -> absurdl 0)
       <>
       (queens (q : skipped) qs placed).
 
