@@ -76,6 +76,9 @@ fn main() {
     let (main_comp, env) = translate(ast);
     let (main_comp, env) = if opt {
         let comp = machine::optimize::optimize(main_comp);
+        #[cfg(feature = "opt-stats")]
+        let env = machine::optimize::optimize_env_with_stats(&env, &machine::optimize::optimize_val);
+        #[cfg(not(feature = "opt-stats"))]
         let env = machine::map_env_vals(&env, &machine::optimize::optimize_val);
         (comp, env)
     } else {

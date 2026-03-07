@@ -3,6 +3,9 @@ name = "gweek"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+opt-stats = []
+
 [dependencies]
 ariadne = "0.4"
 chumsky = "0.9"

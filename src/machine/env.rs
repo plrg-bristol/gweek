@@ -59,4 +59,16 @@ impl Env {
     pub fn extend_susp(&self, ident: Ident) -> Rc<Env> {
         self.extend(VClosure::Susp { ident }).into()
     }
+
+    /// Count total IR nodes across all function definitions (top-level vals only).
+    #[cfg(feature = "opt-stats")]
+    pub fn count_nodes(&self) -> usize {
+        self.vec
+            .iter()
+            .map(|vc| match vc {
+                VClosure::Clos { val, .. } => val.count_nodes(),
+                _ => 0,
+            })
+            .sum()
+    }
 }

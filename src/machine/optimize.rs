@@ -4,13 +4,87 @@ use super::mterms::{MComputation, MValue};
 
 /// Optimize a computation using equational laws from the CBPV theory.
 pub fn optimize(comp: MComputation) -> MComputation {
+    #[cfg(feature = "opt-stats")]
+    let before = comp.count_nodes();
     let result = opt_comp(&Rc::new(comp));
-    Rc::try_unwrap(result).unwrap_or_else(|rc| (*rc).clone())
+    let result = Rc::try_unwrap(result).unwrap_or_else(|rc| (*rc).clone());
+    #[cfg(feature = "opt-stats")]
+    {
+        let after = result.count_nodes();
+        eprintln!("[opt] main:  {before} -> {after} nodes ({:+.1}%)", pct(before, after));
+        stats::report();
+    }
+    result
 }
 
 /// Optimize an MValue (recursing into Thunks to optimize computations).
 pub fn optimize_val(val: &Rc<MValue>) -> Rc<MValue> {
     opt_val(val)
+}
+
+/// Optimize an entire environment and print per-function stats.
+#[cfg(feature = "opt-stats")]
+pub fn optimize_env_with_stats<F: Fn(&Rc<MValue>) -> Rc<MValue>>(env: &Rc<super::Env>, f: &F) -> Rc<super::Env> {
+    let before_total = env.count_nodes();
+    let result = super::env::map_env_vals(env, f);
+    let after_total = result.count_nodes();
+    eprintln!("[opt] env:   {before_total} -> {after_total} nodes ({:+.1}%)", pct(before_total, after_total));
+    stats::report();
+    result
+}
+
+#[cfg(feature = "opt-stats")]
+fn pct(before: usize, after: usize) -> f64 {
+    if before == 0 { 0.0 } else { (after as f64 - before as f64) / before as f64 * 100.0 }
+}
+
+#[cfg(feature = "opt-stats")]
+mod stats {
+    use std::cell::Cell;
+    thread_local! {
+        static APP_BIND: Cell<u32> = const { Cell::new(0) };
+        static LAM_CHOICE: Cell<u32> = const { Cell::new(0) };
+        static LAM_EXISTS: Cell<u32> = const { Cell::new(0) };
+        static LAM_EQUATE: Cell<u32> = const { Cell::new(0) };
+        static EQ_EXISTS: Cell<u32> = const { Cell::new(0) };
+        static EQ_CHOICE: Cell<u32> = const { Cell::new(0) };
+        static DEAD_END: Cell<u32> = const { Cell::new(0) };
+        static CYCLE: Cell<u32> = const { Cell::new(0) };
+    }
+    pub fn bump(name: &str) {
+        match name {
+            "app-bind" => APP_BIND.with(|c| c.set(c.get() + 1)),
+            "lam-choice" => LAM_CHOICE.with(|c| c.set(c.get() + 1)),
+            "lam-exists" => LAM_EXISTS.with(|c| c.set(c.get() + 1)),
+            "lam-equate" => LAM_EQUATE.with(|c| c.set(c.get() + 1)),
+            "eq-exists" => EQ_EXISTS.with(|c| c.set(c.get() + 1)),
+            "eq-choice" => EQ_CHOICE.with(|c| c.set(c.get() + 1)),
+            "dead-end" => DEAD_END.with(|c| c.set(c.get() + 1)),
+            "cycle" => CYCLE.with(|c| c.set(c.get() + 1)),
+            _ => {}
+        }
+    }
+    pub fn report() {
+        let rules = [
+            ("app-bind", &APP_BIND), ("lam-choice", &LAM_CHOICE),
+            ("lam-exists", &LAM_EXISTS), ("lam-equate", &LAM_EQUATE),
+            ("eq-exists", &EQ_EXISTS), ("eq-choice", &EQ_CHOICE),
+            ("dead-end", &DEAD_END), ("cycle", &CYCLE),
+        ];
+        let fired: Vec<_> = rules.iter()
+            .filter_map(|(name, cell)| {
+                let n = cell.with(|c| c.get());
+                if n > 0 { Some(format!("{name}={n}")) } else { None }
+            })
+            .collect();
+        if !fired.is_empty() {
+            eprintln!("[opt] rules: {}", fired.join(", "));
+        }
+        // reset
+        for (_, cell) in &rules {
+            cell.with(|c| c.set(0));
+        }
+    }
 }
 
 // --- De Bruijn shifting ---
@@ -170,6 +244,146 @@ fn subst_comp(comp: &Rc<MComputation>, repl: &Rc<MValue>, depth: usize) -> Rc<MC
     }
 }
 
+// --- Helpers ---
+
+/// Check if a value structurally contains `needle` as a strict sub-value.
+/// Used for cycle detection in equate: V =:= C[V] → fail.
+fn val_contains(needle: &MValue, haystack: &MValue) -> bool {
+    if needle == haystack {
+        return true;
+    }
+    match haystack {
+        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => val_contains(needle, v),
+        MValue::Pair(a, b) | MValue::Cons(a, b) => {
+            val_contains(needle, a) || val_contains(needle, b)
+        }
+        _ => false,
+    }
+}
+
+/// Check if `target` de Bruijn index appears free in a value.
+fn has_free_var_val(val: &MValue, target: usize) -> bool {
+    match val {
+        MValue::Var(i) => *i == target,
+        MValue::Zero | MValue::Nil => false,
+        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => has_free_var_val(v, target),
+        MValue::Pair(a, b) | MValue::Cons(a, b) => {
+            has_free_var_val(a, target) || has_free_var_val(b, target)
+        }
+        MValue::Thunk(c) => has_free_var_comp(c, target),
+    }
+}
+
+fn has_free_var_comp(comp: &MComputation, target: usize) -> bool {
+    match comp {
+        MComputation::Return(v) | MComputation::Force(v) => has_free_var_val(v, target),
+        MComputation::Bind { comp: c, cont } => {
+            has_free_var_comp(c, target) || has_free_var_comp(cont, target + 1)
+        }
+        MComputation::Lambda { body } | MComputation::Exists { body, .. } | MComputation::Rec { body } => {
+            has_free_var_comp(body, target + 1)
+        }
+        MComputation::App { op, arg } => {
+            has_free_var_comp(op, target) || has_free_var_val(arg, target)
+        }
+        MComputation::Choice(cs) => cs.iter().any(|c| has_free_var_comp(c, target)),
+        MComputation::Equate { lhs, rhs, body } => {
+            has_free_var_val(lhs, target) || has_free_var_val(rhs, target) || has_free_var_comp(body, target)
+        }
+        MComputation::Ifz { num, zk, sk } => {
+            has_free_var_val(num, target) || has_free_var_comp(zk, target) || has_free_var_comp(sk, target + 1)
+        }
+        MComputation::Match { list, nilk, consk } => {
+            has_free_var_val(list, target) || has_free_var_comp(nilk, target) || has_free_var_comp(consk, target + 2)
+        }
+        MComputation::Case { sum, inlk, inrk } => {
+            has_free_var_val(sum, target) || has_free_var_comp(inlk, target + 1) || has_free_var_comp(inrk, target + 1)
+        }
+    }
+}
+
+/// Swap two adjacent binders at `depth` and `depth+1`.
+fn swap_val(val: &Rc<MValue>, depth: usize) -> Rc<MValue> {
+    match &**val {
+        MValue::Var(i) => {
+            if *i == depth {
+                Rc::new(MValue::Var(depth + 1))
+            } else if *i == depth + 1 {
+                Rc::new(MValue::Var(depth))
+            } else {
+                val.clone()
+            }
+        }
+        MValue::Zero | MValue::Nil => val.clone(),
+        MValue::Succ(v) => Rc::new(MValue::Succ(swap_val(v, depth))),
+        MValue::Pair(a, b) => Rc::new(MValue::Pair(swap_val(a, depth), swap_val(b, depth))),
+        MValue::Inl(v) => Rc::new(MValue::Inl(swap_val(v, depth))),
+        MValue::Inr(v) => Rc::new(MValue::Inr(swap_val(v, depth))),
+        MValue::Cons(h, t) => Rc::new(MValue::Cons(swap_val(h, depth), swap_val(t, depth))),
+        MValue::Thunk(c) => Rc::new(MValue::Thunk(swap_comp(c, depth))),
+    }
+}
+
+fn swap_comp(comp: &Rc<MComputation>, depth: usize) -> Rc<MComputation> {
+    match &**comp {
+        MComputation::Return(v) => Rc::new(MComputation::Return(swap_val(v, depth))),
+        MComputation::Bind { comp: c, cont } => Rc::new(MComputation::Bind {
+            comp: swap_comp(c, depth),
+            cont: swap_comp(cont, depth + 1),
+        }),
+        MComputation::Force(v) => Rc::new(MComputation::Force(swap_val(v, depth))),
+        MComputation::Lambda { body } => Rc::new(MComputation::Lambda {
+            body: swap_comp(body, depth + 1),
+        }),
+        MComputation::App { op, arg } => Rc::new(MComputation::App {
+            op: swap_comp(op, depth),
+            arg: swap_val(arg, depth),
+        }),
+        MComputation::Choice(cs) => Rc::new(MComputation::Choice(
+            cs.iter().map(|c| swap_comp(c, depth)).collect(),
+        )),
+        MComputation::Exists { ptype, body } => Rc::new(MComputation::Exists {
+            ptype: ptype.clone(),
+            body: swap_comp(body, depth + 1),
+        }),
+        MComputation::Equate { lhs, rhs, body } => Rc::new(MComputation::Equate {
+            lhs: swap_val(lhs, depth),
+            rhs: swap_val(rhs, depth),
+            body: swap_comp(body, depth),
+        }),
+        MComputation::Ifz { num, zk, sk } => Rc::new(MComputation::Ifz {
+            num: swap_val(num, depth),
+            zk: swap_comp(zk, depth),
+            sk: swap_comp(sk, depth + 1),
+        }),
+        MComputation::Match { list, nilk, consk } => Rc::new(MComputation::Match {
+            list: swap_val(list, depth),
+            nilk: swap_comp(nilk, depth),
+            consk: swap_comp(consk, depth + 2),
+        }),
+        MComputation::Case { sum, inlk, inrk } => Rc::new(MComputation::Case {
+            sum: swap_val(sum, depth),
+            inlk: swap_comp(inlk, depth + 1),
+            inrk: swap_comp(inrk, depth + 1),
+        }),
+        MComputation::Rec { body } => Rc::new(MComputation::Rec {
+            body: swap_comp(body, depth + 1),
+        }),
+    }
+}
+
+/// Conservative totality check: is this computation guaranteed to return?
+fn is_total(comp: &MComputation) -> bool {
+    match comp {
+        MComputation::Return(_) => true,
+        MComputation::Bind { comp: c, cont } => is_total(c) && is_total(cont),
+        MComputation::Ifz { zk, sk, .. } => is_total(zk) && is_total(sk),
+        MComputation::Match { nilk, consk, .. } => is_total(nilk) && is_total(consk),
+        MComputation::Case { inlk, inrk, .. } => is_total(inlk) && is_total(inrk),
+        _ => false,
+    }
+}
+
 // --- Optimizer ---
 
 /// Max continuation size (in AST nodes) for Pull-Choice to duplicate.
@@ -276,6 +490,12 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                     return c.clone();
                 }
             }
+            // Dead-End: M to x. fail  -->  fail  (when M is guaranteed to return)
+            if is_fail(cont) && is_total(c) {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("dead-end");
+                return fail();
+            }
             // Bind-assoc: (M to x. return V) to y. P → M to x. P[V/y]
             // Right-associates when inner cont is Return (exposes bind-return beta)
             // or is an effect (exposes pull laws)
@@ -362,9 +582,21 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
         }
 
         // beta: (lam x. M)(V)  -->  M[V/x]
+        // app-bind: (M to x. N)(V)  -->  M to x. N(V)
         MComputation::App { op, arg } => {
             if let MComputation::Lambda { body } = &**op {
                 return opt_comp(&subst_comp(body, arg, 0));
+            }
+            if let MComputation::Bind { comp: c, cont } = &**op {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("app-bind");
+                return opt_comp(&Rc::new(MComputation::Bind {
+                    comp: c.clone(),
+                    cont: Rc::new(MComputation::App {
+                        op: cont.clone(),
+                        arg: shift_val(arg, 1, 0),
+                    }),
+                }));
             }
             comp.clone()
         }
@@ -411,6 +643,9 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
 
         // equate V W fail  -->  fail
         // equate V V M  -->  M  (reflexivity)
+        // equate V C[V] M  -->  fail  (cycle detection)
+        // equate V W (exists x:s. M)  -->  exists x:s. equate V W M
+        // equate V W (M || N)  -->  (equate V W M) || (equate V W N)
         // + parameter laws: constructor decomposition and mismatch
         MComputation::Equate { lhs, rhs, body } => {
             if is_fail(body) {
@@ -418,6 +653,43 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
             }
             if lhs == rhs {
                 return body.clone();
+            }
+            // Cycle detection: V =:= C[V] or C[V] =:= V → fail
+            if val_contains(lhs, rhs) || val_contains(rhs, lhs) {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("cycle");
+                return fail();
+            }
+            // Equate-Exists: V =:= W. (∃x:σ.M) = ∃x:σ. V =:= W. M
+            if let MComputation::Exists { ptype, body: ebody } = &**body {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("eq-exists");
+                return opt_comp(&Rc::new(MComputation::Exists {
+                    ptype: ptype.clone(),
+                    body: Rc::new(MComputation::Equate {
+                        lhs: shift_val(lhs, 1, 0),
+                        rhs: shift_val(rhs, 1, 0),
+                        body: ebody.clone(),
+                    }),
+                }));
+            }
+            // Equate-Choice: V =:= W. (M || N) = (V =:= W. M) || (V =:= W. N)
+            if let MComputation::Choice(branches) = &**body {
+                if !branches.is_empty() {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("eq-choice");
+                    let new_branches: Vec<_> = branches
+                        .iter()
+                        .map(|b| {
+                            Rc::new(MComputation::Equate {
+                                lhs: lhs.clone(),
+                                rhs: rhs.clone(),
+                                body: b.clone(),
+                            })
+                        })
+                        .collect();
+                    return opt_comp(&Rc::new(MComputation::Choice(new_branches)));
+                }
             }
             match (&**lhs, &**rhs) {
                 // Succ-Succ decomposition
@@ -485,9 +757,46 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
         }
 
         // lam x. fail  -->  fail
+        // lam x. (M || N)  -->  (lam x. M) || (lam x. N)
+        // lam x. (exists z:s. M)  -->  exists z:s. (lam x. M')  [swap binders]
+        // lam x. (V =:= W. M)  -->  V' =:= W'. (lam x. M)  [if V,W don't ref x]
         MComputation::Lambda { body } => {
             if is_fail(body) {
                 return fail();
+            }
+            if let MComputation::Choice(branches) = &**body {
+                if !branches.is_empty() {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("lam-choice");
+                    let new_branches: Vec<_> = branches
+                        .iter()
+                        .map(|b| Rc::new(MComputation::Lambda { body: b.clone() }))
+                        .collect();
+                    return opt_comp(&Rc::new(MComputation::Choice(new_branches)));
+                }
+            }
+            if let MComputation::Exists { ptype, body: ebody } = &**body {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("lam-exists");
+                // Swap the lambda and exists binders
+                return opt_comp(&Rc::new(MComputation::Exists {
+                    ptype: ptype.clone(),
+                    body: Rc::new(MComputation::Lambda {
+                        body: swap_comp(ebody, 0),
+                    }),
+                }));
+            }
+            if let MComputation::Equate { lhs, rhs, body: ebody } = &**body {
+                // Only if lhs, rhs don't reference Var(0) (the lambda variable)
+                if !has_free_var_val(lhs, 0) && !has_free_var_val(rhs, 0) {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("lam-equate");
+                    return opt_comp(&Rc::new(MComputation::Equate {
+                        lhs: shift_val(lhs, -1, 0),
+                        rhs: shift_val(rhs, -1, 0),
+                        body: Rc::new(MComputation::Lambda { body: ebody.clone() }),
+                    }));
+                }
             }
             comp.clone()
         }
