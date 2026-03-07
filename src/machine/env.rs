@@ -3,22 +3,24 @@ use std::rc::Rc;
 use super::mterms::MValue;
 use super::{Ident, VClosure};
 
-/// Apply a transformation to every MValue in the environment.
+/// Optimize every function in the environment, rebuilding closure chains so
+/// that each function's closure env contains already-optimized predecessors.
 pub fn map_env_vals<F: Fn(&Rc<MValue>) -> Rc<MValue>>(env: &Rc<Env>, f: &F) -> Rc<Env> {
-    Env {
-        vec: env
-            .vec
-            .iter()
-            .map(|vc| match vc {
-                VClosure::Clos { val, env } => VClosure::Clos {
-                    val: f(val),
-                    env: env.clone(),
-                },
-                other => other.clone(),
-            })
-            .collect(),
+    let mut new_env = Env::empty();
+    for vc in &env.vec {
+        match vc {
+            VClosure::Clos { val, .. } => {
+                new_env = new_env.extend_val(f(val), new_env.clone());
+            }
+            VClosure::LogicVar { ident } => {
+                new_env = new_env.extend_lvar(*ident);
+            }
+            VClosure::Susp { ident } => {
+                new_env = new_env.extend_susp(*ident);
+            }
+        }
     }
-    .into()
+    new_env
 }
 
 #[derive(Clone, Debug)]

@@ -172,12 +172,19 @@ fn subst_comp(comp: &Rc<MComputation>, repl: &Rc<MValue>, depth: usize) -> Rc<MC
 
 // --- Optimizer ---
 
+/// Max continuation size (in AST nodes) for Pull-Choice to duplicate.
+const PULL_CHOICE_THRESHOLD: usize = 32;
+
 fn is_fail(comp: &MComputation) -> bool {
     matches!(comp, MComputation::Choice(cs) if cs.is_empty())
 }
 
 fn fail() -> Rc<MComputation> {
     Rc::new(MComputation::Choice(vec![]))
+}
+
+fn comp_size(comp: &MComputation) -> usize {
+    comp.count_nodes()
 }
 
 /// Optimize a value (recurse into subterms; optimize computations inside Thunks).
@@ -254,6 +261,9 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
         // beta: return V to x. M  -->  M[V/x]
         // fail to x. M  -->  fail
         // eta: M to x. return x  -->  M
+        // pull-choice: (M1 || M2) to x. N  -->  (M1 to x. N) || (M2 to x. N)
+        // pull-exists: (exists z:s. M) to x. N  -->  exists z:s. (M to x. N')
+        // pull-equate: (V =:= W. M) to x. N  -->  V =:= W. (M to x. N)
         MComputation::Bind { comp: c, cont } => {
             if let MComputation::Return(v) = &**c {
                 return opt_comp(&subst_comp(cont, v, 0));
@@ -265,6 +275,80 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                 if matches!(&**v, MValue::Var(0)) {
                     return c.clone();
                 }
+            }
+            // Bind-assoc: (M to x. return V) to y. P → M to x. P[V/y]
+            // Right-associates when inner cont is Return (exposes bind-return beta)
+            // or is an effect (exposes pull laws)
+            if let MComputation::Bind {
+                comp: inner_c,
+                cont: inner_k,
+            } = &**c
+            {
+                match &**inner_k {
+                    MComputation::Return(_)
+                    | MComputation::Exists { .. }
+                    | MComputation::Equate { .. } => {
+                        let shifted_cont = shift_comp(cont, 1, 1);
+                        return opt_comp(&Rc::new(MComputation::Bind {
+                            comp: inner_c.clone(),
+                            cont: Rc::new(MComputation::Bind {
+                                comp: inner_k.clone(),
+                                cont: shifted_cont,
+                            }),
+                        }));
+                    }
+                    MComputation::Choice(branches)
+                        if !branches.is_empty()
+                            && comp_size(cont) <= PULL_CHOICE_THRESHOLD =>
+                    {
+                        let shifted_cont = shift_comp(cont, 1, 1);
+                        return opt_comp(&Rc::new(MComputation::Bind {
+                            comp: inner_c.clone(),
+                            cont: Rc::new(MComputation::Bind {
+                                comp: inner_k.clone(),
+                                cont: shifted_cont,
+                            }),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            // Pull-Choice (with size heuristic to avoid blowup)
+            if let MComputation::Choice(branches) = &**c {
+                if !branches.is_empty() && comp_size(cont) <= PULL_CHOICE_THRESHOLD {
+                    let new_branches: Vec<Rc<MComputation>> = branches
+                        .iter()
+                        .map(|b| {
+                            Rc::new(MComputation::Bind {
+                                comp: b.clone(),
+                                cont: cont.clone(),
+                            })
+                        })
+                        .collect();
+                    return opt_comp(&Rc::new(MComputation::Choice(new_branches)));
+                }
+            }
+            // Pull-Exists (no duplication — always apply)
+            if let MComputation::Exists { ptype, body } = &**c {
+                let shifted_cont = shift_comp(cont, 1, 1);
+                return opt_comp(&Rc::new(MComputation::Exists {
+                    ptype: ptype.clone(),
+                    body: Rc::new(MComputation::Bind {
+                        comp: body.clone(),
+                        cont: shifted_cont,
+                    }),
+                }));
+            }
+            // Pull-Equate (no duplication — always apply)
+            if let MComputation::Equate { lhs, rhs, body } = &**c {
+                return opt_comp(&Rc::new(MComputation::Equate {
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                    body: Rc::new(MComputation::Bind {
+                        comp: body.clone(),
+                        cont: cont.clone(),
+                    }),
+                }));
             }
             comp.clone()
         }
@@ -327,12 +411,75 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
 
         // equate V W fail  -->  fail
         // equate V V M  -->  M  (reflexivity)
+        // + parameter laws: constructor decomposition and mismatch
         MComputation::Equate { lhs, rhs, body } => {
             if is_fail(body) {
                 return fail();
             }
             if lhs == rhs {
                 return body.clone();
+            }
+            match (&**lhs, &**rhs) {
+                // Succ-Succ decomposition
+                (MValue::Succ(v), MValue::Succ(w)) => {
+
+                    return opt_comp(&Rc::new(MComputation::Equate {
+                        lhs: v.clone(),
+                        rhs: w.clone(),
+                        body: body.clone(),
+                    }));
+                }
+                // Succ-Zero mismatch
+                (MValue::Succ(_), MValue::Zero) | (MValue::Zero, MValue::Succ(_)) => {
+
+                    return fail();
+                }
+                // Cons-Cons decomposition
+                (MValue::Cons(v1, w1), MValue::Cons(v2, w2)) => {
+
+                    return opt_comp(&Rc::new(MComputation::Equate {
+                        lhs: v1.clone(),
+                        rhs: v2.clone(),
+                        body: Rc::new(MComputation::Equate {
+                            lhs: w1.clone(),
+                            rhs: w2.clone(),
+                            body: body.clone(),
+                        }),
+                    }));
+                }
+                // Cons-Nil mismatch
+                (MValue::Cons(..), MValue::Nil) | (MValue::Nil, MValue::Cons(..)) => {
+
+                    return fail();
+                }
+                // Pair decomposition
+                (MValue::Pair(v1, v2), MValue::Pair(w1, w2)) => {
+
+                    return opt_comp(&Rc::new(MComputation::Equate {
+                        lhs: v1.clone(),
+                        rhs: w1.clone(),
+                        body: Rc::new(MComputation::Equate {
+                            lhs: v2.clone(),
+                            rhs: w2.clone(),
+                            body: body.clone(),
+                        }),
+                    }));
+                }
+                // Inl-Inl / Inr-Inr decomposition
+                (MValue::Inl(v), MValue::Inl(w)) | (MValue::Inr(v), MValue::Inr(w)) => {
+
+                    return opt_comp(&Rc::new(MComputation::Equate {
+                        lhs: v.clone(),
+                        rhs: w.clone(),
+                        body: body.clone(),
+                    }));
+                }
+                // Inl-Inr mismatch
+                (MValue::Inl(_), MValue::Inr(_)) | (MValue::Inr(_), MValue::Inl(_)) => {
+
+                    return fail();
+                }
+                _ => {}
             }
             comp.clone()
         }
@@ -552,5 +699,121 @@ mod tests {
         let result = opt_comp(&term);
         let expected = ret(MValue::Succ(Rc::new(MValue::Succ(var(0)))));
         assert_eq!(*result, *expected);
+    }
+
+    #[test]
+    fn pull_choice() {
+        // (return 0 [] return 1) to x. return (succ x)
+        // --> (return (succ 0)) [] (return (succ 1))
+        let term = bind(
+            Rc::new(MComputation::Choice(vec![ret(MValue::Zero), ret(MValue::Succ(Rc::new(MValue::Zero)))])),
+            ret(MValue::Succ(var(0))),
+        );
+        let result = opt_comp(&term);
+        let expected = Rc::new(MComputation::Choice(vec![
+            ret(MValue::Succ(Rc::new(MValue::Zero))),
+            ret(MValue::Succ(Rc::new(MValue::Succ(Rc::new(MValue::Zero))))),
+        ]));
+        assert_eq!(*result, *expected);
+    }
+
+    #[test]
+    fn pull_choice_eliminates_fail_branch() {
+        // (return 0 [] fail) to x. return x --> return 0
+        let term = bind(
+            Rc::new(MComputation::Choice(vec![
+                ret(MValue::Zero),
+                Rc::new(MComputation::Choice(vec![])),
+            ])),
+            ret(MValue::Var(0)),
+        );
+        let result = opt_comp(&term);
+        assert_eq!(*result, *ret(MValue::Zero));
+    }
+
+    #[test]
+    fn pull_exists() {
+        use crate::machine::value_type::ValueType;
+        // (exists z:Nat. return z) to x. return (succ x) --> exists z:Nat. return (succ z)
+        let term = bind(
+            Rc::new(MComputation::Exists {
+                ptype: ValueType::Nat,
+                body: ret(MValue::Var(0)),
+            }),
+            ret(MValue::Succ(var(0))),
+        );
+        let result = opt_comp(&term);
+        let expected = Rc::new(MComputation::Exists {
+            ptype: ValueType::Nat,
+            body: ret(MValue::Succ(var(0))),
+        });
+        assert_eq!(*result, *expected);
+    }
+
+    #[test]
+    fn pull_equate() {
+        // (0 =:= 0. return 1) to x. return (succ x) --> return (succ 1)
+        // (equate-refl fires first, then bind-return)
+        let one: Rc<MValue> = Rc::new(MValue::Succ(Rc::new(MValue::Zero)));
+        let term = bind(
+            Rc::new(MComputation::Equate {
+                lhs: Rc::new(MValue::Zero),
+                rhs: Rc::new(MValue::Zero),
+                body: Rc::new(MComputation::Return(one.clone())),
+            }),
+            ret(MValue::Succ(var(0))),
+        );
+        let result = opt_comp(&term);
+        let expected = ret(MValue::Succ(one));
+        assert_eq!(*result, *expected);
+    }
+
+    #[test]
+    fn equate_succ_succ_decompose() {
+        // succ(0) =:= succ(0). M --> M
+        let body = ret(MValue::Nil);
+        let term = Rc::new(MComputation::Equate {
+            lhs: Rc::new(MValue::Succ(Rc::new(MValue::Zero))),
+            rhs: Rc::new(MValue::Succ(Rc::new(MValue::Zero))),
+            body: body.clone(),
+        });
+        let result = opt_comp(&term);
+        assert_eq!(*result, *body);
+    }
+
+    #[test]
+    fn equate_succ_zero_fail() {
+        let term = Rc::new(MComputation::Equate {
+            lhs: Rc::new(MValue::Succ(Rc::new(MValue::Zero))),
+            rhs: Rc::new(MValue::Zero),
+            body: ret(MValue::Nil),
+        });
+        let result = opt_comp(&term);
+        assert!(is_fail(&result));
+    }
+
+    #[test]
+    fn equate_cons_nil_fail() {
+        let term = Rc::new(MComputation::Equate {
+            lhs: Rc::new(MValue::Cons(Rc::new(MValue::Zero), Rc::new(MValue::Nil))),
+            rhs: Rc::new(MValue::Nil),
+            body: ret(MValue::Nil),
+        });
+        let result = opt_comp(&term);
+        assert!(is_fail(&result));
+    }
+
+    #[test]
+    fn equate_pair_decompose() {
+        // (0, 1) =:= (0, 1). M --> M
+        let one: Rc<MValue> = Rc::new(MValue::Succ(Rc::new(MValue::Zero)));
+        let body = ret(MValue::Nil);
+        let term = Rc::new(MComputation::Equate {
+            lhs: Rc::new(MValue::Pair(Rc::new(MValue::Zero), one.clone())),
+            rhs: Rc::new(MValue::Pair(Rc::new(MValue::Zero), one)),
+            body: body.clone(),
+        });
+        let result = opt_comp(&term);
+        assert_eq!(*result, *body);
     }
 }
