@@ -19,7 +19,7 @@ pub fn optimize(comp: MComputation) -> MComputation {
 
 /// Optimize an MValue (recursing into Thunks to optimize computations).
 pub fn optimize_val(val: &Rc<MValue>) -> Rc<MValue> {
-    opt_val(val)
+    opt_val(val, &[])
 }
 
 /// Optimize an entire environment and print per-function stats.
@@ -50,6 +50,13 @@ mod stats {
         static EQ_CHOICE: Cell<u32> = const { Cell::new(0) };
         static DEAD_END: Cell<u32> = const { Cell::new(0) };
         static CYCLE: Cell<u32> = const { Cell::new(0) };
+        static IFZ_BETA: Cell<u32> = const { Cell::new(0) };
+        static MATCH_BETA: Cell<u32> = const { Cell::new(0) };
+        static CASE_BETA: Cell<u32> = const { Cell::new(0) };
+        static FORCE_BETA: Cell<u32> = const { Cell::new(0) };
+        static DEAD_BIND: Cell<u32> = const { Cell::new(0) };
+        static BIND_ETA: Cell<u32> = const { Cell::new(0) };
+        static LAM_BETA: Cell<u32> = const { Cell::new(0) };
     }
     pub fn bump(name: &str) {
         match name {
@@ -61,6 +68,13 @@ mod stats {
             "eq-choice" => EQ_CHOICE.with(|c| c.set(c.get() + 1)),
             "dead-end" => DEAD_END.with(|c| c.set(c.get() + 1)),
             "cycle" => CYCLE.with(|c| c.set(c.get() + 1)),
+            "ifz-beta" => IFZ_BETA.with(|c| c.set(c.get() + 1)),
+            "match-beta" => MATCH_BETA.with(|c| c.set(c.get() + 1)),
+            "case-beta" => CASE_BETA.with(|c| c.set(c.get() + 1)),
+            "force-beta" => FORCE_BETA.with(|c| c.set(c.get() + 1)),
+            "dead-bind" => DEAD_BIND.with(|c| c.set(c.get() + 1)),
+            "bind-eta" => BIND_ETA.with(|c| c.set(c.get() + 1)),
+            "lam-beta" => LAM_BETA.with(|c| c.set(c.get() + 1)),
             _ => {}
         }
     }
@@ -70,6 +84,10 @@ mod stats {
             ("lam-exists", &LAM_EXISTS), ("lam-equate", &LAM_EQUATE),
             ("eq-exists", &EQ_EXISTS), ("eq-choice", &EQ_CHOICE),
             ("dead-end", &DEAD_END), ("cycle", &CYCLE),
+            ("ifz-beta", &IFZ_BETA), ("match-beta", &MATCH_BETA),
+            ("case-beta", &CASE_BETA), ("force-beta", &FORCE_BETA),
+            ("dead-bind", &DEAD_BIND), ("bind-eta", &BIND_ETA),
+            ("lam-beta", &LAM_BETA),
         ];
         let fired: Vec<_> = rules.iter()
             .filter_map(|(name, cell)| {
@@ -386,9 +404,6 @@ fn is_total(comp: &MComputation) -> bool {
 
 // --- Optimizer ---
 
-/// Max continuation size (in AST nodes) for Pull-Choice to duplicate.
-const PULL_CHOICE_THRESHOLD: usize = 32;
-
 fn is_fail(comp: &MComputation) -> bool {
     matches!(comp, MComputation::Choice(cs) if cs.is_empty())
 }
@@ -397,94 +412,151 @@ fn fail() -> Rc<MComputation> {
     Rc::new(MComputation::Choice(vec![]))
 }
 
-fn comp_size(comp: &MComputation) -> usize {
-    comp.count_nodes()
+type Env = Vec<Option<Rc<MValue>>>;
+
+fn push_env(env: &[Option<Rc<MValue>>], entry: Option<Rc<MValue>>) -> Env {
+    let mut e = Vec::with_capacity(env.len() + 1);
+    e.push(entry);
+    e.extend_from_slice(env);
+    e
 }
 
-/// Optimize a value (recurse into subterms; optimize computations inside Thunks).
-fn opt_val(val: &Rc<MValue>) -> Rc<MValue> {
+/// Resolve a value through the compile-time env (deep-resolve all variables).
+fn resolve_val(val: &Rc<MValue>, env: &[Option<Rc<MValue>>]) -> Rc<MValue> {
+    deep_resolve(val, env)
+}
+
+/// Recursively resolve all variables in a value through the compile-time env.
+/// Used to build fully-concrete env entries for decision-making.
+fn deep_resolve(val: &Rc<MValue>, env: &[Option<Rc<MValue>>]) -> Rc<MValue> {
     match &**val {
-        MValue::Thunk(c) => Rc::new(MValue::Thunk(opt_comp(c))),
-        MValue::Succ(v) => Rc::new(MValue::Succ(opt_val(v))),
-        MValue::Pair(a, b) => Rc::new(MValue::Pair(opt_val(a), opt_val(b))),
-        MValue::Inl(v) => Rc::new(MValue::Inl(opt_val(v))),
-        MValue::Inr(v) => Rc::new(MValue::Inr(opt_val(v))),
-        MValue::Cons(h, t) => Rc::new(MValue::Cons(opt_val(h), opt_val(t))),
-        _ => val.clone(), // Var, Zero, Nil
+        MValue::Var(i) => {
+            if let Some(Some(v)) = env.get(*i) {
+                let shifted = shift_val(v, (*i as isize) + 1, 0);
+                deep_resolve(&shifted, env)
+            } else {
+                val.clone()
+            }
+        }
+        MValue::Zero | MValue::Nil => val.clone(),
+        MValue::Succ(v) => Rc::new(MValue::Succ(deep_resolve(v, env))),
+        MValue::Pair(a, b) => Rc::new(MValue::Pair(deep_resolve(a, env), deep_resolve(b, env))),
+        MValue::Inl(v) => Rc::new(MValue::Inl(deep_resolve(v, env))),
+        MValue::Inr(v) => Rc::new(MValue::Inr(deep_resolve(v, env))),
+        MValue::Cons(h, t) => Rc::new(MValue::Cons(deep_resolve(h, env), deep_resolve(t, env))),
+        MValue::Thunk(_) => val.clone(),
     }
 }
 
-/// Optimize a computation: first optimize all subterms (bottom-up), then rewrite.
-fn opt_comp(comp: &Rc<MComputation>) -> Rc<MComputation> {
-    let rebuilt = opt_subterms(comp);
-    rewrite(&rebuilt)
+fn opt_val(val: &Rc<MValue>, env: &[Option<Rc<MValue>>]) -> Rc<MValue> {
+    match &**val {
+        MValue::Thunk(c) => Rc::new(MValue::Thunk(opt_comp_env(c, env))),
+        MValue::Succ(v) => Rc::new(MValue::Succ(opt_val(v, env))),
+        MValue::Pair(a, b) => Rc::new(MValue::Pair(opt_val(a, env), opt_val(b, env))),
+        MValue::Inl(v) => Rc::new(MValue::Inl(opt_val(v, env))),
+        MValue::Inr(v) => Rc::new(MValue::Inr(opt_val(v, env))),
+        MValue::Cons(h, t) => Rc::new(MValue::Cons(opt_val(h, env), opt_val(t, env))),
+        _ => val.clone(),
+    }
 }
 
-/// Recursively optimize all immediate subterms of a computation.
-fn opt_subterms(comp: &Rc<MComputation>) -> Rc<MComputation> {
+fn opt_comp(comp: &Rc<MComputation>) -> Rc<MComputation> {
+    opt_comp_env(comp, &[])
+}
+
+fn opt_comp_env(comp: &Rc<MComputation>, env: &[Option<Rc<MValue>>]) -> Rc<MComputation> {
+    let rebuilt = opt_subterms(comp, env);
+    rewrite(&rebuilt, env)
+}
+
+fn opt_subterms(comp: &Rc<MComputation>, env: &[Option<Rc<MValue>>]) -> Rc<MComputation> {
     match &**comp {
-        MComputation::Return(v) => Rc::new(MComputation::Return(opt_val(v))),
-        MComputation::Bind { comp: c, cont } => Rc::new(MComputation::Bind {
-            comp: opt_comp(c),
-            cont: opt_comp(cont),
-        }),
-        MComputation::Force(v) => Rc::new(MComputation::Force(opt_val(v))),
+        MComputation::Return(v) => Rc::new(MComputation::Return(opt_val(v, env))),
+        MComputation::Bind { comp: c, cont } => {
+            let oc = opt_comp_env(c, env);
+            let entry = if let MComputation::Return(v) = &*oc {
+                Some(deep_resolve(v, env))
+            } else {
+                None
+            };
+            let cenv = push_env(env, entry);
+            Rc::new(MComputation::Bind { comp: oc, cont: opt_comp_env(cont, &cenv) })
+        }
+        MComputation::Force(v) => Rc::new(MComputation::Force(opt_val(v, env))),
         MComputation::Lambda { body } => Rc::new(MComputation::Lambda {
-            body: opt_comp(body),
+            body: opt_comp_env(body, &push_env(env, None)),
         }),
         MComputation::App { op, arg } => Rc::new(MComputation::App {
-            op: opt_comp(op),
-            arg: opt_val(arg),
+            op: opt_comp_env(op, env),
+            arg: opt_val(arg, env),
         }),
-        MComputation::Choice(cs) => {
-            Rc::new(MComputation::Choice(cs.iter().map(|c| opt_comp(c)).collect()))
-        }
+        MComputation::Choice(cs) => Rc::new(MComputation::Choice(
+            cs.iter().map(|c| opt_comp_env(c, env)).collect(),
+        )),
         MComputation::Exists { ptype, body } => Rc::new(MComputation::Exists {
             ptype: ptype.clone(),
-            body: opt_comp(body),
+            body: opt_comp_env(body, &push_env(env, None)),
         }),
         MComputation::Equate { lhs, rhs, body } => Rc::new(MComputation::Equate {
-            lhs: opt_val(lhs),
-            rhs: opt_val(rhs),
-            body: opt_comp(body),
+            lhs: opt_val(lhs, env),
+            rhs: opt_val(rhs, env),
+            body: opt_comp_env(body, env),
         }),
         MComputation::Ifz { num, zk, sk } => Rc::new(MComputation::Ifz {
-            num: opt_val(num),
-            zk: opt_comp(zk),
-            sk: opt_comp(sk),
+            num: opt_val(num, env),
+            zk: opt_comp_env(zk, env),
+            sk: opt_comp_env(sk, &push_env(env, None)),
         }),
         MComputation::Match { list, nilk, consk } => Rc::new(MComputation::Match {
-            list: opt_val(list),
-            nilk: opt_comp(nilk),
-            consk: opt_comp(consk),
+            list: opt_val(list, env),
+            nilk: opt_comp_env(nilk, env),
+            consk: opt_comp_env(consk, &push_env(&push_env(env, None), None)),
         }),
         MComputation::Case { sum, inlk, inrk } => Rc::new(MComputation::Case {
-            sum: opt_val(sum),
-            inlk: opt_comp(inlk),
-            inrk: opt_comp(inrk),
+            sum: opt_val(sum, env),
+            inlk: opt_comp_env(inlk, &push_env(env, None)),
+            inrk: opt_comp_env(inrk, &push_env(env, None)),
         }),
         MComputation::Rec { body } => Rc::new(MComputation::Rec {
-            body: opt_comp(body),
+            body: opt_comp_env(body, &push_env(env, None)),
         }),
     }
 }
 
 /// Try rewrite rules at the top level. If a rewrite fires, re-optimize the result.
-fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
+fn rewrite(comp: &Rc<MComputation>, env: &[Option<Rc<MValue>>]) -> Rc<MComputation> {
     match &**comp {
-        // beta: return V to x. M  -->  M[V/x]
+        // Bind rules:
         // fail to x. M  -->  fail
         // eta: M to x. return x  -->  M
-        // pull-choice: (M1 || M2) to x. N  -->  (M1 to x. N) || (M2 to x. N)
-        // pull-exists: (exists z:s. M) to x. N  -->  exists z:s. (M to x. N')
-        // pull-equate: (V =:= W. M) to x. N  -->  V =:= W. (M to x. N)
+        // dead-bind: return V to x. M  -->  M↓  (when x ∉ FV(M))
+        // dead-end: M to x. fail  -->  fail  (when M total)
+        // bind-assoc, pull-choice, pull-exists, pull-equate
         MComputation::Bind { comp: c, cont } => {
             if let MComputation::Return(v) = &**c {
-                return opt_comp(&subst_comp(cont, v, 0));
+                // eta: return V to x. return x → return V
+                if let MComputation::Return(rv) = &**cont {
+                    if matches!(&**rv, MValue::Var(0)) {
+                        #[cfg(feature = "opt-stats")]
+                        stats::bump("bind-eta");
+                        return c.clone();
+                    }
+                }
+                // dead-bind: cont doesn't use Var(0) → drop the bind
+                if !has_free_var_comp(cont, 0) {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("dead-bind");
+                    return shift_comp(cont, -1, 0);
+                }
+                // Variable aliasing: Bind { Return(Var(i)), cont } is just renaming
+                if matches!(&**v, MValue::Var(_)) {
+                    return opt_comp_env(&subst_comp(cont, v, 0), env);
+                }
             }
             if is_fail(c) {
                 return fail();
             }
+            // eta for non-Return c
             if let MComputation::Return(v) = &**cont {
                 if matches!(&**v, MValue::Var(0)) {
                     return c.clone();
@@ -496,9 +568,7 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                 stats::bump("dead-end");
                 return fail();
             }
-            // Bind-assoc: (M to x. return V) to y. P → M to x. P[V/y]
-            // Right-associates when inner cont is Return (exposes bind-return beta)
-            // or is an effect (exposes pull laws)
+            // Bind-assoc: (M to x. N) to y. P → M to x. (N to y'. P')
             if let MComputation::Bind {
                 comp: inner_c,
                 cont: inner_k,
@@ -509,33 +579,31 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                     | MComputation::Exists { .. }
                     | MComputation::Equate { .. } => {
                         let shifted_cont = shift_comp(cont, 1, 1);
-                        return opt_comp(&Rc::new(MComputation::Bind {
+                        return opt_comp_env(&Rc::new(MComputation::Bind {
                             comp: inner_c.clone(),
                             cont: Rc::new(MComputation::Bind {
                                 comp: inner_k.clone(),
                                 cont: shifted_cont,
                             }),
-                        }));
+                        }), env);
                     }
-                    MComputation::Choice(branches)
-                        if !branches.is_empty()
-                            && comp_size(cont) <= PULL_CHOICE_THRESHOLD =>
+                    MComputation::Choice(branches) if !branches.is_empty() =>
                     {
                         let shifted_cont = shift_comp(cont, 1, 1);
-                        return opt_comp(&Rc::new(MComputation::Bind {
+                        return opt_comp_env(&Rc::new(MComputation::Bind {
                             comp: inner_c.clone(),
                             cont: Rc::new(MComputation::Bind {
                                 comp: inner_k.clone(),
                                 cont: shifted_cont,
                             }),
-                        }));
+                        }), env);
                     }
                     _ => {}
                 }
             }
-            // Pull-Choice (with size heuristic to avoid blowup)
+            // Pull-Choice
             if let MComputation::Choice(branches) = &**c {
-                if !branches.is_empty() && comp_size(cont) <= PULL_CHOICE_THRESHOLD {
+                if !branches.is_empty() {
                     let new_branches: Vec<Rc<MComputation>> = branches
                         .iter()
                         .map(|b| {
@@ -545,58 +613,63 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                             })
                         })
                         .collect();
-                    return opt_comp(&Rc::new(MComputation::Choice(new_branches)));
+                    return opt_comp_env(&Rc::new(MComputation::Choice(new_branches)), env);
                 }
             }
-            // Pull-Exists (no duplication — always apply)
+            // Pull-Exists
             if let MComputation::Exists { ptype, body } = &**c {
                 let shifted_cont = shift_comp(cont, 1, 1);
-                return opt_comp(&Rc::new(MComputation::Exists {
+                return opt_comp_env(&Rc::new(MComputation::Exists {
                     ptype: ptype.clone(),
                     body: Rc::new(MComputation::Bind {
                         comp: body.clone(),
                         cont: shifted_cont,
                     }),
-                }));
+                }), env);
             }
-            // Pull-Equate (no duplication — always apply)
+            // Pull-Equate
             if let MComputation::Equate { lhs, rhs, body } = &**c {
-                return opt_comp(&Rc::new(MComputation::Equate {
+                return opt_comp_env(&Rc::new(MComputation::Equate {
                     lhs: lhs.clone(),
                     rhs: rhs.clone(),
                     body: Rc::new(MComputation::Bind {
                         comp: body.clone(),
                         cont: cont.clone(),
                     }),
-                }));
+                }), env);
             }
             comp.clone()
         }
 
-        // beta: force(thunk M)  -->  M
+        // force(thunk M)  -->  M  (resolve through env)
         MComputation::Force(v) => {
-            if let MValue::Thunk(c) = &**v {
-                return opt_comp(c);
+            let resolved = resolve_val(v, env);
+            if let MValue::Thunk(c) = &*resolved {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("force-beta");
+                return opt_comp_env(c, env);
             }
             comp.clone()
         }
 
-        // beta: (lam x. M)(V)  -->  M[V/x]
+        // (lam x. M)(V)  -->  M[V/x]
         // app-bind: (M to x. N)(V)  -->  M to x. N(V)
         MComputation::App { op, arg } => {
             if let MComputation::Lambda { body } = &**op {
-                return opt_comp(&subst_comp(body, arg, 0));
+                #[cfg(feature = "opt-stats")]
+                stats::bump("lam-beta");
+                return opt_comp_env(&subst_comp(body, arg, 0), env);
             }
             if let MComputation::Bind { comp: c, cont } = &**op {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("app-bind");
-                return opt_comp(&Rc::new(MComputation::Bind {
+                return opt_comp_env(&Rc::new(MComputation::Bind {
                     comp: c.clone(),
                     cont: Rc::new(MComputation::App {
                         op: cont.clone(),
                         arg: shift_val(arg, 1, 0),
                     }),
-                }));
+                }), env);
             }
             comp.clone()
         }
@@ -641,39 +714,34 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
             comp.clone()
         }
 
-        // equate V W fail  -->  fail
-        // equate V V M  -->  M  (reflexivity)
-        // equate V C[V] M  -->  fail  (cycle detection)
-        // equate V W (exists x:s. M)  -->  exists x:s. equate V W M
-        // equate V W (M || N)  -->  (equate V W M) || (equate V W N)
-        // + parameter laws: constructor decomposition and mismatch
+        // equate rules: reflexivity, cycle, parameter laws, etc.
         MComputation::Equate { lhs, rhs, body } => {
             if is_fail(body) {
                 return fail();
             }
-            if lhs == rhs {
+            // Resolve through env so parameter laws can see constructors
+            let rlhs = resolve_val(lhs, env);
+            let rrhs = resolve_val(rhs, env);
+            if rlhs == rrhs {
                 return body.clone();
             }
-            // Cycle detection: V =:= C[V] or C[V] =:= V → fail
-            if val_contains(lhs, rhs) || val_contains(rhs, lhs) {
+            if val_contains(&rlhs, &rrhs) || val_contains(&rrhs, &rlhs) {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("cycle");
                 return fail();
             }
-            // Equate-Exists: V =:= W. (∃x:σ.M) = ∃x:σ. V =:= W. M
             if let MComputation::Exists { ptype, body: ebody } = &**body {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("eq-exists");
-                return opt_comp(&Rc::new(MComputation::Exists {
+                return opt_comp_env(&Rc::new(MComputation::Exists {
                     ptype: ptype.clone(),
                     body: Rc::new(MComputation::Equate {
                         lhs: shift_val(lhs, 1, 0),
                         rhs: shift_val(rhs, 1, 0),
                         body: ebody.clone(),
                     }),
-                }));
+                }), env);
             }
-            // Equate-Choice: V =:= W. (M || N) = (V =:= W. M) || (V =:= W. N)
             if let MComputation::Choice(branches) = &**body {
                 if !branches.is_empty() {
                     #[cfg(feature = "opt-stats")]
@@ -688,28 +756,22 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                             })
                         })
                         .collect();
-                    return opt_comp(&Rc::new(MComputation::Choice(new_branches)));
+                    return opt_comp_env(&Rc::new(MComputation::Choice(new_branches)), env);
                 }
             }
-            match (&**lhs, &**rhs) {
-                // Succ-Succ decomposition
+            match (&*rlhs, &*rrhs) {
                 (MValue::Succ(v), MValue::Succ(w)) => {
-
-                    return opt_comp(&Rc::new(MComputation::Equate {
+                    return opt_comp_env(&Rc::new(MComputation::Equate {
                         lhs: v.clone(),
                         rhs: w.clone(),
                         body: body.clone(),
-                    }));
+                    }), env);
                 }
-                // Succ-Zero mismatch
                 (MValue::Succ(_), MValue::Zero) | (MValue::Zero, MValue::Succ(_)) => {
-
                     return fail();
                 }
-                // Cons-Cons decomposition
                 (MValue::Cons(v1, w1), MValue::Cons(v2, w2)) => {
-
-                    return opt_comp(&Rc::new(MComputation::Equate {
+                    return opt_comp_env(&Rc::new(MComputation::Equate {
                         lhs: v1.clone(),
                         rhs: v2.clone(),
                         body: Rc::new(MComputation::Equate {
@@ -717,17 +779,13 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                             rhs: w2.clone(),
                             body: body.clone(),
                         }),
-                    }));
+                    }), env);
                 }
-                // Cons-Nil mismatch
                 (MValue::Cons(..), MValue::Nil) | (MValue::Nil, MValue::Cons(..)) => {
-
                     return fail();
                 }
-                // Pair decomposition
                 (MValue::Pair(v1, v2), MValue::Pair(w1, w2)) => {
-
-                    return opt_comp(&Rc::new(MComputation::Equate {
+                    return opt_comp_env(&Rc::new(MComputation::Equate {
                         lhs: v1.clone(),
                         rhs: w1.clone(),
                         body: Rc::new(MComputation::Equate {
@@ -735,20 +793,16 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                             rhs: w2.clone(),
                             body: body.clone(),
                         }),
-                    }));
+                    }), env);
                 }
-                // Inl-Inl / Inr-Inr decomposition
                 (MValue::Inl(v), MValue::Inl(w)) | (MValue::Inr(v), MValue::Inr(w)) => {
-
-                    return opt_comp(&Rc::new(MComputation::Equate {
+                    return opt_comp_env(&Rc::new(MComputation::Equate {
                         lhs: v.clone(),
                         rhs: w.clone(),
                         body: body.clone(),
-                    }));
+                    }), env);
                 }
-                // Inl-Inr mismatch
                 (MValue::Inl(_), MValue::Inr(_)) | (MValue::Inr(_), MValue::Inl(_)) => {
-
                     return fail();
                 }
                 _ => {}
@@ -772,63 +826,88 @@ fn rewrite(comp: &Rc<MComputation>) -> Rc<MComputation> {
                         .iter()
                         .map(|b| Rc::new(MComputation::Lambda { body: b.clone() }))
                         .collect();
-                    return opt_comp(&Rc::new(MComputation::Choice(new_branches)));
+                    return opt_comp_env(&Rc::new(MComputation::Choice(new_branches)), env);
                 }
             }
             if let MComputation::Exists { ptype, body: ebody } = &**body {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("lam-exists");
-                // Swap the lambda and exists binders
-                return opt_comp(&Rc::new(MComputation::Exists {
+                return opt_comp_env(&Rc::new(MComputation::Exists {
                     ptype: ptype.clone(),
                     body: Rc::new(MComputation::Lambda {
                         body: swap_comp(ebody, 0),
                     }),
-                }));
+                }), env);
             }
             if let MComputation::Equate { lhs, rhs, body: ebody } = &**body {
-                // Only if lhs, rhs don't reference Var(0) (the lambda variable)
                 if !has_free_var_val(lhs, 0) && !has_free_var_val(rhs, 0) {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("lam-equate");
-                    return opt_comp(&Rc::new(MComputation::Equate {
+                    return opt_comp_env(&Rc::new(MComputation::Equate {
                         lhs: shift_val(lhs, -1, 0),
                         rhs: shift_val(rhs, -1, 0),
                         body: Rc::new(MComputation::Lambda { body: ebody.clone() }),
-                    }));
+                    }), env);
                 }
             }
             comp.clone()
         }
 
-        // beta: ifz(0, M, n.N)  -->  M
-        // beta: ifz(succ V, M, n.N)  -->  N[V/n]
-        MComputation::Ifz { num, zk, sk } => match &**num {
-            MValue::Zero => zk.clone(),
-            MValue::Succ(v) => opt_comp(&subst_comp(sk, v, 0)),
-            _ => comp.clone(),
-        },
-
-        // beta: match(nil, M, _)  -->  M
-        // beta: match(cons(V,W), _, N)  -->  N[W/0][V/0]
-        MComputation::Match { list, nilk, consk } => match &**list {
-            MValue::Nil => nilk.clone(),
-            MValue::Cons(v, w) => {
-                // consk binds: Var(0) = tail (w), Var(1) = head (v)
-                let step1 = subst_comp(consk, w, 0);
-                let step2 = subst_comp(&step1, v, 0);
-                opt_comp(&step2)
+        // ifz(num, zk, n.sk): resolve num through env, then subst
+        MComputation::Ifz { num, zk, sk } => {
+            let resolved = resolve_val(num, env);
+            match &*resolved {
+                MValue::Zero => {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("ifz-beta");
+                    zk.clone()
+                }
+                MValue::Succ(pred) => {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("ifz-beta");
+                    opt_comp_env(&subst_comp(sk, pred, 0), env)
+                }
+                _ => comp.clone(),
             }
-            _ => comp.clone(),
-        },
+        }
 
-        // beta: case(inl V, M, _)  -->  M[V/x]
-        // beta: case(inr W, _, N)  -->  N[W/x]
-        MComputation::Case { sum, inlk, inrk } => match &**sum {
-            MValue::Inl(v) => opt_comp(&subst_comp(inlk, v, 0)),
-            MValue::Inr(v) => opt_comp(&subst_comp(inrk, v, 0)),
-            _ => comp.clone(),
-        },
+        // match(list, nilk, x.xs.consk): resolve list through env, then subst
+        MComputation::Match { list, nilk, consk } => {
+            let resolved = resolve_val(list, env);
+            match &*resolved {
+                MValue::Nil => {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("match-beta");
+                    nilk.clone()
+                }
+                MValue::Cons(head, tail) => {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("match-beta");
+                    let step1 = subst_comp(consk, tail, 0);
+                    let step2 = subst_comp(&step1, head, 0);
+                    opt_comp_env(&step2, env)
+                }
+                _ => comp.clone(),
+            }
+        }
+
+        // case(sum, x.inlk, y.inrk): resolve sum through env, then subst
+        MComputation::Case { sum, inlk, inrk } => {
+            let resolved = resolve_val(sum, env);
+            match &*resolved {
+                MValue::Inl(v) => {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("case-beta");
+                    opt_comp_env(&subst_comp(inlk, v, 0), env)
+                }
+                MValue::Inr(v) => {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("case-beta");
+                    opt_comp_env(&subst_comp(inrk, v, 0), env)
+                }
+                _ => comp.clone(),
+            }
+        }
 
         _ => comp.clone(),
     }
@@ -852,19 +931,20 @@ mod tests {
 
     #[test]
     fn bind_return_beta() {
-        // (return 0) to x. return (succ x) --> return (succ 0)
+        // (return 0) to x. return (succ x) -- env approach keeps bind
         let term = bind(
             ret(MValue::Zero),
             ret(MValue::Succ(var(0))),
         );
         let result = opt_comp(&term);
-        let expected = ret(MValue::Succ(Rc::new(MValue::Zero)));
+        let expected = bind(ret(MValue::Zero), ret(MValue::Succ(var(0))));
         assert_eq!(*result, *expected);
     }
 
     #[test]
     fn bind_return_chain() {
-        // (return 0) to x. (return x) to y. return (succ y) --> return (succ 0)
+        // (return 0) to x. (return x) to y. return (succ y)
+        // var-alias eliminates inner bind: (return 0) to x. return (succ x)
         let term = bind(
             ret(MValue::Zero),
             bind(
@@ -873,7 +953,7 @@ mod tests {
             ),
         );
         let result = opt_comp(&term);
-        let expected = ret(MValue::Succ(Rc::new(MValue::Zero)));
+        let expected = bind(ret(MValue::Zero), ret(MValue::Succ(var(0))));
         assert_eq!(*result, *expected);
     }
 
@@ -956,7 +1036,7 @@ mod tests {
 
     #[test]
     fn ifz_succ_beta() {
-        // ifz(succ(0), zk, n. return (succ n)) --> return (succ 0)
+        // ifz(succ(0), zk, n. return (succ n)) --> return (succ 0)  (subst at eliminator)
         let term = Rc::new(MComputation::Ifz {
             num: Rc::new(MValue::Succ(Rc::new(MValue::Zero))),
             zk: ret(MValue::Nil),
@@ -995,9 +1075,8 @@ mod tests {
 
     #[test]
     fn nested_bind_return_succ_succ() {
-        // Translation of succ(succ(x)) where x = Var(0):
         // (return x) to a. (return (succ a)) to b. return (succ b)
-        // --> return (succ (succ x))
+        // var-alias eliminates outer bind: (return (succ x)) to b. return (succ b)
         let term = bind(
             ret(MValue::Var(0)),
             bind(
@@ -1006,22 +1085,25 @@ mod tests {
             ),
         );
         let result = opt_comp(&term);
-        let expected = ret(MValue::Succ(Rc::new(MValue::Succ(var(0)))));
+        let expected = bind(
+            ret(MValue::Succ(var(0))),
+            ret(MValue::Succ(var(0))),
+        );
         assert_eq!(*result, *expected);
     }
 
     #[test]
     fn pull_choice() {
         // (return 0 [] return 1) to x. return (succ x)
-        // --> (return (succ 0)) [] (return (succ 1))
+        // --> (return 0 to x. return (succ x)) [] (return 1 to x. return (succ x))
         let term = bind(
             Rc::new(MComputation::Choice(vec![ret(MValue::Zero), ret(MValue::Succ(Rc::new(MValue::Zero)))])),
             ret(MValue::Succ(var(0))),
         );
         let result = opt_comp(&term);
         let expected = Rc::new(MComputation::Choice(vec![
-            ret(MValue::Succ(Rc::new(MValue::Zero))),
-            ret(MValue::Succ(Rc::new(MValue::Succ(Rc::new(MValue::Zero))))),
+            bind(ret(MValue::Zero), ret(MValue::Succ(var(0)))),
+            bind(ret(MValue::Succ(Rc::new(MValue::Zero))), ret(MValue::Succ(var(0)))),
         ]));
         assert_eq!(*result, *expected);
     }
@@ -1043,7 +1125,8 @@ mod tests {
     #[test]
     fn pull_exists() {
         use crate::machine::value_type::ValueType;
-        // (exists z:Nat. return z) to x. return (succ x) --> exists z:Nat. return (succ z)
+        // (exists z:Nat. return z) to x. return (succ x)
+        // --> exists z:Nat. return (succ z)  (pull-exists + var-alias elimination)
         let term = bind(
             Rc::new(MComputation::Exists {
                 ptype: ValueType::Nat,
@@ -1061,8 +1144,8 @@ mod tests {
 
     #[test]
     fn pull_equate() {
-        // (0 =:= 0. return 1) to x. return (succ x) --> return (succ 1)
-        // (equate-refl fires first, then bind-return)
+        // (0 =:= 0. return 1) to x. return (succ x)
+        // equate-refl fires → (return 1) to x. return (succ x) -- bind kept
         let one: Rc<MValue> = Rc::new(MValue::Succ(Rc::new(MValue::Zero)));
         let term = bind(
             Rc::new(MComputation::Equate {
@@ -1073,7 +1156,10 @@ mod tests {
             ret(MValue::Succ(var(0))),
         );
         let result = opt_comp(&term);
-        let expected = ret(MValue::Succ(one));
+        let expected = bind(
+            Rc::new(MComputation::Return(one)),
+            ret(MValue::Succ(var(0))),
+        );
         assert_eq!(*result, *expected);
     }
 
