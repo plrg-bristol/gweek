@@ -1,4 +1,5 @@
 use std::collections::{HashSet, VecDeque};
+use std::time::Instant;
 
 use bumpalo::Bump;
 
@@ -17,15 +18,21 @@ pub enum Strategy {
     Fair,
 }
 
-pub fn eval<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy) {
+pub fn eval<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, timeout_secs: u64) {
     let env = import_env(arena, vals);
-    let solns = run_internal(arena, comp, env, strategy, true);
-    println!(">>> {} solutions", solns);
+    let deadline = Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let (solns, timed_out) = run_internal(arena, comp, env, strategy, true, deadline);
+    if timed_out {
+        println!(">>> timed out after {}s, {} solutions found", timeout_secs, solns);
+    } else {
+        println!(">>> {} solutions", solns);
+    }
 }
 
 pub fn run<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, print: bool) -> usize {
     let env = import_env(arena, vals);
-    run_internal(arena, comp, env, strategy, print)
+    let deadline = Instant::now() + std::time::Duration::from_secs(3600);
+    run_internal(arena, comp, env, strategy, print, deadline).0
 }
 
 /// Build a bump-allocated Env from the compile-time list of top-level values.
@@ -44,12 +51,13 @@ fn run_internal<'a>(
     env: Env<'a>,
     strategy: Strategy,
     print: bool,
-) -> usize {
+    deadline: Instant,
+) -> (usize, bool) {
     match strategy {
-        Strategy::Bfs => eval_bfs(arena, comp, env, print),
-        Strategy::Dfs => eval_dfs(arena, comp, env, print),
-        Strategy::Iddfs => eval_iddfs(arena, comp, env, print),
-        Strategy::Fair => eval_fair(arena, comp, env, print),
+        Strategy::Bfs => eval_bfs(arena, comp, env, print, deadline),
+        Strategy::Dfs => eval_dfs(arena, comp, env, print, deadline),
+        Strategy::Iddfs => eval_iddfs(arena, comp, env, print, deadline),
+        Strategy::Fair => eval_fair(arena, comp, env, print, deadline),
     }
 }
 
@@ -57,7 +65,7 @@ fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) 
     Machine {
         arena,
         cclos: (comp, env),
-        stack: Stack::empty_stack(),
+        stack: Stack::empty(arena),
         lenv: LogicEnv::new(),
         senv: SuspEnv::new(),
         done: false,
@@ -75,12 +83,17 @@ fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
     }
 }
 
-fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool) -> usize {
+fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
     let mut machines = vec![fresh_machine(arena, comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
+    let mut iters = 0u32;
     while !machines.is_empty() {
         for m in machines.drain(..) {
+            iters += 1;
+            if iters & 1023 == 0 && Instant::now() >= deadline {
+                return (solns, true);
+            }
             for m in m.run_to_branch() {
                 if m.done {
                     record_solution(&m, &mut solns, print);
@@ -91,13 +104,18 @@ fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
         }
         std::mem::swap(&mut machines, &mut next);
     }
-    solns
+    (solns, false)
 }
 
-fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool) -> usize {
+fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
     let mut stack = vec![fresh_machine(arena, comp, env)];
     let mut solns = 0;
+    let mut iters = 0u32;
     while let Some(m) = stack.pop() {
+        iters += 1;
+        if iters & 1023 == 0 && Instant::now() >= deadline {
+            return (solns, true);
+        }
         for m in m.run_to_branch().into_iter().rev() {
             if m.done {
                 record_solution(&m, &mut solns, print);
@@ -106,17 +124,22 @@ fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
             }
         }
     }
-    solns
+    (solns, false)
 }
 
-fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool) -> usize {
+fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
     let mut seen = HashSet::new();
+    let mut iters = 0u32;
     loop {
         let mut stack = vec![(fresh_machine(arena, comp, env), 0)];
         let mut cutoff = false;
         while let Some((m, depth)) = stack.pop() {
+            iters += 1;
+            if iters & 1023 == 0 && Instant::now() >= deadline {
+                return (solns, true);
+            }
             if depth >= depth_limit {
                 cutoff = true;
                 continue;
@@ -146,18 +169,23 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, pri
         }
         depth_limit *= 2;
     }
-    solns
+    (solns, false)
 }
 
-fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool) -> usize {
+fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
     const QUOTA: usize = 10000;
     let mut queue = VecDeque::new();
     queue.push_back(fresh_machine(arena, comp, env));
     let mut solns = 0;
+    let mut iters = 0u32;
     while let Some(m) = queue.pop_front() {
         let mut local = vec![m];
         let mut steps = 0;
         while let Some(m) = local.pop() {
+            iters += 1;
+            if iters & 1023 == 0 && Instant::now() >= deadline {
+                return (solns, true);
+            }
             if steps >= QUOTA {
                 queue.push_back(m);
                 queue.extend(local.drain(..));
@@ -173,7 +201,7 @@ fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, prin
             }
         }
     }
-    solns
+    (solns, false)
 }
 
 fn output<'a>(arena: &'a Bump, val: &'a MValue<'a>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Option<String> {

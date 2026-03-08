@@ -11,7 +11,18 @@ use crate::parser::{
 };
 
 pub fn parse(src: &str) -> Result<Vec<Decl>, Vec<Simple<char>>> {
+    let src = strip_comments(src);
     program().parse(src)
+}
+
+fn strip_comments(src: &str) -> String {
+    src.lines()
+        .map(|line| match line.find("--") {
+            Some(i) => &line[..i],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn keyword<'a>(kw: &'a str) -> impl Parser<char, (), Error = Simple<char>> + Clone + 'a {

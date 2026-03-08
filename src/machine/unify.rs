@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::MValue;
@@ -19,10 +17,10 @@ pub fn unify<'a>(
     lenv: &mut LogicEnv<'a>,
     senv: &SuspEnv<'a>,
 ) -> Result<(), UnifyError<'a>> {
-    let mut q: VecDeque<(VClosure<'a>, VClosure<'a>)> = VecDeque::new();
-    q.push_back((VClosure::mk_clos(lhs, env), VClosure::mk_clos(rhs, env)));
+    let mut q: Vec<(VClosure<'a>, VClosure<'a>)> = Vec::new();
+    q.push((VClosure::mk_clos(lhs, env), VClosure::mk_clos(rhs, env)));
 
-    while let Some((lhs, rhs)) = q.pop_front() {
+    while let Some((lhs, rhs)) = q.pop() {
         let lhs = lhs.close_head(lenv, senv).map_err(UnifyError::Susp)?;
         let rhs = rhs.close_head(lenv, senv).map_err(UnifyError::Susp)?;
 
@@ -56,11 +54,11 @@ pub fn unify<'a>(
                 | (MValue::Zero, MValue::Zero)
                 | (MValue::Nil, MValue::Nil) => continue,
                 (MValue::Succ(v), MValue::Succ(w)) => {
-                    q.push_back((VClosure::mk_clos(v, *lenv_r), VClosure::mk_clos(w, *renv_r)));
+                    q.push((VClosure::mk_clos(v, *lenv_r), VClosure::mk_clos(w, *renv_r)));
                 }
                 (MValue::Cons(x, xs), MValue::Cons(y, ys)) => {
-                    q.push_back((VClosure::mk_clos(x, *lenv_r), VClosure::mk_clos(y, *renv_r)));
-                    q.push_back((VClosure::mk_clos(xs, *lenv_r), VClosure::mk_clos(ys, *renv_r)));
+                    q.push((VClosure::mk_clos(x, *lenv_r), VClosure::mk_clos(y, *renv_r)));
+                    q.push((VClosure::mk_clos(xs, *lenv_r), VClosure::mk_clos(ys, *renv_r)));
                 }
                 (MValue::Thunk(_), _) | (_, MValue::Thunk(_)) => {
                     panic!("tried to unify a thunk")

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use bumpalo::Bump;
 use smallvec::{smallvec, SmallVec};
 
@@ -27,24 +25,34 @@ enum StkFrame<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct StkClosure<'a> {
+struct StkClosure<'a> {
     frame: StkFrame<'a>,
     env: Env<'a>,
 }
 
-#[derive(Clone, Debug)]
-pub(super) enum Stack<'a> {
+enum StackInner<'a> {
     Nil,
-    Cons(StkClosure<'a>, Rc<Stack<'a>>),
+    Cons(StkClosure<'a>, Stack<'a>),
+}
+
+/// Persistent cons-list stack backed by a bump arena.
+/// Clone/Copy is O(1) — just a pointer copy.
+#[derive(Clone, Copy)]
+pub struct Stack<'a>(&'a StackInner<'a>);
+
+impl<'a> std::fmt::Debug for Stack<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stack(...)")
+    }
 }
 
 impl<'a> Stack<'a> {
-    pub fn empty_stack() -> Rc<Stack<'a>> {
-        Rc::new(Stack::Nil)
+    pub fn empty(arena: &'a Bump) -> Stack<'a> {
+        Stack(arena.alloc(StackInner::Nil))
     }
 
-    fn push(self: &Rc<Stack<'a>>, frame: StkFrame<'a>, env: Env<'a>) -> Rc<Stack<'a>> {
-        Stack::Cons(StkClosure { frame, env }, self.clone()).into()
+    fn push(&self, arena: &'a Bump, frame: StkFrame<'a>, env: Env<'a>) -> Stack<'a> {
+        Stack(arena.alloc(StackInner::Cons(StkClosure { frame, env }, *self)))
     }
 }
 
@@ -52,7 +60,7 @@ impl<'a> Stack<'a> {
 pub struct Machine<'a> {
     pub arena: &'a Bump,
     pub cclos: CClosure<'a>,
-    pub stack: Rc<Stack<'a>>,
+    pub stack: Stack<'a>,
     pub lenv: LogicEnv<'a>,
     pub senv: SuspEnv<'a>,
     pub done: bool,
@@ -76,12 +84,12 @@ impl<'a> Machine<'a> {
         let Machine { arena, cclos: (comp, env), stack, lenv, senv, done: _ } = self;
 
         match comp {
-            MComputation::Return(val) => match &*stack {
-                Stack::Nil => {
+            MComputation::Return(val) => match stack.0 {
+                StackInner::Nil => {
                     let mut senv = senv;
                     match senv.next() {
                         Some(a) => {
-                            let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
+                            let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                             Step::Continue(Machine {
                                 arena,
                                 cclos: (a.comp(), a.env()),
@@ -94,14 +102,14 @@ impl<'a> Machine<'a> {
                         None => Step::Done(Machine { arena, cclos: (comp, env), stack, lenv, senv, done: true }),
                     }
                 }
-                Stack::Cons(sc, tail) => match &sc.frame {
+                StackInner::Cons(sc, tail) => match sc.frame {
                     StkFrame::Value(_) => unreachable!("return throws value to a value"),
                     StkFrame::To(cont) => {
                         let new_env = sc.env.extend_val(arena, val, env);
                         Step::Continue(Machine {
                             arena,
                             cclos: (cont, new_env),
-                            stack: tail.clone(),
+                            stack: *tail,
                             lenv,
                             senv,
                             done: false,
@@ -109,11 +117,11 @@ impl<'a> Machine<'a> {
                     }
                     StkFrame::Set(ident, cont) => {
                         let mut senv = senv;
-                        senv.set(ident, val, env);
+                        senv.set(&ident, val, env);
                         Step::Continue(Machine {
                             arena,
                             cclos: (cont, sc.env),
-                            stack: tail.clone(),
+                            stack: *tail,
                             lenv,
                             senv,
                             done: false,
@@ -166,7 +174,7 @@ impl<'a> Machine<'a> {
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
                     Err(a) => {
-                        let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
+                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                         Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
@@ -179,14 +187,14 @@ impl<'a> Machine<'a> {
                 }
             }
 
-            MComputation::Lambda { body } => match &*stack {
-                Stack::Cons(sc, tail) => {
-                    if let StkFrame::Value(val) = &sc.frame {
+            MComputation::Lambda { body } => match stack.0 {
+                StackInner::Cons(sc, tail) => {
+                    if let StkFrame::Value(val) = sc.frame {
                         let new_env = env.extend_val(arena, val, sc.env);
                         Step::Continue(Machine {
                             arena,
                             cclos: (body, new_env),
-                            stack: tail.clone(),
+                            stack: *tail,
                             lenv,
                             senv,
                             done: false,
@@ -195,11 +203,11 @@ impl<'a> Machine<'a> {
                         panic!("lambda but no value on the stack")
                     }
                 }
-                Stack::Nil => panic!("lambda met with empty stack"),
+                StackInner::Nil => panic!("lambda met with empty stack"),
             },
 
             MComputation::App { op, arg } => {
-                let new_stack = stack.push(StkFrame::Value(arg), env);
+                let new_stack = stack.push(arena, StkFrame::Value(arg), env);
                 Step::Continue(Machine {
                     arena,
                     cclos: (op, env),
@@ -231,7 +239,7 @@ impl<'a> Machine<'a> {
                         result.push(Machine {
                             arena,
                             cclos: (c, env),
-                            stack: stack.clone(),
+                            stack,
                             lenv: lenv.clone(),
                             senv: senv.clone(),
                             done: false,
@@ -277,7 +285,7 @@ impl<'a> Machine<'a> {
                         done: false,
                     }),
                     Err(UnifyError::Susp(a)) => {
-                        let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
+                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                         Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
@@ -295,7 +303,7 @@ impl<'a> Machine<'a> {
                 let vclos = VClosure::mk_clos(num, env);
                 match vclos.close_head(&lenv, &senv) {
                     Err(a) => {
-                        let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
+                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                         Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
@@ -342,7 +350,7 @@ impl<'a> Machine<'a> {
                             Machine {
                                 arena,
                                 cclos: (zk, env),
-                                stack: stack.clone(),
+                                stack,
                                 lenv,
                                 senv: senv.clone(),
                                 done: false,
@@ -379,7 +387,7 @@ impl<'a> Machine<'a> {
                 let vclos = VClosure::mk_clos(list, env);
                 match vclos.close_head(&lenv, &senv) {
                     Err(a) => {
-                        let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
+                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                         Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
@@ -429,7 +437,7 @@ impl<'a> Machine<'a> {
                             Machine {
                                 arena,
                                 cclos: (nilk, env),
-                                stack: stack.clone(),
+                                stack,
                                 lenv,
                                 senv: senv.clone(),
                                 done: false,
@@ -468,7 +476,7 @@ impl<'a> Machine<'a> {
                 let vclos = VClosure::mk_clos(sum, env);
                 match vclos.close_head(&lenv, &senv) {
                     Err(a) => {
-                        let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
+                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                         Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
@@ -524,7 +532,7 @@ impl<'a> Machine<'a> {
                             Machine {
                                 arena,
                                 cclos: (inlk, env.extend_lvar(arena, fresh)),
-                                stack: stack.clone(),
+                                stack,
                                 lenv,
                                 senv: senv.clone(),
                                 done: false,
