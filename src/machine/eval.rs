@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use bumpalo::Bump;
 
+use super::config::config;
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
@@ -18,12 +19,13 @@ pub enum Strategy {
     Fair,
 }
 
-pub fn eval<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, timeout_secs: u64) {
+pub fn eval<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) {
+    let cfg = config();
     let env = import_env(arena, vals);
-    let deadline = Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let (solns, timed_out) = run_internal(arena, comp, env, strategy, true, deadline);
+    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let (solns, timed_out) = run_internal(arena, comp, env, cfg.strategy, true, deadline);
     if timed_out {
-        println!(">>> timed out after {}s, {} solutions found", timeout_secs, solns);
+        println!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns);
     } else {
         println!(">>> {} solutions", solns);
     }

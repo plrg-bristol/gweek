@@ -1,3 +1,4 @@
+pub mod config;
 pub mod mterms;
 pub mod optimize;
 pub mod translate;
@@ -13,6 +14,7 @@ mod vclosure;
 
 pub(crate) use env::Env;
 pub(crate) use vclosure::VClosure;
+pub use config::Config;
 pub use eval::{eval, run, Strategy};
 
 pub type Ident = usize;

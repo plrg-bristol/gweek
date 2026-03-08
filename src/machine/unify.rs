@@ -1,3 +1,4 @@
+use super::config::config;
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::MValue;
@@ -29,14 +30,18 @@ pub fn unify<'a>(
                 lenv.identify(*id1, *id2);
             }
             (VClosure::LogicVar { ident }, _) => {
-                if rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
-                    return Err(UnifyError::Occurs);
+                if config().occurs_check {
+                    if rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
+                        return Err(UnifyError::Occurs);
+                    }
                 }
                 lenv.set_vclos(*ident, rhs);
             }
             (_, VClosure::LogicVar { ident }) => {
-                if lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
-                    return Err(UnifyError::Occurs);
+                if config().occurs_check {
+                    if lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
+                        return Err(UnifyError::Occurs);
+                    }
                 }
                 lenv.set_vclos(*ident, lhs);
             }

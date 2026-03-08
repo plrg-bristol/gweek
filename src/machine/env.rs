@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 
+use super::config::config;
 use super::mterms::MValue;
 use super::{Ident, VClosure};
 
@@ -43,12 +44,14 @@ impl<'a> Env<'a> {
 
     pub fn extend_val(&self, arena: &'a Bump, val: &'a MValue<'a>, env: Env<'a>) -> Env<'a> {
         let mut vclos = VClosure::Clos { val, env };
-        loop {
-            match vclos {
-                VClosure::Clos { val: MValue::Var(i), env: e } => {
-                    vclos = e.lookup(*i).expect("var lookup in extend");
+        if config().eager_vars {
+            loop {
+                match vclos {
+                    VClosure::Clos { val: MValue::Var(i), env: e } => {
+                        vclos = e.lookup(*i).expect("var lookup in extend");
+                    }
+                    _ => break,
                 }
-                _ => break,
             }
         }
         Env(arena.alloc(EnvInner::Cons(vclos, *self)))

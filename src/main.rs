@@ -5,7 +5,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use bumpalo::Bump;
 use chumsky::prelude::Simple;
 
-use crate::machine::{translate::translate, Strategy};
+use crate::machine::{translate::translate, Config, Strategy};
 
 mod machine;
 mod parser;
@@ -15,19 +15,23 @@ const USAGE: &str = "\
 Usage: gweek [OPTIONS] <source_file>
 
 Options:
-  --bfs           Breadth-first search (default)
-  --dfs           Depth-first search (fast, but incomplete on infinite branches)
-  --iddfs         Iterative deepening DFS (complete, re-explores)
-  --fair          Fair round-robin DFS (complete, no re-exploration)
-  -o              Enable peephole optimizer
-  --timeout <N>   Timeout in seconds (default: 60)
-  --help          Show this help message";
+  --bfs              Breadth-first search (default)
+  --dfs              Depth-first search (fast, but incomplete on infinite branches)
+  --iddfs            Iterative deepening DFS (complete, re-explores)
+  --fair             Fair round-robin DFS (complete, no re-exploration)
+  -o                 Enable peephole optimizer
+  --timeout <N>      Timeout in seconds (default: 60)
+  --no-occurs-check  Skip occurs check in unification (unsound but faster)
+  --eager-vars       Eagerly resolve variable indirections in env
+  --help             Show this help message";
 
 fn main() {
     let mut strategy = Strategy::Bfs;
     let mut file_path = None;
-    let mut opt = false;
+    let mut optimize = false;
     let mut timeout_secs: u64 = 60;
+    let mut occurs_check = true;
+    let mut eager_vars = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -36,7 +40,9 @@ fn main() {
             "--dfs" => strategy = Strategy::Dfs,
             "--iddfs" => strategy = Strategy::Iddfs,
             "--fair" => strategy = Strategy::Fair,
-            "-o" => opt = true,
+            "-o" => optimize = true,
+            "--no-occurs-check" => occurs_check = false,
+            "--eager-vars" => eager_vars = true,
             "--timeout" => {
                 timeout_secs = args.next().unwrap_or_else(|| {
                     eprintln!("Error: --timeout requires a value\n{USAGE}");
@@ -86,9 +92,17 @@ fn main() {
         process::exit(1);
     }
 
+    machine::config::init(Config {
+        strategy,
+        optimize,
+        timeout_secs,
+        occurs_check,
+        eager_vars,
+    });
+
     let arena = Bump::new();
     let (main_comp, env) = translate(&arena, ast);
-    let (main_comp, env) = if opt {
+    let (main_comp, env) = if optimize {
         let comp = machine::optimize::optimize(&arena, main_comp);
         #[cfg(feature = "opt-stats")]
         let env = machine::optimize::optimize_env_with_stats(&arena, &env, &|a, v| machine::optimize::optimize_val(a, v));
@@ -98,7 +112,7 @@ fn main() {
     } else {
         (main_comp, env)
     };
-    machine::eval(&arena, main_comp, &env, strategy, timeout_secs);
+    machine::eval(&arena, main_comp, &env);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {

@@ -1,0 +1,106 @@
+-- 4x4 magic square (incremental pick-and-prune).
+-- Picks elements one at a time. Checks row sums after each row,
+-- and column/diagonal sums as soon as all elements are known.
+-- Magic constant = 34.
+--
+-- Layout:  a  b  c  d
+--          e  f  g  h
+--          i  j  k  l
+--          m  n  o  p
+
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+add3 :: Nat -> Nat -> Nat -> Nat
+add3 a b c = add a (add b c).
+
+add4 :: Nat -> Nat -> Nat -> Nat -> Nat
+add4 a b c d = add a (add b (add c d)).
+
+sub :: Nat -> Nat -> Nat
+sub n m = case m of
+    Z -> n
+  | S z -> (case n of
+        Z -> fail
+      | S w -> sub w z).
+
+-- nondeterministically remove x from the list, return (x, rest)
+revappend :: [Nat] -> [Nat] -> [Nat]
+revappend xs ys = case xs of
+    [] -> ys
+  | (z:zs) -> revappend zs (z : ys).
+
+pick :: [Nat] -> [Nat] -> [Nat]
+pick skipped rest = case rest of
+    [] -> fail
+  | (x:xs) -> (x : revappend skipped xs)
+              <> (pick (x : skipped) xs).
+
+-- remove a specific value from a list, fail if not present
+remove :: Nat -> [Nat] -> [Nat] -> [Nat]
+remove x skipped rest = case rest of
+    [] -> fail
+  | (y:ys) -> case sub x y of
+        Z -> (case sub y x of
+            Z -> revappend skipped ys
+          | S n -> remove x (y : skipped) ys)
+      | S n -> remove x (y : skipped) ys.
+
+exists a :: Nat. exists b :: Nat. exists c :: Nat. exists d :: Nat.
+exists e :: Nat. exists f :: Nat. exists g :: Nat. exists h :: Nat.
+exists i :: Nat. exists j :: Nat. exists k :: Nat. exists l :: Nat.
+exists m :: Nat. exists n :: Nat. exists o :: Nat. exists p :: Nat.
+
+-- row 1: pick a,b,c freely, d is forced (34 - a - b - c)
+case pick [] [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16] of [] -> fail | (a1:r1) ->
+a1 =:= a.
+case pick [] r1 of [] -> fail | (b1:r2) ->
+b1 =:= b.
+case pick [] r2 of [] -> fail | (c1:r3) ->
+c1 =:= c.
+let d0 = sub (sub (sub 34 a) b) c in
+d0 =:= d.
+let r4 = remove d [] r3 in
+
+-- row 2: pick e,f,g freely, h is forced
+case pick [] r4 of [] -> fail | (e1:r5) ->
+e1 =:= e.
+case pick [] r5 of [] -> fail | (f1:r6) ->
+f1 =:= f.
+case pick [] r6 of [] -> fail | (g1:r7) ->
+g1 =:= g.
+let h0 = sub (sub (sub 34 e) f) g in
+h0 =:= h.
+let r8 = remove h [] r7 in
+
+-- row 3: pick i,j,k freely, l is forced
+case pick [] r8 of [] -> fail | (i1:r9) ->
+i1 =:= i.
+case pick [] r9 of [] -> fail | (j1:r10) ->
+j1 =:= j.
+case pick [] r10 of [] -> fail | (k1:r11) ->
+k1 =:= k.
+let l0 = sub (sub (sub 34 i) j) k in
+l0 =:= l.
+let r12 = remove l [] r11 in
+
+-- row 4: fully determined by column constraints
+let m0 = sub (sub (sub 34 a) e) i in
+m0 =:= m.
+let r13 = remove m [] r12 in
+let n0 = sub (sub (sub 34 b) f) j in
+n0 =:= n.
+let r14 = remove n [] r13 in
+let o0 = sub (sub (sub 34 c) g) k in
+o0 =:= o.
+let r15 = remove o [] r14 in
+let p0 = sub (sub (sub 34 d) h) l in
+p0 =:= p.
+
+-- check diagonals
+add4 a f k p =:= 34.
+add4 d g j m =:= 34.
+
+[a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p].

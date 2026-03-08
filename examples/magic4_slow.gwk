@@ -1,0 +1,39 @@
+-- 4x4 magic square (naive generate-and-test).
+-- Generates all permutations of 1..16, then checks row/column/diagonal
+-- sums equal 34. Intractable: 16! ~ 21 trillion permutations.
+
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+add4 :: Nat -> Nat -> Nat -> Nat -> Nat
+add4 a b c d = add a (add b (add c d)).
+
+insert :: Nat -> [Nat] -> [Nat]
+insert x xs = case xs of
+    [] -> [x]
+  | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
+
+perm :: [Nat] -> [Nat]
+perm xs = case xs of
+    [] -> []
+  | (z:zs) -> insert z (perm zs).
+
+let sq = perm [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16] in
+exists a :: Nat. exists b :: Nat. exists c :: Nat. exists d :: Nat.
+exists e :: Nat. exists f :: Nat. exists g :: Nat. exists h :: Nat.
+exists i :: Nat. exists j :: Nat. exists k :: Nat. exists l :: Nat.
+exists m :: Nat. exists n :: Nat. exists o :: Nat. exists p :: Nat.
+sq =:= [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p].
+add4 a b c d =:= 34.
+add4 e f g h =:= 34.
+add4 i j k l =:= 34.
+add4 m n o p =:= 34.
+add4 a e i m =:= 34.
+add4 b f j n =:= 34.
+add4 c g k o =:= 34.
+add4 d h l p =:= 34.
+add4 a f k p =:= 34.
+add4 d g j m =:= 34.
+sq.
