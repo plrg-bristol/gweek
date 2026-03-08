@@ -7,20 +7,20 @@ use super::mterms::MValue;
 use super::senv::{SuspAt, SuspEnv};
 use super::VClosure;
 
-pub enum UnifyError {
+pub enum UnifyError<'a> {
     Occurs,
     Fail,
-    Susp(SuspAt),
+    Susp(SuspAt<'a>),
 }
 
-pub fn unify(
+pub fn unify<'a>(
     lhs: &Rc<MValue>,
     rhs: &Rc<MValue>,
-    env: &Env,
-    lenv: &mut LogicEnv,
-    senv: &SuspEnv,
-) -> Result<(), UnifyError> {
-    let mut q: VecDeque<(VClosure, VClosure)> = VecDeque::new();
+    env: Env<'a>,
+    lenv: &mut LogicEnv<'a>,
+    senv: &SuspEnv<'a>,
+) -> Result<(), UnifyError<'a>> {
+    let mut q: VecDeque<(VClosure<'a>, VClosure<'a>)> = VecDeque::new();
     q.push_back((VClosure::mk_clos(lhs, env), VClosure::mk_clos(rhs, env)));
 
     while let Some((lhs, rhs)) = q.pop_front() {
@@ -55,11 +55,11 @@ pub fn unify(
             ) => match (&**lv, &**rv) {
                 (MValue::Zero, MValue::Zero) | (MValue::Nil, MValue::Nil) => continue,
                 (MValue::Succ(v), MValue::Succ(w)) => {
-                    q.push_back((VClosure::mk_clos(v, lenv_r), VClosure::mk_clos(w, renv_r)));
+                    q.push_back((VClosure::mk_clos(v, *lenv_r), VClosure::mk_clos(w, *renv_r)));
                 }
                 (MValue::Cons(x, xs), MValue::Cons(y, ys)) => {
-                    q.push_back((VClosure::mk_clos(x, lenv_r), VClosure::mk_clos(y, renv_r)));
-                    q.push_back((VClosure::mk_clos(xs, lenv_r), VClosure::mk_clos(ys, renv_r)));
+                    q.push_back((VClosure::mk_clos(x, *lenv_r), VClosure::mk_clos(y, *renv_r)));
+                    q.push_back((VClosure::mk_clos(xs, *lenv_r), VClosure::mk_clos(ys, *renv_r)));
                 }
                 (MValue::Thunk(_), _) | (_, MValue::Thunk(_)) => {
                     panic!("tried to unify a thunk")

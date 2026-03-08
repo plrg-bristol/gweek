@@ -6,13 +6,13 @@ use super::union_find::UnionFind;
 use super::{Ident, VClosure};
 
 #[derive(Clone)]
-pub struct LogicEnv {
-    entries: Rc<Vec<(ValueType, Option<VClosure>)>>,
+pub struct LogicEnv<'a> {
+    entries: Rc<Vec<(ValueType, Option<VClosure<'a>>)>>,
     union_vars: Rc<UnionFind>,
 }
 
-impl LogicEnv {
-    pub fn new() -> LogicEnv {
+impl<'a> LogicEnv<'a> {
+    pub fn new() -> LogicEnv<'a> {
         LogicEnv {
             entries: Rc::new(Vec::new()),
             union_vars: Rc::new(UnionFind::new()),
@@ -26,12 +26,12 @@ impl LogicEnv {
         next
     }
 
-    pub fn lookup(&self, ident: Ident) -> Option<VClosure> {
+    pub fn lookup(&self, ident: Ident) -> Option<VClosure<'a>> {
         let root = self.union_vars.find(ident);
         self.entries.get(root)?.1.clone()
     }
 
-    pub fn set_vclos(&mut self, ident: Ident, vclos: VClosure) {
+    pub fn set_vclos(&mut self, ident: Ident, vclos: VClosure<'a>) {
         let ptype = self.get_type(ident);
         Rc::make_mut(&mut self.entries)[ident] = (ptype, Some(vclos));
     }

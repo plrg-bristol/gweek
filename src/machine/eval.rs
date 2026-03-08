@@ -1,6 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
+use bumpalo::Bump;
+
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
@@ -16,22 +18,47 @@ pub enum Strategy {
     Fair,
 }
 
-pub fn eval(comp: MComputation, env: Env, strategy: Strategy) {
-    let solns = run(comp, env, strategy, true);
+pub fn eval(comp: MComputation, vals: Vec<Rc<MValue>>, strategy: Strategy) {
+    let arena = Bump::new();
+    let env = import_env(&arena, &vals);
+    let solns = run_internal(&arena, comp, env, strategy, true);
     println!(">>> {} solutions", solns);
 }
 
-pub fn run(comp: MComputation, env: Env, strategy: Strategy, print: bool) -> usize {
+pub fn run(comp: MComputation, vals: Vec<Rc<MValue>>, strategy: Strategy, print: bool) -> usize {
+    let arena = Bump::new();
+    let env = import_env(&arena, &vals);
+    run_internal(&arena, comp, env, strategy, print)
+}
+
+/// Build a bump-allocated Env from the compile-time list of top-level values.
+/// Each function's closure env is the env built so far (its predecessors).
+fn import_env<'a>(arena: &'a Bump, vals: &[Rc<MValue>]) -> Env<'a> {
+    let mut env = Env::empty(arena);
+    for val in vals {
+        env = env.extend_val(arena, val.clone(), env);
+    }
+    env
+}
+
+fn run_internal<'a>(
+    arena: &'a Bump,
+    comp: MComputation,
+    env: Env<'a>,
+    strategy: Strategy,
+    print: bool,
+) -> usize {
     match strategy {
-        Strategy::Bfs => eval_bfs(comp, env, print),
-        Strategy::Dfs => eval_dfs(comp, env, print),
-        Strategy::Iddfs => eval_iddfs(comp, env, print),
-        Strategy::Fair => eval_fair(comp, env, print),
+        Strategy::Bfs => eval_bfs(arena, comp, env, print),
+        Strategy::Dfs => eval_dfs(arena, comp, env, print),
+        Strategy::Iddfs => eval_iddfs(arena, comp, env, print),
+        Strategy::Fair => eval_fair(arena, comp, env, print),
     }
 }
 
-fn fresh_machine(comp: MComputation, env: Env) -> Machine {
+fn fresh_machine<'a>(arena: &'a Bump, comp: MComputation, env: Env<'a>) -> Machine<'a> {
     Machine {
+        arena,
         comp: comp.into(),
         env,
         stack: Stack::empty_stack(),
@@ -43,7 +70,7 @@ fn fresh_machine(comp: MComputation, env: Env) -> Machine {
 
 fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
     if let MComputation::Return(v) = &*m.comp {
-        if let Some(s) = output(v.clone(), m.env.clone(), &m.lenv, &m.senv) {
+        if let Some(s) = output(v.clone(), m.env, &m.lenv, &m.senv) {
             if print {
                 println!("> {}", s);
             }
@@ -52,8 +79,8 @@ fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
     }
 }
 
-fn eval_bfs(comp: MComputation, env: Env, print: bool) -> usize {
-    let mut machines = vec![fresh_machine(comp, env)];
+fn eval_bfs<'a>(arena: &'a Bump, comp: MComputation, env: Env<'a>, print: bool) -> usize {
+    let mut machines = vec![fresh_machine(arena, comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
     while !machines.is_empty() {
@@ -71,8 +98,8 @@ fn eval_bfs(comp: MComputation, env: Env, print: bool) -> usize {
     solns
 }
 
-fn eval_dfs(comp: MComputation, env: Env, print: bool) -> usize {
-    let mut stack = vec![fresh_machine(comp, env)];
+fn eval_dfs<'a>(arena: &'a Bump, comp: MComputation, env: Env<'a>, print: bool) -> usize {
+    let mut stack = vec![fresh_machine(arena, comp, env)];
     let mut solns = 0;
     while let Some(m) = stack.pop() {
         for m in m.run_to_branch().into_iter().rev() {
@@ -86,12 +113,12 @@ fn eval_dfs(comp: MComputation, env: Env, print: bool) -> usize {
     solns
 }
 
-fn eval_iddfs(comp: MComputation, env: Env, print: bool) -> usize {
+fn eval_iddfs<'a>(arena: &'a Bump, comp: MComputation, env: Env<'a>, print: bool) -> usize {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
     let mut seen = HashSet::new();
     loop {
-        let mut stack = vec![(fresh_machine(comp.clone(), env.clone()), 0)];
+        let mut stack = vec![(fresh_machine(arena, comp.clone(), env), 0)];
         let mut cutoff = false;
         while let Some((m, depth)) = stack.pop() {
             if depth >= depth_limit {
@@ -103,7 +130,7 @@ fn eval_iddfs(comp: MComputation, env: Env, print: bool) -> usize {
             for m in results.into_iter().rev() {
                 if m.done {
                     if let MComputation::Return(v) = &*m.comp {
-                        if let Some(s) = output(v.clone(), m.env.clone(), &m.lenv, &m.senv) {
+                        if let Some(s) = output(v.clone(), m.env, &m.lenv, &m.senv) {
                             if seen.insert(s.clone()) {
                                 if print {
                                     println!("> {}", s);
@@ -126,10 +153,10 @@ fn eval_iddfs(comp: MComputation, env: Env, print: bool) -> usize {
     solns
 }
 
-fn eval_fair(comp: MComputation, env: Env, print: bool) -> usize {
+fn eval_fair<'a>(arena: &'a Bump, comp: MComputation, env: Env<'a>, print: bool) -> usize {
     const QUOTA: usize = 10000;
     let mut queue = VecDeque::new();
-    queue.push_back(fresh_machine(comp, env));
+    queue.push_back(fresh_machine(arena, comp, env));
     let mut solns = 0;
     while let Some(m) = queue.pop_front() {
         let mut local = vec![m];
@@ -153,6 +180,6 @@ fn eval_fair(comp: MComputation, env: Env, print: bool) -> usize {
     solns
 }
 
-fn output(val: Rc<MValue>, env: Env, lenv: &LogicEnv, senv: &SuspEnv) -> Option<String> {
+fn output<'a>(val: Rc<MValue>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Option<String> {
     Some(VClosure::Clos { val, env }.close(lenv, senv)?.to_string())
 }

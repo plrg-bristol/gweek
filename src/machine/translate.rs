@@ -5,7 +5,6 @@ use crate::machine::value_type::ValueType;
 use crate::parser::{arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, stm::Stm, r#type::Type};
 
 use super::mterms::{MComputation, MValue};
-use super::{Env, VClosure};
 
 struct TEnv {
     env: Vec<String>,
@@ -33,10 +32,10 @@ impl TEnv {
     }
 }
 
-pub fn translate(ast: Vec<Decl>) -> (MComputation, Env) {
+pub fn translate(ast: Vec<Decl>) -> (MComputation, Vec<Rc<MValue>>) {
     let ast = reorder_decls(ast);
 
-    let mut env = Env::empty();
+    let mut env = Vec::new();
     let mut tenv = TEnv::new();
     let mut main = None;
 
@@ -46,7 +45,7 @@ pub fn translate(ast: Vec<Decl>) -> (MComputation, Env) {
             Decl::Func { name, args, body } => {
                 let result: Rc<MValue> = translate_func(&name, args, body, &mut tenv).into();
                 tenv.bind(&name);
-                env = env.extend_val(result, env.clone());
+                env.push(result);
             }
             Decl::Stm(stm) => {
                 main = Some(translate_stm(stm, &mut tenv));

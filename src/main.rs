@@ -79,7 +79,7 @@ fn main() {
         #[cfg(feature = "opt-stats")]
         let env = machine::optimize::optimize_env_with_stats(&env, &machine::optimize::optimize_val);
         #[cfg(not(feature = "opt-stats"))]
-        let env = machine::map_env_vals(&env, &machine::optimize::optimize_val);
+        let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(v)).collect();
         (comp, env)
     } else {
         (main_comp, env)
@@ -132,7 +132,7 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::{map_env_vals, run, Strategy};
+    use crate::machine::{run, Strategy};
 
     fn run_example(path: &str, strategy: Strategy) -> usize {
         run_example_inner(path, strategy, false)
@@ -148,7 +148,7 @@ mod tests {
         let (comp, env) = translate(ast);
         if opt {
             let comp = machine::optimize::optimize(comp);
-            let env = map_env_vals(&env, &machine::optimize::optimize_val);
+            let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(v)).collect();
             run(comp, env, strategy, false)
         } else {
             run(comp, env, strategy, false)

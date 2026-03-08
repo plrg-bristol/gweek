@@ -24,10 +24,10 @@ pub fn optimize_val(val: &Rc<MValue>) -> Rc<MValue> {
 
 /// Optimize an entire environment and print per-function stats.
 #[cfg(feature = "opt-stats")]
-pub fn optimize_env_with_stats<F: Fn(&Rc<MValue>) -> Rc<MValue>>(env: &super::Env, f: &F) -> super::Env {
-    let before_total = env.count_nodes();
-    let result = super::env::map_env_vals(env, f);
-    let after_total = result.count_nodes();
+pub fn optimize_env_with_stats(env: &[Rc<MValue>], f: &dyn Fn(&Rc<MValue>) -> Rc<MValue>) -> Vec<Rc<MValue>> {
+    let before_total: usize = env.iter().map(|v| v.count_nodes()).sum();
+    let result: Vec<_> = env.iter().map(|v| f(v)).collect();
+    let after_total: usize = result.iter().map(|v| v.count_nodes()).sum();
     eprintln!("[opt] env:   {before_total} -> {after_total} nodes ({:+.1}%)", pct(before_total, after_total));
     stats::report();
     result
