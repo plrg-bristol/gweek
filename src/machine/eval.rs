@@ -56,8 +56,7 @@ fn run_internal<'a>(
 fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) -> Machine<'a> {
     Machine {
         arena,
-        comp,
-        env,
+        cclos: (comp, env),
         stack: Stack::empty_stack(),
         lenv: LogicEnv::new(),
         senv: SuspEnv::new(),
@@ -66,8 +65,8 @@ fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) 
 }
 
 fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
-    if let MComputation::Return(v) = m.comp {
-        if let Some(s) = output(m.arena, v, m.env, &m.lenv, &m.senv) {
+    if let MComputation::Return(v) = m.cclos.0 {
+        if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
             if print {
                 println!("> {}", s);
             }
@@ -126,8 +125,8 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, pri
             let is_branch = results.len() > 1;
             for m in results.into_iter().rev() {
                 if m.done {
-                    if let MComputation::Return(v) = m.comp {
-                        if let Some(s) = output(m.arena, v, m.env, &m.lenv, &m.senv) {
+                    if let MComputation::Return(v) = m.cclos.0 {
+                        if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
                             if seen.insert(s.clone()) {
                                 if print {
                                     println!("> {}", s);

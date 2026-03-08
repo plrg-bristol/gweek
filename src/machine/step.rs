@@ -8,7 +8,7 @@ use super::mterms::{MComputation, MValue};
 use super::senv::{SuspAt, SuspEnv};
 use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
-use super::{Env, VClosure};
+use super::{CClosure, Env, VClosure};
 
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
@@ -44,9 +44,8 @@ impl<'a> Stack<'a> {
 #[derive(Clone)]
 pub struct Machine<'a> {
     pub arena: &'a Bump,
-    pub comp: &'a MComputation<'a>,
+    pub cclos: CClosure<'a>,
     pub stack: Rc<Stack<'a>>,
-    pub env: Env<'a>,
     pub lenv: LogicEnv<'a>,
     pub senv: SuspEnv<'a>,
     pub done: bool,
@@ -69,7 +68,7 @@ impl<'a> Machine<'a> {
     }
 
     pub fn step(self) -> StepResult<'a> {
-        let Machine { arena, comp, stack, env, lenv, senv, done: _ } = self;
+        let Machine { arena, cclos: (comp, env), stack, lenv, senv, done: _ } = self;
 
         match comp {
             MComputation::Return(val) => match &*stack {
@@ -80,15 +79,14 @@ impl<'a> Machine<'a> {
                             let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
                             smallvec![Machine {
                                 arena,
-                                comp: a.comp,
+                                cclos: (a.comp(), a.env()),
                                 stack: new_stack,
-                                env: a.env,
                                 lenv,
                                 senv,
                                 done: false,
                             }]
                         }
-                        None => smallvec![Machine { arena, comp, stack, env, lenv, senv, done: true }],
+                        None => smallvec![Machine { arena, cclos: (comp, env), stack, lenv, senv, done: true }],
                     }
                 }
                 Stack::Cons(sc, tail) => match &sc.frame {
@@ -97,9 +95,8 @@ impl<'a> Machine<'a> {
                         let new_env = sc.env.extend_val(arena, val, env);
                         smallvec![Machine {
                             arena,
-                            comp: cont,
+                            cclos: (cont, new_env),
                             stack: tail.clone(),
-                            env: new_env,
                             lenv,
                             senv,
                             done: false,
@@ -110,9 +107,8 @@ impl<'a> Machine<'a> {
                         senv.set(ident, val, env);
                         smallvec![Machine {
                             arena,
-                            comp: cont,
+                            cclos: (cont, sc.env),
                             stack: tail.clone(),
-                            env: sc.env,
                             lenv,
                             senv,
                             done: false,
@@ -126,9 +122,8 @@ impl<'a> Machine<'a> {
                     let new_env = env.extend_val(arena, v, env);
                     smallvec![Machine {
                         arena,
-                        comp: cont,
+                        cclos: (cont, new_env),
                         stack,
-                        env: new_env,
                         lenv,
                         senv,
                         done: false,
@@ -136,13 +131,12 @@ impl<'a> Machine<'a> {
                 }
                 _ => {
                     let mut senv = senv;
-                    let ident = senv.fresh(inner, env);
+                    let ident = senv.fresh((inner, env));
                     let new_env = env.extend_susp(arena, ident);
                     smallvec![Machine {
                         arena,
-                        comp: cont,
+                        cclos: (cont, new_env),
                         stack,
-                        env: new_env,
                         lenv,
                         senv,
                         done: false,
@@ -156,9 +150,8 @@ impl<'a> Machine<'a> {
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Thunk(t) => smallvec![Machine {
                             arena,
-                            comp: t,
+                            cclos: (t, cenv),
                             stack,
-                            env: cenv,
                             lenv,
                             senv,
                             done: false,
@@ -171,9 +164,8 @@ impl<'a> Machine<'a> {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
                         smallvec![Machine {
                             arena,
-                            comp: a.comp,
+                            cclos: a.cclos,
                             stack: new_stack,
-                            env: a.env,
                             lenv,
                             senv,
                             done: false,
@@ -188,9 +180,8 @@ impl<'a> Machine<'a> {
                         let new_env = env.extend_val(arena, val, sc.env);
                         smallvec![Machine {
                             arena,
-                            comp: body,
+                            cclos: (body, new_env),
                             stack: tail.clone(),
-                            env: new_env,
                             lenv,
                             senv,
                             done: false,
@@ -206,9 +197,8 @@ impl<'a> Machine<'a> {
                 let new_stack = stack.push(StkFrame::Value(arg), env);
                 smallvec![Machine {
                     arena,
-                    comp: op,
+                    cclos: (op, env),
                     stack: new_stack,
-                    env,
                     lenv,
                     senv,
                     done: false,
@@ -225,9 +215,8 @@ impl<'a> Machine<'a> {
                     if i < n - 1 {
                         result.push(Machine {
                             arena,
-                            comp: c,
+                            cclos: (c, env),
                             stack: stack.clone(),
-                            env,
                             lenv: lenv.clone(),
                             senv: senv.clone(),
                             done: false,
@@ -235,9 +224,8 @@ impl<'a> Machine<'a> {
                     } else {
                         result.push(Machine {
                             arena,
-                            comp: c,
+                            cclos: (c, env),
                             stack,
-                            env,
                             lenv,
                             senv,
                             done: false,
@@ -254,9 +242,8 @@ impl<'a> Machine<'a> {
                 let new_env = env.extend_lvar(arena, ident);
                 smallvec![Machine {
                     arena,
-                    comp: body,
+                    cclos: (body, new_env),
                     stack,
-                    env: new_env,
                     lenv,
                     senv,
                     done: false,
@@ -268,9 +255,8 @@ impl<'a> Machine<'a> {
                 match unify(lhs, rhs, env, &mut lenv, &senv) {
                     Ok(()) => smallvec![Machine {
                         arena,
-                        comp: body,
+                        cclos: (body, env),
                         stack,
-                        env,
                         lenv,
                         senv,
                         done: false,
@@ -279,9 +265,8 @@ impl<'a> Machine<'a> {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
                         smallvec![Machine {
                             arena,
-                            comp: a.comp,
+                            cclos: a.cclos,
                             stack: new_stack,
-                            env: a.env,
                             lenv,
                             senv,
                             done: false,
@@ -298,9 +283,8 @@ impl<'a> Machine<'a> {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
                         smallvec![Machine {
                             arena,
-                            comp: a.comp,
+                            cclos: a.cclos,
                             stack: new_stack,
-                            env: a.env,
                             lenv,
                             senv,
                             done: false,
@@ -309,9 +293,8 @@ impl<'a> Machine<'a> {
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Zero => smallvec![Machine {
                             arena,
-                            comp: zk,
+                            cclos: (zk, env),
                             stack,
-                            env,
                             lenv,
                             senv,
                             done: false,
@@ -320,9 +303,8 @@ impl<'a> Machine<'a> {
                             let new_env = env.extend_val(arena, v, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: sk,
+                                cclos: (sk, new_env),
                                 stack,
-                                env: new_env,
                                 lenv,
                                 senv,
                                 done: false,
@@ -344,9 +326,8 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                comp: zk,
+                                cclos: (zk, env),
                                 stack: stack.clone(),
-                                env,
                                 lenv,
                                 senv: senv.clone(),
                                 done: false,
@@ -366,9 +347,8 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                comp: sk,
+                                cclos: (sk, env.extend_lvar(arena, fresh)),
                                 stack,
-                                env: env.extend_lvar(arena, fresh),
                                 lenv,
                                 senv,
                                 done: false,
@@ -387,9 +367,8 @@ impl<'a> Machine<'a> {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
                         smallvec![Machine {
                             arena,
-                            comp: a.comp,
+                            cclos: a.cclos,
                             stack: new_stack,
-                            env: a.env,
                             lenv,
                             senv,
                             done: false,
@@ -398,9 +377,8 @@ impl<'a> Machine<'a> {
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Nil => smallvec![Machine {
                             arena,
-                            comp: nilk,
+                            cclos: (nilk, env),
                             stack,
-                            env,
                             lenv,
                             senv,
                             done: false,
@@ -411,9 +389,8 @@ impl<'a> Machine<'a> {
                                 .extend_val(arena, w, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: consk,
+                                cclos: (consk, new_env),
                                 stack,
-                                env: new_env,
                                 lenv,
                                 senv,
                                 done: false,
@@ -436,9 +413,8 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                comp: nilk,
+                                cclos: (nilk, env),
                                 stack: stack.clone(),
-                                env,
                                 lenv,
                                 senv: senv.clone(),
                                 done: false,
@@ -460,9 +436,8 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                comp: consk,
+                                cclos: (consk, env.extend_lvar(arena, head).extend_lvar(arena, tail)),
                                 stack,
-                                env: env.extend_lvar(arena, head).extend_lvar(arena, tail),
                                 lenv,
                                 senv,
                                 done: false,
@@ -481,9 +456,8 @@ impl<'a> Machine<'a> {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
                         smallvec![Machine {
                             arena,
-                            comp: a.comp,
+                            cclos: a.cclos,
                             stack: new_stack,
-                            env: a.env,
                             lenv,
                             senv,
                             done: false,
@@ -494,9 +468,8 @@ impl<'a> Machine<'a> {
                             let new_env = env.extend_val(arena, v, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: inlk,
+                                cclos: (inlk, new_env),
                                 stack,
-                                env: new_env,
                                 lenv,
                                 senv,
                                 done: false,
@@ -506,9 +479,8 @@ impl<'a> Machine<'a> {
                             let new_env = env.extend_val(arena, v, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: inrk,
+                                cclos: (inrk, new_env),
                                 stack,
-                                env: new_env,
                                 lenv,
                                 senv,
                                 done: false,
@@ -536,9 +508,8 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                comp: inlk,
+                                cclos: (inlk, env.extend_lvar(arena, fresh)),
                                 stack: stack.clone(),
-                                env: env.extend_lvar(arena, fresh),
                                 lenv,
                                 senv: senv.clone(),
                                 done: false,
@@ -558,9 +529,8 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                comp: inrk,
+                                cclos: (inrk, env.extend_lvar(arena, fresh)),
                                 stack,
-                                env: env.extend_lvar(arena, fresh),
                                 lenv,
                                 senv,
                                 done: false,
@@ -577,9 +547,8 @@ impl<'a> Machine<'a> {
                 let new_env = env.extend_val(arena, thunk_val, env);
                 smallvec![Machine {
                     arena,
-                    comp: body,
+                    cclos: (body, new_env),
                     stack,
-                    env: new_env,
                     lenv,
                     senv,
                     done: false,

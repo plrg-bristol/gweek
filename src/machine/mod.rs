@@ -16,3 +16,6 @@ pub(crate) use vclosure::VClosure;
 pub use eval::{eval, run, Strategy};
 
 pub type Ident = usize;
+
+/// A computation closure: a computation paired with its environment.
+pub type CClosure<'a> = (&'a mterms::MComputation<'a>, env::Env<'a>);
