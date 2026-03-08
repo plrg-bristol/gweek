@@ -58,7 +58,7 @@ fn eval_bfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     let mut solns = 0;
     while !machines.is_empty() {
         for m in machines.drain(..) {
-            for m in m.step() {
+            for m in m.run_to_branch() {
                 if m.done {
                     record_solution(&m, &mut solns, print);
                 } else {
@@ -75,7 +75,7 @@ fn eval_dfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     let mut stack = vec![fresh_machine(comp, env)];
     let mut solns = 0;
     while let Some(m) = stack.pop() {
-        for m in m.step().into_iter().rev() {
+        for m in m.run_to_branch().into_iter().rev() {
             if m.done {
                 record_solution(&m, &mut solns, print);
             } else {
@@ -98,7 +98,7 @@ fn eval_iddfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
                 cutoff = true;
                 continue;
             }
-            let results = m.step();
+            let results = m.run_to_branch();
             let is_branch = results.len() > 1;
             for m in results.into_iter().rev() {
                 if m.done {
@@ -141,7 +141,7 @@ fn eval_fair(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
                 break;
             }
             steps += 1;
-            for m in m.step().into_iter().rev() {
+            for m in m.run_to_branch().into_iter().rev() {
                 if m.done {
                     record_solution(&m, &mut solns, print);
                 } else {
