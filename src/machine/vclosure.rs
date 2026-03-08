@@ -8,13 +8,13 @@ use super::Ident;
 
 #[derive(Clone, Debug)]
 pub enum VClosure {
-    Clos { val: Rc<MValue>, env: Rc<Env> },
+    Clos { val: Rc<MValue>, env: Env },
     LogicVar { ident: Ident },
     Susp { ident: Ident },
 }
 
 impl VClosure {
-    pub fn mk_clos(val: &Rc<MValue>, env: &Rc<Env>) -> VClosure {
+    pub fn mk_clos(val: &Rc<MValue>, env: &Env) -> VClosure {
         VClosure::Clos {
             val: val.clone(),
             env: env.clone(),

@@ -21,7 +21,7 @@ enum StkFrame {
 #[derive(Clone, Debug)]
 pub(super) struct StkClosure {
     frame: StkFrame,
-    env: Rc<Env>,
+    env: Env,
 }
 
 #[derive(Clone, Debug)]
@@ -35,7 +35,7 @@ impl Stack {
         Rc::new(Stack::Nil)
     }
 
-    fn push(self: &Rc<Stack>, frame: StkFrame, env: Rc<Env>) -> Rc<Stack> {
+    fn push(self: &Rc<Stack>, frame: StkFrame, env: Env) -> Rc<Stack> {
         Stack::Cons(StkClosure { frame, env }, self.clone()).into()
     }
 }
@@ -44,7 +44,7 @@ impl Stack {
 pub struct Machine {
     pub comp: Rc<MComputation>,
     pub stack: Rc<Stack>,
-    pub env: Rc<Env>,
+    pub env: Env,
     pub lenv: LogicEnv,
     pub senv: SuspEnv,
     pub done: bool,

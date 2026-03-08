@@ -33,7 +33,7 @@ impl TEnv {
     }
 }
 
-pub fn translate(ast: Vec<Decl>) -> (MComputation, Rc<Env>) {
+pub fn translate(ast: Vec<Decl>) -> (MComputation, Env) {
     let ast = reorder_decls(ast);
 
     let mut env = Env::empty();

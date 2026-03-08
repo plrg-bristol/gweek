@@ -6,7 +6,7 @@ use super::{Ident, VClosure};
 
 use super::mterms::MValue;
 
-type CClosure = (Rc<MComputation>, Rc<Env>);
+type CClosure = (Rc<MComputation>, Env);
 
 #[derive(Clone)]
 pub struct SuspEnv {
@@ -18,7 +18,7 @@ pub struct SuspEnv {
 pub struct SuspAt {
     pub ident: Ident,
     pub comp: Rc<MComputation>,
-    pub env: Rc<Env>,
+    pub env: Env,
 }
 
 impl SuspEnv {
@@ -29,7 +29,7 @@ impl SuspEnv {
         }
     }
 
-    pub fn fresh(&mut self, comp: &Rc<MComputation>, env: &Rc<Env>) -> Ident {
+    pub fn fresh(&mut self, comp: &Rc<MComputation>, env: &Env) -> Ident {
         let entries = Rc::make_mut(&mut self.entries);
         let next = entries.len();
         entries.push(Err((comp.clone(), env.clone())));
@@ -47,7 +47,7 @@ impl SuspEnv {
         }
     }
 
-    pub fn set(&mut self, ident: &Ident, val: &Rc<MValue>, env: &Rc<Env>) {
+    pub fn set(&mut self, ident: &Ident, val: &Rc<MValue>, env: &Env) {
         Rc::make_mut(&mut self.entries)[*ident] = Ok(VClosure::mk_clos(val, env));
     }
 

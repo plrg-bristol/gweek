@@ -16,7 +16,7 @@ pub enum UnifyError {
 pub fn unify(
     lhs: &Rc<MValue>,
     rhs: &Rc<MValue>,
-    env: &Rc<Env>,
+    env: &Env,
     lenv: &mut LogicEnv,
     senv: &SuspEnv,
 ) -> Result<(), UnifyError> {

@@ -16,12 +16,12 @@ pub enum Strategy {
     Fair,
 }
 
-pub fn eval(comp: MComputation, env: Rc<Env>, strategy: Strategy) {
+pub fn eval(comp: MComputation, env: Env, strategy: Strategy) {
     let solns = run(comp, env, strategy, true);
     println!(">>> {} solutions", solns);
 }
 
-pub fn run(comp: MComputation, env: Rc<Env>, strategy: Strategy, print: bool) -> usize {
+pub fn run(comp: MComputation, env: Env, strategy: Strategy, print: bool) -> usize {
     match strategy {
         Strategy::Bfs => eval_bfs(comp, env, print),
         Strategy::Dfs => eval_dfs(comp, env, print),
@@ -30,7 +30,7 @@ pub fn run(comp: MComputation, env: Rc<Env>, strategy: Strategy, print: bool) ->
     }
 }
 
-fn fresh_machine(comp: MComputation, env: Rc<Env>) -> Machine {
+fn fresh_machine(comp: MComputation, env: Env) -> Machine {
     Machine {
         comp: comp.into(),
         env,
@@ -52,7 +52,7 @@ fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
     }
 }
 
-fn eval_bfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
+fn eval_bfs(comp: MComputation, env: Env, print: bool) -> usize {
     let mut machines = vec![fresh_machine(comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
@@ -71,7 +71,7 @@ fn eval_bfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     solns
 }
 
-fn eval_dfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
+fn eval_dfs(comp: MComputation, env: Env, print: bool) -> usize {
     let mut stack = vec![fresh_machine(comp, env)];
     let mut solns = 0;
     while let Some(m) = stack.pop() {
@@ -86,7 +86,7 @@ fn eval_dfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     solns
 }
 
-fn eval_iddfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
+fn eval_iddfs(comp: MComputation, env: Env, print: bool) -> usize {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
     let mut seen = HashSet::new();
@@ -126,7 +126,7 @@ fn eval_iddfs(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     solns
 }
 
-fn eval_fair(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
+fn eval_fair(comp: MComputation, env: Env, print: bool) -> usize {
     const QUOTA: usize = 10000;
     let mut queue = VecDeque::new();
     queue.push_back(fresh_machine(comp, env));
@@ -153,6 +153,6 @@ fn eval_fair(comp: MComputation, env: Rc<Env>, print: bool) -> usize {
     solns
 }
 
-fn output(val: Rc<MValue>, env: Rc<Env>, lenv: &LogicEnv, senv: &SuspEnv) -> Option<String> {
+fn output(val: Rc<MValue>, env: Env, lenv: &LogicEnv, senv: &SuspEnv) -> Option<String> {
     Some(VClosure::Clos { val, env }.close(lenv, senv)?.to_string())
 }
