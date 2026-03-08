@@ -1,3 +1,5 @@
+use bumpalo::Bump;
+
 use super::config::config;
 use super::env::Env;
 use super::lvar::LogicEnv;
@@ -12,6 +14,7 @@ pub enum UnifyError<'a> {
 }
 
 pub fn unify<'a>(
+    arena: &'a Bump,
     lhs: &'a MValue<'a>,
     rhs: &'a MValue<'a>,
     env: Env<'a>,
@@ -58,12 +61,50 @@ pub fn unify<'a>(
                 (MValue::Unit, MValue::Unit)
                 | (MValue::Zero, MValue::Zero)
                 | (MValue::Nil, MValue::Nil) => continue,
+
+                // Nat vs Nat
+                (MValue::Nat(a), MValue::Nat(b)) => {
+                    if a != b {
+                        return Err(UnifyError::Fail);
+                    }
+                }
+
+                // Nat vs Zero/Succ (mixed representations)
+                (MValue::Nat(0), MValue::Zero) | (MValue::Zero, MValue::Nat(0)) => continue,
+                (MValue::Nat(n), MValue::Zero) | (MValue::Zero, MValue::Nat(n)) if *n > 0 => {
+                    return Err(UnifyError::Fail);
+                }
+                (MValue::Nat(n), MValue::Succ(v)) if *n > 0 => {
+                    let pred = arena.alloc(MValue::Nat(n - 1));
+                    q.push((
+                        VClosure::mk_clos(pred, *lenv_r),
+                        VClosure::mk_clos(v, *renv_r),
+                    ));
+                }
+                (MValue::Succ(v), MValue::Nat(n)) if *n > 0 => {
+                    let pred = arena.alloc(MValue::Nat(n - 1));
+                    q.push((
+                        VClosure::mk_clos(v, *lenv_r),
+                        VClosure::mk_clos(pred, *renv_r),
+                    ));
+                }
+                (MValue::Nat(0), MValue::Succ(_)) | (MValue::Succ(_), MValue::Nat(0)) => {
+                    return Err(UnifyError::Fail);
+                }
+
                 (MValue::Succ(v), MValue::Succ(w)) => {
                     q.push((VClosure::mk_clos(v, *lenv_r), VClosure::mk_clos(w, *renv_r)));
                 }
                 (MValue::Cons(x, xs), MValue::Cons(y, ys)) => {
                     q.push((VClosure::mk_clos(x, *lenv_r), VClosure::mk_clos(y, *renv_r)));
                     q.push((VClosure::mk_clos(xs, *lenv_r), VClosure::mk_clos(ys, *renv_r)));
+                }
+                (MValue::Pair(a, b), MValue::Pair(c, d)) => {
+                    q.push((VClosure::mk_clos(a, *lenv_r), VClosure::mk_clos(c, *renv_r)));
+                    q.push((VClosure::mk_clos(b, *lenv_r), VClosure::mk_clos(d, *renv_r)));
+                }
+                (MValue::Inl(a), MValue::Inl(b)) | (MValue::Inr(a), MValue::Inr(b)) => {
+                    q.push((VClosure::mk_clos(a, *lenv_r), VClosure::mk_clos(b, *renv_r)));
                 }
                 (MValue::Thunk(_), _) | (_, MValue::Thunk(_)) => {
                     panic!("tried to unify a thunk")

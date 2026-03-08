@@ -41,7 +41,7 @@ impl<'a> VClosure<'a> {
                 }
                 MValue::Var(_) => unreachable!("value should be head-closed in occurs check"),
                 MValue::Thunk(_) => panic!("occurs check on a computation"),
-                MValue::Unit | MValue::Zero | MValue::Nil => Ok(false),
+                MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => Ok(false),
             },
             VClosure::LogicVar { ident: ident2 } => Ok(ident == ident2),
             VClosure::Susp { .. } => todo!("occurs check on suspension"),
@@ -71,10 +71,14 @@ impl<'a> VClosure<'a> {
             VClosure::Clos { val, env } => match val {
                 MValue::Var(i) => env.lookup(*i)?.close(arena, lenv, senv),
                 MValue::Unit => Some(arena.alloc(MValue::Unit)),
-                MValue::Zero => Some(arena.alloc(MValue::Zero)),
+                MValue::Nat(n) => Some(arena.alloc(MValue::Nat(*n))),
+                MValue::Zero => Some(arena.alloc(MValue::Nat(0))),
                 MValue::Succ(v) => {
                     let inner = VClosure::mk_clos(v, *env).close(arena, lenv, senv)?;
-                    Some(arena.alloc(MValue::Succ(inner)))
+                    match inner {
+                        MValue::Nat(n) => Some(arena.alloc(MValue::Nat(n + 1))),
+                        _ => Some(arena.alloc(MValue::Succ(inner))),
+                    }
                 }
                 MValue::Nil => Some(arena.alloc(MValue::Nil)),
                 MValue::Cons(v, w) => Some(arena.alloc(MValue::Cons(

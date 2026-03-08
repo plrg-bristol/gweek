@@ -275,7 +275,7 @@ impl<'a> Machine<'a> {
 
             MComputation::Equate { lhs, rhs, body } => {
                 let mut lenv = lenv;
-                match unify(lhs, rhs, env, &mut lenv, &senv) {
+                match unify(arena, lhs, rhs, env, &mut lenv, &senv) {
                     Ok(()) => Step::Continue(Machine {
                         arena,
                         cclos: (body, env),
@@ -314,7 +314,7 @@ impl<'a> Machine<'a> {
                         })
                     }
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
-                        MValue::Zero => Step::Continue(Machine {
+                        MValue::Zero | MValue::Nat(0) => Step::Continue(Machine {
                             arena,
                             cclos: (zk, env),
                             stack,
@@ -322,6 +322,18 @@ impl<'a> Machine<'a> {
                             senv,
                             done: false,
                         }),
+                        MValue::Nat(n) => {
+                            let pred = arena.alloc(MValue::Nat(n - 1));
+                            let new_env = env.extend_val(arena, pred, cenv);
+                            Step::Continue(Machine {
+                                arena,
+                                cclos: (sk, new_env),
+                                stack,
+                                lenv,
+                                senv,
+                                done: false,
+                            })
+                        }
                         MValue::Succ(v) => {
                             let new_env = env.extend_val(arena, v, cenv);
                             Step::Continue(Machine {
@@ -337,7 +349,7 @@ impl<'a> Machine<'a> {
                     },
                     Ok(VClosure::LogicVar { ident }) => {
                         let empty = Env::empty(arena);
-                        let zero_val = arena.alloc(MValue::Zero);
+                        let zero_val = arena.alloc(MValue::Nat(0));
                         let m_zero = {
                             let mut lenv = lenv.clone();
                             lenv.set_vclos(

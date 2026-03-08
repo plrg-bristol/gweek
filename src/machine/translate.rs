@@ -404,7 +404,7 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
 fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
     match expr {
         Expr::Zero => {
-            let zero = arena.alloc(MValue::Zero);
+            let zero = arena.alloc(MValue::Nat(0));
             arena.alloc(MComputation::Return(zero))
         }
         Expr::Succ(body) => {
@@ -500,10 +500,7 @@ fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a M
 }
 
 fn translate_nat<'a>(arena: &'a Bump, n: usize) -> &'a MComputation<'a> {
-    let mut val: &MValue = arena.alloc(MValue::Zero);
-    for _ in 0..n {
-        val = arena.alloc(MValue::Succ(val));
-    }
+    let val = arena.alloc(MValue::Nat(n as u64));
     arena.alloc(MComputation::Return(val))
 }
 

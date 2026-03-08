@@ -8,6 +8,7 @@ use crate::machine::value_type::ValueType;
 pub enum MValue<'a> {
     Var(usize),
     Unit,
+    Nat(u64),
     Zero,
     Succ(&'a MValue<'a>),
     Pair(&'a MValue<'a>, &'a MValue<'a>),
@@ -23,6 +24,7 @@ impl<'a> Display for MValue<'a> {
         match self {
             MValue::Var(i) => write!(f, "idx {}", i),
             MValue::Unit => write!(f, "()"),
+            MValue::Nat(n) => write!(f, "{}", n),
             MValue::Zero | MValue::Succ(_) => write!(f, "{}", to_nat(self).unwrap()),
             MValue::Nil | MValue::Cons(..) => match to_list(self) {
                 Some(items) => write!(f, "[{}]", items.join(", ")),
@@ -46,11 +48,12 @@ impl<'a> Display for MValue<'a> {
     }
 }
 
-fn to_nat(v: &MValue) -> Option<usize> {
-    let mut n = 0;
+fn to_nat(v: &MValue) -> Option<u64> {
+    let mut n: u64 = 0;
     let mut cur = v;
     loop {
         match cur {
+            MValue::Nat(k) => return Some(n + k),
             MValue::Zero => return Some(n),
             MValue::Succ(v) => {
                 n += 1;
@@ -159,7 +162,7 @@ impl<'a> MComputation<'a> {
 impl<'a> MValue<'a> {
     pub fn count_nodes(&self) -> usize {
         match self {
-            MValue::Var(_) | MValue::Unit | MValue::Zero | MValue::Nil => 1,
+            MValue::Var(_) | MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => 1,
             MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => 1 + v.count_nodes(),
             MValue::Pair(a, b) | MValue::Cons(a, b) => 1 + a.count_nodes() + b.count_nodes(),
             MValue::Thunk(c) => 1 + c.count_nodes(),
