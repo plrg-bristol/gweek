@@ -1,24 +1,21 @@
-use std::rc::Rc;
+use bumpalo::Bump;
 
 use super::env::Env;
 use super::lvar::LogicEnv;
-use super::mterms::{MComputation, MValue};
+use super::mterms::MValue;
 use super::senv::{SuspAt, SuspEnv};
 use super::Ident;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum VClosure<'a> {
-    Clos { val: Rc<MValue>, env: Env<'a> },
+    Clos { val: &'a MValue<'a>, env: Env<'a> },
     LogicVar { ident: Ident },
     Susp { ident: Ident },
 }
 
 impl<'a> VClosure<'a> {
-    pub fn mk_clos(val: &Rc<MValue>, env: Env<'a>) -> VClosure<'a> {
-        VClosure::Clos {
-            val: val.clone(),
-            env,
-        }
+    pub fn mk_clos(val: &'a MValue<'a>, env: Env<'a>) -> VClosure<'a> {
+        VClosure::Clos { val, env }
     }
 
     pub fn occurs_lvar(
@@ -27,8 +24,8 @@ impl<'a> VClosure<'a> {
         senv: &SuspEnv<'a>,
         ident: Ident,
     ) -> Result<bool, SuspAt<'a>> {
-        match self.clone().close_head(lenv, senv)? {
-            VClosure::Clos { val, env } => match &*val {
+        match self.close_head(lenv, senv)? {
+            VClosure::Clos { val, env } => match val {
                 MValue::Succ(v) => VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident),
                 MValue::Cons(v, w) => Ok(
                     VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident)?
@@ -47,7 +44,7 @@ impl<'a> VClosure<'a> {
         let mut vclos = self;
         loop {
             vclos = match &vclos {
-                VClosure::Clos { val, env } => match &**val {
+                VClosure::Clos { val, env } => match val {
                     MValue::Var(i) => env.lookup(*i).expect("index undefined in env"),
                     _ => break,
                 },
@@ -61,36 +58,39 @@ impl<'a> VClosure<'a> {
         Ok(vclos)
     }
 
-    pub fn close(&self, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Option<MValue> {
+    pub fn close(&self, arena: &'a Bump, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Option<&'a MValue<'a>> {
         match self {
-            VClosure::Clos { val, env } => match &**val {
-                MValue::Var(i) => env.lookup(*i)?.close(lenv, senv),
-                MValue::Zero => Some(MValue::Zero),
+            VClosure::Clos { val, env } => match val {
+                MValue::Var(i) => env.lookup(*i)?.close(arena, lenv, senv),
+                MValue::Zero => Some(arena.alloc(MValue::Zero)),
                 MValue::Succ(v) => {
-                    Some(MValue::Succ(VClosure::mk_clos(v, *env).close(lenv, senv)?.into()))
+                    let inner = VClosure::mk_clos(v, *env).close(arena, lenv, senv)?;
+                    Some(arena.alloc(MValue::Succ(inner)))
                 }
-                MValue::Nil => Some(MValue::Nil),
-                MValue::Cons(v, w) => Some(MValue::Cons(
-                    VClosure::mk_clos(v, *env).close(lenv, senv)?.into(),
-                    VClosure::mk_clos(w, *env).close(lenv, senv)?.into(),
-                )),
-                MValue::Pair(fst, snd) => Some(MValue::Pair(
-                    VClosure::mk_clos(fst, *env).close(lenv, senv)?.into(),
-                    VClosure::mk_clos(snd, *env).close(lenv, senv)?.into(),
-                )),
+                MValue::Nil => Some(arena.alloc(MValue::Nil)),
+                MValue::Cons(v, w) => Some(arena.alloc(MValue::Cons(
+                    VClosure::mk_clos(v, *env).close(arena, lenv, senv)?,
+                    VClosure::mk_clos(w, *env).close(arena, lenv, senv)?,
+                ))),
+                MValue::Pair(fst, snd) => Some(arena.alloc(MValue::Pair(
+                    VClosure::mk_clos(fst, *env).close(arena, lenv, senv)?,
+                    VClosure::mk_clos(snd, *env).close(arena, lenv, senv)?,
+                ))),
                 MValue::Inl(v) => {
-                    Some(MValue::Inl(VClosure::mk_clos(v, *env).close(lenv, senv)?.into()))
+                    let inner = VClosure::mk_clos(v, *env).close(arena, lenv, senv)?;
+                    Some(arena.alloc(MValue::Inl(inner)))
                 }
                 MValue::Inr(v) => {
-                    Some(MValue::Inr(VClosure::mk_clos(v, *env).close(lenv, senv)?.into()))
+                    let inner = VClosure::mk_clos(v, *env).close(arena, lenv, senv)?;
+                    Some(arena.alloc(MValue::Inr(inner)))
                 }
                 MValue::Thunk(t) => panic!("tried to close thunk: {}", t),
             },
-            VClosure::LogicVar { ident } => lenv.lookup(*ident)?.close(lenv, senv),
+            VClosure::LogicVar { ident } => lenv.lookup(*ident)?.close(arena, lenv, senv),
             VClosure::Susp { ident } => senv
                 .lookup(ident)
                 .expect("unexpected suspension")
-                .close(lenv, senv),
+                .close(arena, lenv, senv),
         }
     }
 }

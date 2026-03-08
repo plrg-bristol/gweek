@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
+
+use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
 use crate::parser::{arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, stm::Stm, r#type::Type};
@@ -32,7 +33,7 @@ impl TEnv {
     }
 }
 
-pub fn translate(ast: Vec<Decl>) -> (MComputation, Vec<Rc<MValue>>) {
+pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
     let ast = reorder_decls(ast);
 
     let mut env = Vec::new();
@@ -43,12 +44,12 @@ pub fn translate(ast: Vec<Decl>) -> (MComputation, Vec<Rc<MValue>>) {
         match decl {
             Decl::FuncType { .. } => (),
             Decl::Func { name, args, body } => {
-                let result: Rc<MValue> = translate_func(&name, args, body, &mut tenv).into();
+                let result = translate_func(arena, &name, args, body, &mut tenv);
                 tenv.bind(&name);
                 env.push(result);
             }
             Decl::Stm(stm) => {
-                main = Some(translate_stm(stm, &mut tenv));
+                main = Some(translate_stm(arena, stm, &mut tenv));
             }
         }
     }
@@ -244,7 +245,7 @@ fn walk_bexpr(bexpr: &BExpr, names: &HashSet<String>, refs: &mut HashSet<String>
 
 // --- Translation ---
 
-fn translate_func(name: &str, args: Vec<Arg>, body: Stm, tenv: &mut TEnv) -> MValue {
+fn translate_func<'a>(arena: &'a Bump, name: &str, args: Vec<Arg>, body: Stm, tenv: &mut TEnv) -> &'a MValue<'a> {
     tenv.bind(name);
 
     let mut vars: Vec<String> = args
@@ -258,23 +259,25 @@ fn translate_func(name: &str, args: Vec<Arg>, body: Stm, tenv: &mut TEnv) -> MVa
     for v in &vars {
         tenv.bind(v);
     }
-    let mbody = translate_stm(body, tenv);
+    let mbody = translate_stm(arena, body, tenv);
     for _ in &vars {
         tenv.unbind();
     }
     tenv.unbind();
 
     if vars.is_empty() {
-        MValue::Thunk(MComputation::Rec { body: mbody.into() }.into())
+        let rec = arena.alloc(MComputation::Rec { body: mbody });
+        arena.alloc(MValue::Thunk(rec))
     } else {
-        let mut c: MComputation = MComputation::Lambda { body: mbody.into() };
+        let mut c: &MComputation = arena.alloc(MComputation::Lambda { body: mbody });
         while vars.len() > 1 {
-            c = MComputation::Lambda {
-                body: MComputation::Return(MValue::Thunk(c.into()).into()).into(),
-            };
+            let thunk = arena.alloc(MValue::Thunk(c));
+            let ret = arena.alloc(MComputation::Return(thunk));
+            c = arena.alloc(MComputation::Lambda { body: ret });
             vars.pop();
         }
-        MValue::Thunk(MComputation::Rec { body: c.into() }.into())
+        let rec = arena.alloc(MComputation::Rec { body: c });
+        arena.alloc(MValue::Thunk(rec))
     }
 }
 
@@ -291,213 +294,204 @@ fn translate_vtype(ptype: Type) -> ValueType {
     }
 }
 
-fn translate_stm(stm: Stm, tenv: &mut TEnv) -> MComputation {
+fn translate_stm<'a>(arena: &'a Bump, stm: Stm, tenv: &mut TEnv) -> &'a MComputation<'a> {
     match stm {
-        Stm::If { cond, .. } => MComputation::Bind {
-            comp: translate_stm(*cond, tenv).into(),
-            cont: todo!("need sums to complete this"),
-        },
+        Stm::If { cond, .. } => {
+            let comp = translate_stm(arena, *cond, tenv);
+            arena.alloc(MComputation::Bind {
+                comp,
+                cont: todo!("need sums to complete this"),
+            })
+        }
         Stm::Let { var, val, body } => {
-            let comp = translate_stm(*val, tenv).into();
+            let comp = translate_stm(arena, *val, tenv);
             tenv.bind(&var);
-            let cont = translate_stm(*body, tenv).into();
+            let cont = translate_stm(arena, *body, tenv);
             tenv.unbind();
-            MComputation::Bind { comp, cont }
+            arena.alloc(MComputation::Bind { comp, cont })
         }
         Stm::Exists { var, r#type, body } => {
             tenv.bind(&var);
-            let body = translate_stm(*body, tenv).into();
+            let body = translate_stm(arena, *body, tenv);
             tenv.unbind();
-            MComputation::Exists {
+            arena.alloc(MComputation::Exists {
                 ptype: translate_vtype(r#type),
                 body,
-            }
+            })
         }
         Stm::Equate { lhs, rhs, body } => {
-            let lhs_comp = translate_expr(lhs, tenv).into();
+            let lhs_comp = translate_expr(arena, lhs, tenv);
             tenv.bind("_");
-            let rhs_comp = translate_expr(rhs, tenv).into();
+            let rhs_comp = translate_expr(arena, rhs, tenv);
             tenv.bind("_");
-            let body_comp = translate_stm(*body, tenv).into();
+            let body_comp = translate_stm(arena, *body, tenv);
             tenv.unbind();
             tenv.unbind();
-            MComputation::Bind {
+            let var0 = arena.alloc(MValue::Var(0));
+            let var1 = arena.alloc(MValue::Var(1));
+            let equate = arena.alloc(MComputation::Equate {
+                lhs: var0,
+                rhs: var1,
+                body: body_comp,
+            });
+            let inner_bind = arena.alloc(MComputation::Bind {
+                comp: rhs_comp,
+                cont: equate,
+            });
+            arena.alloc(MComputation::Bind {
                 comp: lhs_comp,
-                cont: MComputation::Bind {
-                    comp: rhs_comp,
-                    cont: MComputation::Equate {
-                        lhs: MValue::Var(0).into(),
-                        rhs: MValue::Var(1).into(),
-                        body: body_comp,
-                    }
-                    .into(),
-                }
-                .into(),
-            }
+                cont: inner_bind,
+            })
         }
-        Stm::Fail => MComputation::Choice(vec![]),
-        Stm::Choice(exprs) => MComputation::Choice(
-            exprs
+        Stm::Fail => arena.alloc(MComputation::Choice(&[])),
+        Stm::Choice(exprs) => {
+            let choices: Vec<_> = exprs
                 .into_iter()
-                .map(|e| translate_expr(e, tenv).into())
-                .collect(),
-        ),
+                .map(|e| translate_expr(arena, e, tenv))
+                .collect();
+            let slice = arena.alloc_slice_copy(&choices);
+            arena.alloc(MComputation::Choice(slice))
+        }
         Stm::Case { expr, cases } => {
             tenv.bind("_");
+            let var0 = arena.alloc(MValue::Var(0));
             let cont = match cases.r#type.unwrap() {
                 CasesType::Nat => {
                     let nat_case = cases.nat_case.unwrap();
-                    let zk = translate_stm(*nat_case.zk.unwrap(), tenv).into();
+                    let zk = translate_stm(arena, *nat_case.zk.unwrap(), tenv);
                     let succ_case = nat_case.sk.unwrap();
                     tenv.bind(&succ_case.var);
-                    let sk = translate_stm(*succ_case.body, tenv).into();
+                    let sk = translate_stm(arena, *succ_case.body, tenv);
                     tenv.unbind();
-                    MComputation::Ifz {
-                        num: MValue::Var(0).into(),
-                        zk,
-                        sk,
-                    }
+                    arena.alloc(MComputation::Ifz { num: var0, zk, sk })
                 }
                 CasesType::List => {
                     let list_case = cases.list_case.unwrap();
-                    let nilk = translate_stm(*list_case.nilk.unwrap(), tenv).into();
+                    let nilk = translate_stm(arena, *list_case.nilk.unwrap(), tenv);
                     let cons_case = list_case.consk.unwrap();
                     tenv.bind(&cons_case.x);
                     tenv.bind(&cons_case.xs);
-                    let consk = translate_stm(*cons_case.body, tenv).into();
+                    let consk = translate_stm(arena, *cons_case.body, tenv);
                     tenv.unbind();
                     tenv.unbind();
-                    MComputation::Match {
-                        list: MValue::Var(0).into(),
-                        nilk,
-                        consk,
-                    }
+                    arena.alloc(MComputation::Match { list: var0, nilk, consk })
                 }
-            }
-            .into();
+            };
             tenv.unbind();
-            MComputation::Bind {
-                comp: translate_expr(expr, tenv).into(),
-                cont,
-            }
+            let comp = translate_expr(arena, expr, tenv);
+            arena.alloc(MComputation::Bind { comp, cont })
         }
-        Stm::Expr(e) => translate_expr(e, tenv),
+        Stm::Expr(e) => translate_expr(arena, e, tenv),
     }
 }
 
-fn translate_expr(expr: Expr, tenv: &mut TEnv) -> MComputation {
+fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
     match expr {
-        Expr::Zero => MComputation::Return(MValue::Zero.into()),
-        Expr::Succ(body) => MComputation::Bind {
-            comp: translate_expr(*body, tenv).into(),
-            cont: MComputation::Return(MValue::Succ(MValue::Var(0).into()).into()).into(),
-        },
-        Expr::Nil => MComputation::Return(MValue::Nil.into()),
+        Expr::Zero => {
+            let zero = arena.alloc(MValue::Zero);
+            arena.alloc(MComputation::Return(zero))
+        }
+        Expr::Succ(body) => {
+            let comp = translate_expr(arena, *body, tenv);
+            let var0 = arena.alloc(MValue::Var(0));
+            let succ = arena.alloc(MValue::Succ(var0));
+            let ret = arena.alloc(MComputation::Return(succ));
+            arena.alloc(MComputation::Bind { comp, cont: ret })
+        }
+        Expr::Nil => {
+            let nil = arena.alloc(MValue::Nil);
+            arena.alloc(MComputation::Return(nil))
+        }
         Expr::Cons(x, xs) => {
-            let comp_head = translate_expr(*x, tenv).into();
+            let comp_head = translate_expr(arena, *x, tenv);
             tenv.bind("_");
-            let comp_tail = translate_expr(*xs, tenv).into();
+            let comp_tail = translate_expr(arena, *xs, tenv);
             tenv.unbind();
-            MComputation::Bind {
-                comp: comp_head,
-                cont: MComputation::Bind {
-                    comp: comp_tail,
-                    cont: MComputation::Return(
-                        MValue::Cons(MValue::Var(1).into(), MValue::Var(0).into()).into(),
-                    )
-                    .into(),
-                }
-                .into(),
-            }
+            let var1 = arena.alloc(MValue::Var(1));
+            let var0 = arena.alloc(MValue::Var(0));
+            let cons = arena.alloc(MValue::Cons(var1, var0));
+            let ret = arena.alloc(MComputation::Return(cons));
+            let inner = arena.alloc(MComputation::Bind { comp: comp_tail, cont: ret });
+            arena.alloc(MComputation::Bind { comp: comp_head, cont: inner })
         }
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
                 tenv.bind(&var);
-                let body = translate_stm(*body, tenv);
+                let body = translate_stm(arena, *body, tenv);
                 tenv.unbind();
-                MComputation::Return(
-                    MValue::Thunk(MComputation::Lambda { body: body.into() }.into()).into(),
-                )
+                let lam = arena.alloc(MComputation::Lambda { body });
+                let thunk = arena.alloc(MValue::Thunk(lam));
+                arena.alloc(MComputation::Return(thunk))
             }
             Arg::Pair(..) => todo!(),
         },
         Expr::App(op, arg) => {
-            let comp_op = translate_expr(*op, tenv).into();
+            let comp_op = translate_expr(arena, *op, tenv);
             tenv.bind("_");
-            let comp_arg = translate_expr(*arg, tenv).into();
+            let comp_arg = translate_expr(arena, *arg, tenv);
             tenv.unbind();
-            MComputation::Bind {
-                comp: comp_op,
-                cont: MComputation::Bind {
-                    comp: comp_arg,
-                    cont: MComputation::App {
-                        op: MComputation::Force(MValue::Var(1).into()).into(),
-                        arg: MValue::Var(0).into(),
-                    }
-                    .into(),
-                }
-                .into(),
-            }
+            let var1 = arena.alloc(MValue::Var(1));
+            let var0 = arena.alloc(MValue::Var(0));
+            let force = arena.alloc(MComputation::Force(var1));
+            let app = arena.alloc(MComputation::App { op: force, arg: var0 });
+            let inner = arena.alloc(MComputation::Bind { comp: comp_arg, cont: app });
+            arena.alloc(MComputation::Bind { comp: comp_op, cont: inner })
         }
-        Expr::BExpr(bexpr) => translate_bexpr(bexpr, tenv),
-        Expr::List(elems) => translate_list(&elems, tenv),
-        Expr::Ident(s) => MComputation::Return(MValue::Var(tenv.find(&s)).into()),
-        Expr::Nat(n) => translate_nat(n),
+        Expr::BExpr(bexpr) => translate_bexpr(arena, bexpr, tenv),
+        Expr::List(elems) => translate_list(arena, &elems, tenv),
+        Expr::Ident(s) => {
+            let var = arena.alloc(MValue::Var(tenv.find(&s)));
+            arena.alloc(MComputation::Return(var))
+        }
+        Expr::Nat(n) => translate_nat(arena, n),
         Expr::Bool(_) => todo!("no bools yet"),
-        Expr::Pair(lhs, rhs) => translate_pair(*lhs, *rhs, tenv),
-        Expr::Stm(s) => translate_stm(*s, tenv),
+        Expr::Pair(lhs, rhs) => translate_pair(arena, *lhs, *rhs, tenv),
+        Expr::Stm(s) => translate_stm(arena, *s, tenv),
     }
 }
 
-fn translate_bexpr(_bexpr: BExpr, _tenv: &TEnv) -> MComputation {
+fn translate_bexpr<'a>(_arena: &'a Bump, _bexpr: BExpr, _tenv: &TEnv) -> &'a MComputation<'a> {
     todo!("boolean expressions not yet implemented")
 }
 
-fn translate_list(elems: &[Expr], tenv: &mut TEnv) -> MComputation {
+fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a MComputation<'a> {
     match elems {
-        [] => MComputation::Return(MValue::Nil.into()),
+        [] => {
+            let nil = arena.alloc(MValue::Nil);
+            arena.alloc(MComputation::Return(nil))
+        }
         [head, tail @ ..] => {
-            let chead = translate_expr(head.clone(), tenv);
+            let chead = translate_expr(arena, head.clone(), tenv);
             tenv.bind("_");
-            let ctail = translate_list(tail, tenv);
+            let ctail = translate_list(arena, tail, tenv);
             tenv.unbind();
-            MComputation::Bind {
-                comp: chead.into(),
-                cont: MComputation::Bind {
-                    comp: ctail.into(),
-                    cont: MComputation::Return(
-                        MValue::Cons(MValue::Var(1).into(), MValue::Var(0).into()).into(),
-                    )
-                    .into(),
-                }
-                .into(),
-            }
+            let var1 = arena.alloc(MValue::Var(1));
+            let var0 = arena.alloc(MValue::Var(0));
+            let cons = arena.alloc(MValue::Cons(var1, var0));
+            let ret = arena.alloc(MComputation::Return(cons));
+            let inner = arena.alloc(MComputation::Bind { comp: ctail, cont: ret });
+            arena.alloc(MComputation::Bind { comp: chead, cont: inner })
         }
     }
 }
 
-fn translate_nat(n: usize) -> MComputation {
-    let mut val: Rc<MValue> = MValue::Zero.into();
+fn translate_nat<'a>(arena: &'a Bump, n: usize) -> &'a MComputation<'a> {
+    let mut val: &MValue = arena.alloc(MValue::Zero);
     for _ in 0..n {
-        val = MValue::Succ(val).into();
+        val = arena.alloc(MValue::Succ(val));
     }
-    MComputation::Return(val)
+    arena.alloc(MComputation::Return(val))
 }
 
-fn translate_pair(fst: Expr, snd: Expr, tenv: &mut TEnv) -> MComputation {
-    let fst_comp = translate_expr(fst, tenv).into();
+fn translate_pair<'a>(arena: &'a Bump, fst: Expr, snd: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+    let fst_comp = translate_expr(arena, fst, tenv);
     tenv.bind("_");
-    let snd_comp = translate_expr(snd, tenv).into();
+    let snd_comp = translate_expr(arena, snd, tenv);
     tenv.unbind();
-    MComputation::Bind {
-        comp: fst_comp,
-        cont: MComputation::Bind {
-            comp: snd_comp,
-            cont: MComputation::Return(
-                MValue::Pair(MValue::Var(1).into(), MValue::Var(0).into()).into(),
-            )
-            .into(),
-        }
-        .into(),
-    }
+    let var1 = arena.alloc(MValue::Var(1));
+    let var0 = arena.alloc(MValue::Var(0));
+    let pair = arena.alloc(MValue::Pair(var1, var0));
+    let ret = arena.alloc(MComputation::Return(pair));
+    let inner = arena.alloc(MComputation::Bind { comp: snd_comp, cont: ret });
+    arena.alloc(MComputation::Bind { comp: fst_comp, cont: inner })
 }

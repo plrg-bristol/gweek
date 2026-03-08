@@ -6,7 +6,7 @@ use super::{Ident, VClosure};
 
 use super::mterms::MValue;
 
-type CClosure<'a> = (Rc<MComputation>, Env<'a>);
+type CClosure<'a> = (&'a MComputation<'a>, Env<'a>);
 
 #[derive(Clone)]
 pub struct SuspEnv<'a> {
@@ -14,10 +14,10 @@ pub struct SuspEnv<'a> {
     next_pending: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct SuspAt<'a> {
     pub ident: Ident,
-    pub comp: Rc<MComputation>,
+    pub comp: &'a MComputation<'a>,
     pub env: Env<'a>,
 }
 
@@ -29,25 +29,25 @@ impl<'a> SuspEnv<'a> {
         }
     }
 
-    pub fn fresh(&mut self, comp: &Rc<MComputation>, env: Env<'a>) -> Ident {
+    pub fn fresh(&mut self, comp: &'a MComputation<'a>, env: Env<'a>) -> Ident {
         let entries = Rc::make_mut(&mut self.entries);
         let next = entries.len();
-        entries.push(Err((comp.clone(), env)));
+        entries.push(Err((comp, env)));
         next
     }
 
     pub fn lookup(&self, ident: &Ident) -> Result<VClosure<'a>, SuspAt<'a>> {
         match &self.entries[*ident] {
-            Ok(vclos) => Ok(vclos.clone()),
+            Ok(vclos) => Ok(*vclos),
             Err((comp, env)) => Err(SuspAt {
                 ident: *ident,
-                comp: comp.clone(),
+                comp,
                 env: *env,
             }),
         }
     }
 
-    pub fn set(&mut self, ident: &Ident, val: &Rc<MValue>, env: Env<'a>) {
+    pub fn set(&mut self, ident: &Ident, val: &'a MValue<'a>, env: Env<'a>) {
         Rc::make_mut(&mut self.entries)[*ident] = Ok(VClosure::mk_clos(val, env));
     }
 
@@ -58,7 +58,7 @@ impl<'a> SuspEnv<'a> {
                 Err((comp, env)) => {
                     return Some(SuspAt {
                         ident: self.next_pending,
-                        comp: comp.clone(),
+                        comp,
                         env: *env,
                     })
                 }

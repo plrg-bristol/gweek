@@ -12,16 +12,16 @@ use super::{Env, VClosure};
 
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
-#[derive(Clone, Debug)]
-enum StkFrame {
-    Value(Rc<MValue>),
-    To(Rc<MComputation>),
-    Set(usize, Rc<MComputation>),
+#[derive(Clone, Copy, Debug)]
+enum StkFrame<'a> {
+    Value(&'a MValue<'a>),
+    To(&'a MComputation<'a>),
+    Set(usize, &'a MComputation<'a>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct StkClosure<'a> {
-    frame: StkFrame,
+    frame: StkFrame<'a>,
     env: Env<'a>,
 }
 
@@ -36,7 +36,7 @@ impl<'a> Stack<'a> {
         Rc::new(Stack::Nil)
     }
 
-    fn push(self: &Rc<Stack<'a>>, frame: StkFrame, env: Env<'a>) -> Rc<Stack<'a>> {
+    fn push(self: &Rc<Stack<'a>>, frame: StkFrame<'a>, env: Env<'a>) -> Rc<Stack<'a>> {
         Stack::Cons(StkClosure { frame, env }, self.clone()).into()
     }
 }
@@ -44,21 +44,12 @@ impl<'a> Stack<'a> {
 #[derive(Clone)]
 pub struct Machine<'a> {
     pub arena: &'a Bump,
-    pub comp: Rc<MComputation>,
+    pub comp: &'a MComputation<'a>,
     pub stack: Rc<Stack<'a>>,
     pub env: Env<'a>,
     pub lenv: LogicEnv<'a>,
     pub senv: SuspEnv<'a>,
     pub done: bool,
-}
-
-fn eval_susp_then<'a>(a: SuspAt<'a>, m: Machine<'a>) -> Machine<'a> {
-    Machine {
-        comp: a.comp,
-        env: a.env,
-        stack: m.stack.push(StkFrame::Set(a.ident, m.comp), m.env),
-        ..m
-    }
 }
 
 impl<'a> Machine<'a> {
@@ -80,7 +71,7 @@ impl<'a> Machine<'a> {
     pub fn step(self) -> StepResult<'a> {
         let Machine { arena, comp, stack, env, lenv, senv, done: _ } = self;
 
-        match &*comp {
+        match comp {
             MComputation::Return(val) => match &*stack {
                 Stack::Nil => {
                     let mut senv = senv;
@@ -103,10 +94,10 @@ impl<'a> Machine<'a> {
                 Stack::Cons(sc, tail) => match &sc.frame {
                     StkFrame::Value(_) => unreachable!("return throws value to a value"),
                     StkFrame::To(cont) => {
-                        let new_env = sc.env.extend_val(arena, val.clone(), env);
+                        let new_env = sc.env.extend_val(arena, val, env);
                         smallvec![Machine {
                             arena,
-                            comp: cont.clone(),
+                            comp: cont,
                             stack: tail.clone(),
                             env: new_env,
                             lenv,
@@ -119,7 +110,7 @@ impl<'a> Machine<'a> {
                         senv.set(ident, val, env);
                         smallvec![Machine {
                             arena,
-                            comp: cont.clone(),
+                            comp: cont,
                             stack: tail.clone(),
                             env: sc.env,
                             lenv,
@@ -130,12 +121,12 @@ impl<'a> Machine<'a> {
                 },
             },
 
-            MComputation::Bind { comp: inner, cont } => match &**inner {
+            MComputation::Bind { comp: inner, cont } => match inner {
                 MComputation::Return(v) => {
-                    let new_env = env.extend_val(arena, v.clone(), env);
+                    let new_env = env.extend_val(arena, v, env);
                     smallvec![Machine {
                         arena,
-                        comp: cont.clone(),
+                        comp: cont,
                         stack,
                         env: new_env,
                         lenv,
@@ -149,7 +140,7 @@ impl<'a> Machine<'a> {
                     let new_env = env.extend_susp(arena, ident);
                     smallvec![Machine {
                         arena,
-                        comp: cont.clone(),
+                        comp: cont,
                         stack,
                         env: new_env,
                         lenv,
@@ -160,15 +151,12 @@ impl<'a> Machine<'a> {
             },
 
             MComputation::Force(v) => {
-                let vclos = VClosure::Clos {
-                    val: v.clone(),
-                    env,
-                };
+                let vclos = VClosure::Clos { val: v, env };
                 match vclos.close_head(&lenv, &senv) {
-                    Ok(VClosure::Clos { val, env: cenv }) => match &*val {
+                    Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Thunk(t) => smallvec![Machine {
                             arena,
-                            comp: t.clone(),
+                            comp: t,
                             stack,
                             env: cenv,
                             lenv,
@@ -197,10 +185,10 @@ impl<'a> Machine<'a> {
             MComputation::Lambda { body } => match &*stack {
                 Stack::Cons(sc, tail) => {
                     if let StkFrame::Value(val) = &sc.frame {
-                        let new_env = env.extend_val(arena, val.clone(), sc.env);
+                        let new_env = env.extend_val(arena, val, sc.env);
                         smallvec![Machine {
                             arena,
-                            comp: body.clone(),
+                            comp: body,
                             stack: tail.clone(),
                             env: new_env,
                             lenv,
@@ -215,10 +203,10 @@ impl<'a> Machine<'a> {
             },
 
             MComputation::App { op, arg } => {
-                let new_stack = stack.push(StkFrame::Value(arg.clone()), env);
+                let new_stack = stack.push(StkFrame::Value(arg), env);
                 smallvec![Machine {
                     arena,
-                    comp: op.clone(),
+                    comp: op,
                     stack: new_stack,
                     env,
                     lenv,
@@ -237,7 +225,7 @@ impl<'a> Machine<'a> {
                     if i < n - 1 {
                         result.push(Machine {
                             arena,
-                            comp: c.clone(),
+                            comp: c,
                             stack: stack.clone(),
                             env,
                             lenv: lenv.clone(),
@@ -247,7 +235,7 @@ impl<'a> Machine<'a> {
                     } else {
                         result.push(Machine {
                             arena,
-                            comp: c.clone(),
+                            comp: c,
                             stack,
                             env,
                             lenv,
@@ -266,7 +254,7 @@ impl<'a> Machine<'a> {
                 let new_env = env.extend_lvar(arena, ident);
                 smallvec![Machine {
                     arena,
-                    comp: body.clone(),
+                    comp: body,
                     stack,
                     env: new_env,
                     lenv,
@@ -280,7 +268,7 @@ impl<'a> Machine<'a> {
                 match unify(lhs, rhs, env, &mut lenv, &senv) {
                     Ok(()) => smallvec![Machine {
                         arena,
-                        comp: body.clone(),
+                        comp: body,
                         stack,
                         env,
                         lenv,
@@ -318,10 +306,10 @@ impl<'a> Machine<'a> {
                             done: false,
                         }]
                     }
-                    Ok(VClosure::Clos { val, env: cenv }) => match &*val {
+                    Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Zero => smallvec![Machine {
                             arena,
-                            comp: zk.clone(),
+                            comp: zk,
                             stack,
                             env,
                             lenv,
@@ -329,10 +317,10 @@ impl<'a> Machine<'a> {
                             done: false,
                         }],
                         MValue::Succ(v) => {
-                            let new_env = env.extend_val(arena, v.clone(), cenv);
+                            let new_env = env.extend_val(arena, v, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: sk.clone(),
+                                comp: sk,
                                 stack,
                                 env: new_env,
                                 lenv,
@@ -340,22 +328,23 @@ impl<'a> Machine<'a> {
                                 done: false,
                             }]
                         }
-                        _ => panic!("Ifz on {}", &*val),
+                        _ => panic!("Ifz on {}", val),
                     },
                     Ok(VClosure::LogicVar { ident }) => {
                         let empty = Env::empty(arena);
+                        let zero_val = arena.alloc(MValue::Zero);
                         let m_zero = {
                             let mut lenv = lenv.clone();
                             lenv.set_vclos(
                                 ident,
                                 VClosure::Clos {
-                                    val: MValue::Zero.into(),
+                                    val: zero_val,
                                     env: empty,
                                 },
                             );
                             Machine {
                                 arena,
-                                comp: zk.clone(),
+                                comp: zk,
                                 stack: stack.clone(),
                                 env,
                                 lenv,
@@ -366,16 +355,18 @@ impl<'a> Machine<'a> {
                         let m_succ = {
                             let mut lenv = lenv;
                             let fresh = lenv.fresh(ValueType::Nat);
+                            let var0 = arena.alloc(MValue::Var(0));
+                            let succ_val = arena.alloc(MValue::Succ(var0));
                             lenv.set_vclos(
                                 ident,
                                 VClosure::Clos {
-                                    val: MValue::Succ(MValue::Var(0).into()).into(),
+                                    val: succ_val,
                                     env: empty.extend_lvar(arena, fresh),
                                 },
                             );
                             Machine {
                                 arena,
-                                comp: sk.clone(),
+                                comp: sk,
                                 stack,
                                 env: env.extend_lvar(arena, fresh),
                                 lenv,
@@ -404,10 +395,10 @@ impl<'a> Machine<'a> {
                             done: false,
                         }]
                     }
-                    Ok(VClosure::Clos { val, env: cenv }) => match &*val {
+                    Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Nil => smallvec![Machine {
                             arena,
-                            comp: nilk.clone(),
+                            comp: nilk,
                             stack,
                             env,
                             lenv,
@@ -416,11 +407,11 @@ impl<'a> Machine<'a> {
                         }],
                         MValue::Cons(v, w) => {
                             let new_env = env
-                                .extend_val(arena, v.clone(), cenv)
-                                .extend_val(arena, w.clone(), cenv);
+                                .extend_val(arena, v, cenv)
+                                .extend_val(arena, w, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: consk.clone(),
+                                comp: consk,
                                 stack,
                                 env: new_env,
                                 lenv,
@@ -436,15 +427,16 @@ impl<'a> Machine<'a> {
                             _ => panic!("matching on a non-list logic variable"),
                         };
                         let empty = Env::empty(arena);
+                        let nil_val = arena.alloc(MValue::Nil);
                         let m_nil = {
                             let mut lenv = lenv.clone();
                             lenv.set_vclos(
                                 ident,
-                                VClosure::mk_clos(&MValue::Nil.into(), empty),
+                                VClosure::mk_clos(nil_val, empty),
                             );
                             Machine {
                                 arena,
-                                comp: nilk.clone(),
+                                comp: nilk,
                                 stack: stack.clone(),
                                 env,
                                 lenv,
@@ -456,17 +448,19 @@ impl<'a> Machine<'a> {
                             let mut lenv = lenv;
                             let head = lenv.fresh(*ptype.clone());
                             let tail = lenv.fresh(ValueType::List(ptype));
+                            let var1 = arena.alloc(MValue::Var(1));
+                            let var0 = arena.alloc(MValue::Var(0));
+                            let cons_val = arena.alloc(MValue::Cons(var1, var0));
                             lenv.set_vclos(
                                 ident,
                                 VClosure::mk_clos(
-                                    &MValue::Cons(MValue::Var(1).into(), MValue::Var(0).into())
-                                        .into(),
+                                    cons_val,
                                     empty.extend_lvar(arena, head).extend_lvar(arena, tail),
                                 ),
                             );
                             Machine {
                                 arena,
-                                comp: consk.clone(),
+                                comp: consk,
                                 stack,
                                 env: env.extend_lvar(arena, head).extend_lvar(arena, tail),
                                 lenv,
@@ -495,12 +489,12 @@ impl<'a> Machine<'a> {
                             done: false,
                         }]
                     }
-                    Ok(VClosure::Clos { val, env: cenv }) => match &*val {
+                    Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Inl(v) => {
-                            let new_env = env.extend_val(arena, v.clone(), cenv);
+                            let new_env = env.extend_val(arena, v, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: inlk.clone(),
+                                comp: inlk,
                                 stack,
                                 env: new_env,
                                 lenv,
@@ -509,10 +503,10 @@ impl<'a> Machine<'a> {
                             }]
                         }
                         MValue::Inr(v) => {
-                            let new_env = env.extend_val(arena, v.clone(), cenv);
+                            let new_env = env.extend_val(arena, v, cenv);
                             smallvec![Machine {
                                 arena,
-                                comp: inrk.clone(),
+                                comp: inrk,
                                 stack,
                                 env: new_env,
                                 lenv,
@@ -531,16 +525,18 @@ impl<'a> Machine<'a> {
                         let m_inl = {
                             let mut lenv = lenv.clone();
                             let fresh = lenv.fresh(*pt1);
+                            let var0 = arena.alloc(MValue::Var(0));
+                            let inl_val = arena.alloc(MValue::Inl(var0));
                             lenv.set_vclos(
                                 ident,
                                 VClosure::mk_clos(
-                                    &MValue::Inl(MValue::Var(0).into()).into(),
+                                    inl_val,
                                     empty.extend_lvar(arena, fresh),
                                 ),
                             );
                             Machine {
                                 arena,
-                                comp: inlk.clone(),
+                                comp: inlk,
                                 stack: stack.clone(),
                                 env: env.extend_lvar(arena, fresh),
                                 lenv,
@@ -551,16 +547,18 @@ impl<'a> Machine<'a> {
                         let m_inr = {
                             let mut lenv = lenv;
                             let fresh = lenv.fresh(*pt2);
+                            let var0 = arena.alloc(MValue::Var(0));
+                            let inr_val = arena.alloc(MValue::Inr(var0));
                             lenv.set_vclos(
                                 ident,
                                 VClosure::mk_clos(
-                                    &MValue::Inr(MValue::Var(0).into()).into(),
+                                    inr_val,
                                     empty.extend_lvar(arena, fresh),
                                 ),
                             );
                             Machine {
                                 arena,
-                                comp: inrk.clone(),
+                                comp: inrk,
                                 stack,
                                 env: env.extend_lvar(arena, fresh),
                                 lenv,
@@ -575,10 +573,11 @@ impl<'a> Machine<'a> {
             }
 
             MComputation::Rec { body } => {
-                let new_env = env.extend_val(arena, comp.thunk(), env);
+                let thunk_val = comp.thunk(arena);
+                let new_env = env.extend_val(arena, thunk_val, env);
                 smallvec![Machine {
                     arena,
-                    comp: body.clone(),
+                    comp: body,
                     stack,
                     env: new_env,
                     lenv,

@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::rc::Rc;
 
 use super::env::Env;
 use super::lvar::LogicEnv;
@@ -14,8 +13,8 @@ pub enum UnifyError<'a> {
 }
 
 pub fn unify<'a>(
-    lhs: &Rc<MValue>,
-    rhs: &Rc<MValue>,
+    lhs: &'a MValue<'a>,
+    rhs: &'a MValue<'a>,
     env: Env<'a>,
     lenv: &mut LogicEnv<'a>,
     senv: &SuspEnv<'a>,
@@ -52,7 +51,7 @@ pub fn unify<'a>(
                     val: rv,
                     env: renv_r,
                 },
-            ) => match (&**lv, &**rv) {
+            ) => match (lv, rv) {
                 (MValue::Zero, MValue::Zero) | (MValue::Nil, MValue::Nil) => continue,
                 (MValue::Succ(v), MValue::Succ(w)) => {
                     q.push_back((VClosure::mk_clos(v, *lenv_r), VClosure::mk_clos(w, *renv_r)));

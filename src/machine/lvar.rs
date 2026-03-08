@@ -28,7 +28,7 @@ impl<'a> LogicEnv<'a> {
 
     pub fn lookup(&self, ident: Ident) -> Option<VClosure<'a>> {
         let root = self.union_vars.find(ident);
-        self.entries.get(root)?.1.clone()
+        self.entries.get(root)?.1
     }
 
     pub fn set_vclos(&mut self, ident: Ident, vclos: VClosure<'a>) {

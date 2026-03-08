@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use bumpalo::Bump;
 
 use super::mterms::MValue;
@@ -34,7 +32,7 @@ impl<'a> Env<'a> {
                 EnvInner::Nil => return None,
                 EnvInner::Cons(vc, tail) => {
                     if remaining == 0 {
-                        return Some(vc.clone());
+                        return Some(*vc);
                     }
                     remaining -= 1;
                     cur = tail.0;
@@ -43,7 +41,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub fn extend_val(&self, arena: &'a Bump, val: Rc<MValue>, env: Env<'a>) -> Env<'a> {
+    pub fn extend_val(&self, arena: &'a Bump, val: &'a MValue<'a>, env: Env<'a>) -> Env<'a> {
         Env(arena.alloc(EnvInner::Cons(VClosure::Clos { val, env }, *self)))
     }
 

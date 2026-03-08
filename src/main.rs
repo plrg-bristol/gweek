@@ -2,6 +2,7 @@ use std::fs;
 use std::process;
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
+use bumpalo::Bump;
 use chumsky::prelude::Simple;
 
 use crate::machine::{translate::translate, Strategy};
@@ -73,18 +74,19 @@ fn main() {
         process::exit(1);
     }
 
-    let (main_comp, env) = translate(ast);
+    let arena = Bump::new();
+    let (main_comp, env) = translate(&arena, ast);
     let (main_comp, env) = if opt {
-        let comp = machine::optimize::optimize(main_comp);
+        let comp = machine::optimize::optimize(&arena, main_comp);
         #[cfg(feature = "opt-stats")]
-        let env = machine::optimize::optimize_env_with_stats(&env, &machine::optimize::optimize_val);
+        let env = machine::optimize::optimize_env_with_stats(&arena, &env, &|a, v| machine::optimize::optimize_val(a, v));
         #[cfg(not(feature = "opt-stats"))]
-        let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(v)).collect();
+        let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
         (comp, env)
     } else {
         (main_comp, env)
     };
-    machine::eval(main_comp, env, strategy);
+    machine::eval(&arena, main_comp, &env, strategy);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
@@ -143,15 +145,16 @@ mod tests {
     }
 
     fn run_example_inner(path: &str, strategy: Strategy, opt: bool) -> usize {
+        let arena = Bump::new();
         let src = fs::read_to_string(path).unwrap();
         let ast = parser::parse(&src).unwrap();
-        let (comp, env) = translate(ast);
+        let (comp, env) = translate(&arena, ast);
         if opt {
-            let comp = machine::optimize::optimize(comp);
-            let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(v)).collect();
-            run(comp, env, strategy, false)
+            let comp = machine::optimize::optimize(&arena, comp);
+            let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
+            run(&arena, comp, &env, strategy, false)
         } else {
-            run(comp, env, strategy, false)
+            run(&arena, comp, &env, strategy, false)
         }
     }
 

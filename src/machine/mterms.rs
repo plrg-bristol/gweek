@@ -1,22 +1,23 @@
 use std::fmt::{self, Display};
-use std::rc::Rc;
+
+use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
 
-#[derive(PartialEq, Clone, Debug)]
-pub enum MValue {
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum MValue<'a> {
     Var(usize),
     Zero,
-    Succ(Rc<MValue>),
-    Pair(Rc<MValue>, Rc<MValue>),
-    Inl(Rc<MValue>),
-    Inr(Rc<MValue>),
+    Succ(&'a MValue<'a>),
+    Pair(&'a MValue<'a>, &'a MValue<'a>),
+    Inl(&'a MValue<'a>),
+    Inr(&'a MValue<'a>),
     Nil,
-    Cons(Rc<MValue>, Rc<MValue>),
-    Thunk(Rc<MComputation>),
+    Cons(&'a MValue<'a>, &'a MValue<'a>),
+    Thunk(&'a MComputation<'a>),
 }
 
-impl Display for MValue {
+impl<'a> Display for MValue<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MValue::Var(i) => write!(f, "idx {}", i),
@@ -68,57 +69,57 @@ fn to_list(v: &MValue) -> Option<Vec<String>> {
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum MComputation {
+pub enum MComputation<'a> {
     // Value eliminators
     Ifz {
-        num: Rc<MValue>,
-        zk: Rc<MComputation>,
-        sk: Rc<MComputation>,
+        num: &'a MValue<'a>,
+        zk: &'a MComputation<'a>,
+        sk: &'a MComputation<'a>,
     },
     Match {
-        list: Rc<MValue>,
-        nilk: Rc<MComputation>,
-        consk: Rc<MComputation>,
+        list: &'a MValue<'a>,
+        nilk: &'a MComputation<'a>,
+        consk: &'a MComputation<'a>,
     },
     Case {
-        sum: Rc<MValue>,
-        inlk: Rc<MComputation>,
-        inrk: Rc<MComputation>,
+        sum: &'a MValue<'a>,
+        inlk: &'a MComputation<'a>,
+        inrk: &'a MComputation<'a>,
     },
     // CBPV primitives
-    Return(Rc<MValue>),
+    Return(&'a MValue<'a>),
     Bind {
-        comp: Rc<MComputation>,
-        cont: Rc<MComputation>,
+        comp: &'a MComputation<'a>,
+        cont: &'a MComputation<'a>,
     },
-    Force(Rc<MValue>),
+    Force(&'a MValue<'a>),
     Lambda {
-        body: Rc<MComputation>,
+        body: &'a MComputation<'a>,
     },
     App {
-        op: Rc<MComputation>,
-        arg: Rc<MValue>,
+        op: &'a MComputation<'a>,
+        arg: &'a MValue<'a>,
     },
     // FLP
-    Choice(Vec<Rc<MComputation>>),
+    Choice(&'a [&'a MComputation<'a>]),
     Exists {
         ptype: ValueType,
-        body: Rc<MComputation>,
+        body: &'a MComputation<'a>,
     },
     Equate {
-        lhs: Rc<MValue>,
-        rhs: Rc<MValue>,
-        body: Rc<MComputation>,
+        lhs: &'a MValue<'a>,
+        rhs: &'a MValue<'a>,
+        body: &'a MComputation<'a>,
     },
     // Recursion
     Rec {
-        body: Rc<MComputation>,
+        body: &'a MComputation<'a>,
     },
 }
 
-impl MComputation {
-    pub fn thunk(self: &Rc<MComputation>) -> Rc<MValue> {
-        MValue::Thunk(self.clone()).into()
+impl<'a> MComputation<'a> {
+    pub fn thunk(&'a self, arena: &'a Bump) -> &'a MValue<'a> {
+        arena.alloc(MValue::Thunk(self))
     }
 
     pub fn count_nodes(&self) -> usize {
@@ -147,7 +148,7 @@ impl MComputation {
     }
 }
 
-impl MValue {
+impl<'a> MValue<'a> {
     pub fn count_nodes(&self) -> usize {
         match self {
             MValue::Var(_) | MValue::Zero | MValue::Nil => 1,
@@ -158,7 +159,7 @@ impl MValue {
     }
 }
 
-impl Display for MComputation {
+impl<'a> Display for MComputation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MComputation::Return(v) => write!(f, "return({})", v),
