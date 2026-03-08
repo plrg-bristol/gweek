@@ -3,26 +3,26 @@ use crate::parser::cases::Cases;
 use super::{expr::Expr, r#type::Type};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Stm {
+pub enum Stmt {
     If {
-        cond: Box<Stm>,
-        then: Box<Stm>,
-        r#else: Box<Stm>
+        cond: Box<Stmt>,
+        then: Box<Stmt>,
+        r#else: Box<Stmt>
     },
     Let {
         var: String,
-        val: Box<Stm>,
-        body: Box<Stm>
+        val: Box<Stmt>,
+        body: Box<Stmt>
     },
     Exists {
         var: String,
         r#type: Type,
-        body: Box<Stm>
+        body: Box<Stmt>
     },
     Equate {
         lhs: Expr,
         rhs: Expr,
-        body: Box<Stm>
+        body: Box<Stmt>
     },
     Choice(Vec<Expr>),
     Case {

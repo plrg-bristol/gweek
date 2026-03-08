@@ -8,7 +8,7 @@ use crate::parser::{
     decl::Decl,
     expr::Expr,
     r#type::Type,
-    stm::Stm,
+    stmt::Stmt,
 };
 
 #[derive(Debug)]
@@ -149,8 +149,8 @@ pub fn type_check(ast: &[Decl]) -> Result<(), Vec<TypeError>> {
                 }
                 // If no type signature, skip checking (untyped function)
             }
-            Decl::Stm(stm) => {
-                if let Err(e) = synth_stm(&mut ctx, stm) {
+            Decl::Stmt(stmt) => {
+                if let Err(e) = synth_stmt(&mut ctx, stmt) {
                     errors.push(e);
                 }
             }
@@ -164,7 +164,7 @@ pub fn type_check(ast: &[Decl]) -> Result<(), Vec<TypeError>> {
     }
 }
 
-fn check_func(ctx: &mut Ctx, name: &str, args: &[Arg], body: &Stm, ty: &Type) -> TResult<()> {
+fn check_func(ctx: &mut Ctx, name: &str, args: &[Arg], body: &Stmt, ty: &Type) -> TResult<()> {
     let (arg_types, ret_type) = peel_arrows(ty, args.len())?;
 
     // Bind the function itself (for recursion)
@@ -175,7 +175,7 @@ fn check_func(ctx: &mut Ctx, name: &str, args: &[Arg], body: &Stm, ty: &Type) ->
         ctx.bind_arg(arg, aty)?;
     }
 
-    let body_type = synth_stm(ctx, body)?;
+    let body_type = synth_stmt(ctx, body)?;
     unify(&ret_type, &body_type).map_err(|e| {
         err(format!("in function '{name}': {e}"))
     })?;
@@ -190,36 +190,36 @@ fn check_func(ctx: &mut Ctx, name: &str, args: &[Arg], body: &Stm, ty: &Type) ->
     Ok(())
 }
 
-fn synth_stm(ctx: &mut Ctx, stm: &Stm) -> TResult {
-    match stm {
-        Stm::Expr(e) => synth_expr(ctx, e),
+fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
+    match stmt {
+        Stmt::Expr(e) => synth_expr(ctx, e),
 
-        Stm::Let { var, val, body } => {
-            let val_type = synth_stm(ctx, val)?;
+        Stmt::Let { var, val, body } => {
+            let val_type = synth_stmt(ctx, val)?;
             ctx.bind(var, val_type);
-            let body_type = synth_stm(ctx, body)?;
+            let body_type = synth_stmt(ctx, body)?;
             ctx.unbind();
             Ok(body_type)
         }
 
-        Stm::Exists { var, r#type, body } => {
+        Stmt::Exists { var, r#type, body } => {
             let vtype = resolve_type(r#type)?;
             ctx.bind(var, vtype);
-            let body_type = synth_stm(ctx, body)?;
+            let body_type = synth_stmt(ctx, body)?;
             ctx.unbind();
             Ok(body_type)
         }
 
-        Stm::Equate { lhs, rhs, body } => {
+        Stmt::Equate { lhs, rhs, body } => {
             let lt = synth_expr(ctx, lhs)?;
             let rt = synth_expr(ctx, rhs)?;
             unify(&lt, &rt).map_err(|e| err(format!("in equate: {e}")))?;
-            synth_stm(ctx, body)
+            synth_stmt(ctx, body)
         }
 
-        Stm::Fail => Ok(Type::Any),
+        Stmt::Fail => Ok(Type::Any),
 
-        Stm::Choice(exprs) => {
+        Stmt::Choice(exprs) => {
             let mut ty = None;
             for e in exprs {
                 let t = synth_expr(ctx, e)?;
@@ -232,14 +232,14 @@ fn synth_stm(ctx: &mut Ctx, stm: &Stm) -> TResult {
             ty.ok_or_else(|| err("empty choice"))
         }
 
-        Stm::Case { expr, cases } => synth_case(ctx, expr, cases),
+        Stmt::Case { expr, cases } => synth_case(ctx, expr, cases),
 
-        Stm::If { cond, then, r#else } => {
-            let ct = synth_stm(ctx, cond)?;
+        Stmt::If { cond, then, r#else } => {
+            let ct = synth_stmt(ctx, cond)?;
             unify(&Type::Ident("Bool".to_string()), &ct)
                 .map_err(|e| err(format!("if condition: {e}")))?;
-            let tt = synth_stm(ctx, then)?;
-            let et = synth_stm(ctx, r#else)?;
+            let tt = synth_stmt(ctx, then)?;
+            let et = synth_stmt(ctx, r#else)?;
             unify(&tt, &et).map_err(|e| err(format!("if branches: {e}")))?;
             Ok(tt)
         }
@@ -260,13 +260,13 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
             let mut result_type: Option<Type> = None;
 
             if let Some(zk) = &nat_case.zk {
-                let t = synth_stm(ctx, zk)?;
+                let t = synth_stmt(ctx, zk)?;
                 result_type = Some(t);
             }
 
             if let Some(sk) = &nat_case.sk {
                 ctx.bind(&sk.var, Type::Ident("Nat".to_string()));
-                let t = synth_stm(ctx, &sk.body)?;
+                let t = synth_stmt(ctx, &sk.body)?;
                 ctx.unbind();
                 if let Some(prev) = &result_type {
                     unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
@@ -292,14 +292,14 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
             let mut result_type: Option<Type> = None;
 
             if let Some(nilk) = &list_case.nilk {
-                let t = synth_stm(ctx, nilk)?;
+                let t = synth_stmt(ctx, nilk)?;
                 result_type = Some(t);
             }
 
             if let Some(consk) = &list_case.consk {
                 ctx.bind(&consk.x, elem_type);
                 ctx.bind(&consk.xs, scrut_type.clone());
-                let t = synth_stm(ctx, &consk.body)?;
+                let t = synth_stmt(ctx, &consk.body)?;
                 ctx.unbind();
                 ctx.unbind();
                 if let Some(prev) = &result_type {
@@ -380,7 +380,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
 
         Expr::BExpr(bexpr) => synth_bexpr(ctx, bexpr),
 
-        Expr::Stm(stm) => synth_stm(ctx, stm),
+        Expr::Stmt(stmt) => synth_stmt(ctx, stmt),
     }
 }
 
@@ -391,7 +391,7 @@ fn check_expr(ctx: &mut Ctx, expr: &Expr, expected: &Type) -> TResult<()> {
         (Expr::Lambda(arg, body), Type::Arrow(param, ret)) => {
             ctx.bind_arg(arg, param)?;
             let ret_type = resolve_return_type(ret)?;
-            let body_type = synth_stm(ctx, body)?;
+            let body_type = synth_stmt(ctx, body)?;
             ctx.unbind_arg(arg);
             unify(&ret_type, &body_type).map_err(|e| err(format!("in lambda body: {e}")))
         }

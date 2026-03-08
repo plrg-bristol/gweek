@@ -1,4 +1,4 @@
-use super::{arg::Arg, bexpr::BExpr, stm::Stm};
+use super::{arg::Arg, bexpr::BExpr, stmt::Stmt};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
@@ -9,12 +9,12 @@ pub enum Expr {
     App(Box<Expr>, Box<Expr>),
     BExpr(BExpr),
     List(Vec<Expr>),
-    Lambda(Arg, Box<Stm>),
+    Lambda(Arg, Box<Stmt>),
     Ident(String),
     Nat(usize),
     Bool(bool),
     Pair(Box<Expr>, Box<Expr>),
-    Stm(Box<Stm>)
+    Stmt(Box<Stmt>)
 }
 
 impl Expr {
@@ -22,9 +22,9 @@ impl Expr {
         let mut e = self;
         loop {
             match e {
-                Expr::Stm(stm) => match *stm {
-                    Stm::Expr(expr) => e = expr,
-                    stm => e = Expr::Stm(Box::new(stm))
+                Expr::Stmt(stmt) => match *stmt {
+                    Stmt::Expr(expr) => e = expr,
+                    stmt => e = Expr::Stmt(Box::new(stmt))
                 },
                 _ => break
             }

@@ -1,4 +1,4 @@
-use super::{arg::Arg, stm::*, r#type::Type};
+use super::{arg::Arg, stmt::*, r#type::Type};
 
 // Functions
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -10,7 +10,7 @@ pub enum Decl {
     Func {
         name: String,
         args: Vec<Arg>,
-        body: Stm
+        body: Stmt
     },
-    Stm(Stm)
+    Stmt(Stmt)
 }

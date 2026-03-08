@@ -7,6 +7,7 @@ use crate::machine::value_type::ValueType;
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MValue<'a> {
     Var(usize),
+    Unit,
     Zero,
     Succ(&'a MValue<'a>),
     Pair(&'a MValue<'a>, &'a MValue<'a>),
@@ -21,6 +22,7 @@ impl<'a> Display for MValue<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MValue::Var(i) => write!(f, "idx {}", i),
+            MValue::Unit => write!(f, "()"),
             MValue::Zero | MValue::Succ(_) => write!(f, "{}", to_nat(self).unwrap()),
             MValue::Nil | MValue::Cons(..) => match to_list(self) {
                 Some(items) => write!(f, "[{}]", items.join(", ")),
@@ -32,8 +34,14 @@ impl<'a> Display for MValue<'a> {
             },
             MValue::Thunk(t) => write!(f, "Thunk({})", t),
             MValue::Pair(v, w) => write!(f, "({}, {})", v, w),
-            MValue::Inl(v) => write!(f, "inl({})", v),
-            MValue::Inr(w) => write!(f, "inr({})", w),
+            MValue::Inl(v) => match v {
+                MValue::Unit => write!(f, "true"),
+                _ => write!(f, "inl({})", v),
+            },
+            MValue::Inr(w) => match w {
+                MValue::Unit => write!(f, "false"),
+                _ => write!(f, "inr({})", w),
+            },
         }
     }
 }
@@ -151,7 +159,7 @@ impl<'a> MComputation<'a> {
 impl<'a> MValue<'a> {
     pub fn count_nodes(&self) -> usize {
         match self {
-            MValue::Var(_) | MValue::Zero | MValue::Nil => 1,
+            MValue::Var(_) | MValue::Unit | MValue::Zero | MValue::Nil => 1,
             MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => 1 + v.count_nodes(),
             MValue::Pair(a, b) | MValue::Cons(a, b) => 1 + a.count_nodes() + b.count_nodes(),
             MValue::Thunk(c) => 1 + c.count_nodes(),

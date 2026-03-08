@@ -12,6 +12,13 @@ use super::{CClosure, Env, VClosure};
 
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
+enum Step<'a> {
+    Continue(Machine<'a>),
+    Done(Machine<'a>),
+    Branch(StepResult<'a>),
+    Fail,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum StkFrame<'a> {
     Value(&'a MValue<'a>),
@@ -56,18 +63,16 @@ impl<'a> Machine<'a> {
     /// scheduler at branch points (Choice, logic-var splits) or completion.
     pub fn run_to_branch(mut self) -> StepResult<'a> {
         loop {
-            let mut results = self.step();
-            if results.len() != 1 {
-                return results;
-            }
-            self = results.remove(0);
-            if self.done {
-                return smallvec![self];
+            match self.step() {
+                Step::Continue(m) => self = m,
+                Step::Done(m) => return smallvec![m],
+                Step::Branch(ms) => return ms,
+                Step::Fail => return smallvec![],
             }
         }
     }
 
-    pub fn step(self) -> StepResult<'a> {
+    fn step(self) -> Step<'a> {
         let Machine { arena, cclos: (comp, env), stack, lenv, senv, done: _ } = self;
 
         match comp {
@@ -77,42 +82,42 @@ impl<'a> Machine<'a> {
                     match senv.next() {
                         Some(a) => {
                             let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
-                            smallvec![Machine {
+                            Step::Continue(Machine {
                                 arena,
                                 cclos: (a.comp(), a.env()),
                                 stack: new_stack,
                                 lenv,
                                 senv,
                                 done: false,
-                            }]
+                            })
                         }
-                        None => smallvec![Machine { arena, cclos: (comp, env), stack, lenv, senv, done: true }],
+                        None => Step::Done(Machine { arena, cclos: (comp, env), stack, lenv, senv, done: true }),
                     }
                 }
                 Stack::Cons(sc, tail) => match &sc.frame {
                     StkFrame::Value(_) => unreachable!("return throws value to a value"),
                     StkFrame::To(cont) => {
                         let new_env = sc.env.extend_val(arena, val, env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: (cont, new_env),
                             stack: tail.clone(),
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
                     StkFrame::Set(ident, cont) => {
                         let mut senv = senv;
                         senv.set(ident, val, env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: (cont, sc.env),
                             stack: tail.clone(),
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
                 },
             },
@@ -120,27 +125,27 @@ impl<'a> Machine<'a> {
             MComputation::Bind { comp: inner, cont } => match inner {
                 MComputation::Return(v) => {
                     let new_env = env.extend_val(arena, v, env);
-                    smallvec![Machine {
+                    Step::Continue(Machine {
                         arena,
                         cclos: (cont, new_env),
                         stack,
                         lenv,
                         senv,
                         done: false,
-                    }]
+                    })
                 }
                 _ => {
                     let mut senv = senv;
                     let ident = senv.fresh((inner, env));
                     let new_env = env.extend_susp(arena, ident);
-                    smallvec![Machine {
+                    Step::Continue(Machine {
                         arena,
                         cclos: (cont, new_env),
                         stack,
                         lenv,
                         senv,
                         done: false,
-                    }]
+                    })
                 }
             },
 
@@ -148,28 +153,28 @@ impl<'a> Machine<'a> {
                 let vclos = VClosure::Clos { val: v, env };
                 match vclos.close_head(&lenv, &senv) {
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
-                        MValue::Thunk(t) => smallvec![Machine {
+                        MValue::Thunk(t) => Step::Continue(Machine {
                             arena,
                             cclos: (t, cenv),
                             stack,
                             lenv,
                             senv,
                             done: false,
-                        }],
+                        }),
                         _ => panic!("forcing a non-thunk value"),
                     },
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
                     Err(a) => {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
                             stack: new_stack,
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
                 }
             }
@@ -178,14 +183,14 @@ impl<'a> Machine<'a> {
                 Stack::Cons(sc, tail) => {
                     if let StkFrame::Value(val) = &sc.frame {
                         let new_env = env.extend_val(arena, val, sc.env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: (body, new_env),
                             stack: tail.clone(),
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     } else {
                         panic!("lambda but no value on the stack")
                     }
@@ -195,20 +200,30 @@ impl<'a> Machine<'a> {
 
             MComputation::App { op, arg } => {
                 let new_stack = stack.push(StkFrame::Value(arg), env);
-                smallvec![Machine {
+                Step::Continue(Machine {
                     arena,
                     cclos: (op, env),
                     stack: new_stack,
                     lenv,
                     senv,
                     done: false,
-                }]
+                })
             }
 
             MComputation::Choice(choices) => {
                 let n = choices.len();
                 if n == 0 {
-                    return smallvec![];
+                    return Step::Fail;
+                }
+                if n == 1 {
+                    return Step::Continue(Machine {
+                        arena,
+                        cclos: (choices[0], env),
+                        stack,
+                        lenv,
+                        senv,
+                        done: false,
+                    });
                 }
                 let mut result = SmallVec::with_capacity(n);
                 for (i, c) in choices.iter().enumerate() {
@@ -233,46 +248,46 @@ impl<'a> Machine<'a> {
                         break;
                     }
                 }
-                result
+                Step::Branch(result)
             }
 
             MComputation::Exists { ptype, body } => {
                 let mut lenv = lenv;
                 let ident = lenv.fresh(ptype.clone());
                 let new_env = env.extend_lvar(arena, ident);
-                smallvec![Machine {
+                Step::Continue(Machine {
                     arena,
                     cclos: (body, new_env),
                     stack,
                     lenv,
                     senv,
                     done: false,
-                }]
+                })
             }
 
             MComputation::Equate { lhs, rhs, body } => {
                 let mut lenv = lenv;
                 match unify(lhs, rhs, env, &mut lenv, &senv) {
-                    Ok(()) => smallvec![Machine {
+                    Ok(()) => Step::Continue(Machine {
                         arena,
                         cclos: (body, env),
                         stack,
                         lenv,
                         senv,
                         done: false,
-                    }],
+                    }),
                     Err(UnifyError::Susp(a)) => {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
                             stack: new_stack,
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
-                    Err(_) => smallvec![],
+                    Err(_) => Step::Fail,
                 }
             }
 
@@ -281,34 +296,34 @@ impl<'a> Machine<'a> {
                 match vclos.close_head(&lenv, &senv) {
                     Err(a) => {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
                             stack: new_stack,
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
-                        MValue::Zero => smallvec![Machine {
+                        MValue::Zero => Step::Continue(Machine {
                             arena,
                             cclos: (zk, env),
                             stack,
                             lenv,
                             senv,
                             done: false,
-                        }],
+                        }),
                         MValue::Succ(v) => {
                             let new_env = env.extend_val(arena, v, cenv);
-                            smallvec![Machine {
+                            Step::Continue(Machine {
                                 arena,
                                 cclos: (sk, new_env),
                                 stack,
                                 lenv,
                                 senv,
                                 done: false,
-                            }]
+                            })
                         }
                         _ => panic!("Ifz on {}", val),
                     },
@@ -354,7 +369,7 @@ impl<'a> Machine<'a> {
                                 done: false,
                             }
                         };
-                        smallvec![m_zero, m_succ]
+                        Step::Branch(smallvec![m_zero, m_succ])
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
@@ -365,36 +380,36 @@ impl<'a> Machine<'a> {
                 match vclos.close_head(&lenv, &senv) {
                     Err(a) => {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
                             stack: new_stack,
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
-                        MValue::Nil => smallvec![Machine {
+                        MValue::Nil => Step::Continue(Machine {
                             arena,
                             cclos: (nilk, env),
                             stack,
                             lenv,
                             senv,
                             done: false,
-                        }],
+                        }),
                         MValue::Cons(v, w) => {
                             let new_env = env
                                 .extend_val(arena, v, cenv)
                                 .extend_val(arena, w, cenv);
-                            smallvec![Machine {
+                            Step::Continue(Machine {
                                 arena,
                                 cclos: (consk, new_env),
                                 stack,
                                 lenv,
                                 senv,
                                 done: false,
-                            }]
+                            })
                         }
                         _ => panic!("Match on non-list"),
                     },
@@ -443,7 +458,7 @@ impl<'a> Machine<'a> {
                                 done: false,
                             }
                         };
-                        smallvec![m_nil, m_cons]
+                        Step::Branch(smallvec![m_nil, m_cons])
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
@@ -454,37 +469,37 @@ impl<'a> Machine<'a> {
                 match vclos.close_head(&lenv, &senv) {
                     Err(a) => {
                         let new_stack = stack.push(StkFrame::Set(a.ident, comp), env);
-                        smallvec![Machine {
+                        Step::Continue(Machine {
                             arena,
                             cclos: a.cclos,
                             stack: new_stack,
                             lenv,
                             senv,
                             done: false,
-                        }]
+                        })
                     }
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Inl(v) => {
                             let new_env = env.extend_val(arena, v, cenv);
-                            smallvec![Machine {
+                            Step::Continue(Machine {
                                 arena,
                                 cclos: (inlk, new_env),
                                 stack,
                                 lenv,
                                 senv,
                                 done: false,
-                            }]
+                            })
                         }
                         MValue::Inr(v) => {
                             let new_env = env.extend_val(arena, v, cenv);
-                            smallvec![Machine {
+                            Step::Continue(Machine {
                                 arena,
                                 cclos: (inrk, new_env),
                                 stack,
                                 lenv,
                                 senv,
                                 done: false,
-                            }]
+                            })
                         }
                         _ => panic!("Case on non-sum"),
                     },
@@ -536,7 +551,7 @@ impl<'a> Machine<'a> {
                                 done: false,
                             }
                         };
-                        smallvec![m_inl, m_inr]
+                        Step::Branch(smallvec![m_inl, m_inr])
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
@@ -545,14 +560,14 @@ impl<'a> Machine<'a> {
             MComputation::Rec { body } => {
                 let thunk_val = comp.thunk(arena);
                 let new_env = env.extend_val(arena, thunk_val, env);
-                smallvec![Machine {
+                Step::Continue(Machine {
                     arena,
                     cclos: (body, new_env),
                     stack,
                     lenv,
                     senv,
                     done: false,
-                }]
+                })
             }
         }
     }

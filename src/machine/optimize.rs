@@ -119,7 +119,7 @@ fn shift_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, delta: isize, cutoff: usi
                 val
             }
         }
-        MValue::Zero | MValue::Nil => val,
+        MValue::Unit | MValue::Zero | MValue::Nil => val,
         MValue::Succ(v) => arena.alloc(MValue::Succ(shift_val(arena, v, delta, cutoff))),
         MValue::Pair(a, b) => arena.alloc(MValue::Pair(
             shift_val(arena, a, delta, cutoff),
@@ -202,7 +202,7 @@ fn subst_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, repl: &'a MValue<'a>, dep
                 val
             }
         }
-        MValue::Zero | MValue::Nil => val,
+        MValue::Unit | MValue::Zero | MValue::Nil => val,
         MValue::Succ(v) => arena.alloc(MValue::Succ(subst_val(arena, v, repl, depth))),
         MValue::Pair(a, b) => arena.alloc(MValue::Pair(
             subst_val(arena, a, repl, depth),
@@ -288,7 +288,7 @@ fn val_contains(needle: &MValue, haystack: &MValue) -> bool {
 fn has_free_var_val(val: &MValue, target: usize) -> bool {
     match val {
         MValue::Var(i) => *i == target,
-        MValue::Zero | MValue::Nil => false,
+        MValue::Unit | MValue::Zero | MValue::Nil => false,
         MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => has_free_var_val(v, target),
         MValue::Pair(a, b) | MValue::Cons(a, b) => {
             has_free_var_val(a, target) || has_free_var_val(b, target)
@@ -337,7 +337,7 @@ fn swap_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, depth: usize) -> &'a MValu
                 val
             }
         }
-        MValue::Zero | MValue::Nil => val,
+        MValue::Unit | MValue::Zero | MValue::Nil => val,
         MValue::Succ(v) => arena.alloc(MValue::Succ(swap_val(arena, v, depth))),
         MValue::Pair(a, b) => arena.alloc(MValue::Pair(swap_val(arena, a, depth), swap_val(arena, b, depth))),
         MValue::Inl(v) => arena.alloc(MValue::Inl(swap_val(arena, v, depth))),
@@ -444,7 +444,7 @@ fn deep_resolve<'a>(arena: &'a Bump, val: &'a MValue<'a>, env: &[Option<&'a MVal
                 val
             }
         }
-        MValue::Zero | MValue::Nil => val,
+        MValue::Unit | MValue::Zero | MValue::Nil => val,
         MValue::Succ(v) => arena.alloc(MValue::Succ(deep_resolve(arena, v, env))),
         MValue::Pair(a, b) => arena.alloc(MValue::Pair(deep_resolve(arena, a, env), deep_resolve(arena, b, env))),
         MValue::Inl(v) => arena.alloc(MValue::Inl(deep_resolve(arena, v, env))),

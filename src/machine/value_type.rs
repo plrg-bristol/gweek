@@ -2,6 +2,7 @@ use std::fmt::{self, Display};
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum ValueType {
+    Unit,
     Nat,
     Product(Box<ValueType>, Box<ValueType>),
     Sum(Box<ValueType>, Box<ValueType>),
@@ -12,6 +13,7 @@ pub enum ValueType {
 impl Display for ValueType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ValueType::Unit => write!(f, "1"),
             ValueType::Nat => write!(f, "Nat"),
             ValueType::List(t) => write!(f, "[{}]", t),
             ValueType::Product(a, b) => write!(f, "{} * {}", a, b),

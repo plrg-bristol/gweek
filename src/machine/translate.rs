@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
-use crate::parser::{arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, stm::Stm, r#type::Type};
+use crate::parser::{arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, stmt::Stmt, r#type::Type};
 
 use super::mterms::{MComputation, MValue};
 
@@ -48,8 +48,8 @@ pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, 
                 tenv.bind(&name);
                 env.push(result);
             }
-            Decl::Stm(stm) => {
-                main = Some(translate_stm(arena, stm, &mut tenv));
+            Decl::Stmt(stmt) => {
+                main = Some(translate_stmt(arena, stmt, &mut tenv));
             }
         }
     }
@@ -85,7 +85,7 @@ fn reorder_decls(ast: Vec<Decl>) -> Vec<Decl> {
                 group.push(decl);
                 func_decls.push((nm, group));
             }
-            Decl::Stm(_) => {
+            Decl::Stmt(_) => {
                 if let Some(t) = pending_type.take() {
                     stms.push(t);
                 }
@@ -113,7 +113,7 @@ fn reorder_decls(ast: Vec<Decl>) -> Vec<Decl> {
                 _ => None,
             })
             .unwrap();
-        let refs = collect_refs_stm(body, &func_names);
+        let refs = collect_refs_stmt(body, &func_names);
         for r in &refs {
             if r != name {
                 if let Some(&j) = name_to_idx.get(r) {
@@ -157,54 +157,54 @@ fn reorder_decls(ast: Vec<Decl>) -> Vec<Decl> {
 
 // --- AST walkers for dependency collection ---
 
-fn collect_refs_stm(stm: &Stm, names: &HashSet<String>) -> HashSet<String> {
+fn collect_refs_stmt(stmt: &Stmt, names: &HashSet<String>) -> HashSet<String> {
     let mut refs = HashSet::new();
-    walk_stm(stm, names, &mut refs);
+    walk_stmt(stmt, names, &mut refs);
     refs
 }
 
-fn walk_stm(stm: &Stm, names: &HashSet<String>, refs: &mut HashSet<String>) {
-    match stm {
-        Stm::Expr(e) => walk_expr(e, names, refs),
-        Stm::Let { val, body, .. } => {
-            walk_stm(val, names, refs);
-            walk_stm(body, names, refs);
+fn walk_stmt(stmt: &Stmt, names: &HashSet<String>, refs: &mut HashSet<String>) {
+    match stmt {
+        Stmt::Expr(e) => walk_expr(e, names, refs),
+        Stmt::Let { val, body, .. } => {
+            walk_stmt(val, names, refs);
+            walk_stmt(body, names, refs);
         }
-        Stm::Fail => (),
-        Stm::Exists { body, .. } => walk_stm(body, names, refs),
-        Stm::Equate { lhs, rhs, body } => {
+        Stmt::Fail => (),
+        Stmt::Exists { body, .. } => walk_stmt(body, names, refs),
+        Stmt::Equate { lhs, rhs, body } => {
             walk_expr(lhs, names, refs);
             walk_expr(rhs, names, refs);
-            walk_stm(body, names, refs);
+            walk_stmt(body, names, refs);
         }
-        Stm::Choice(exprs) => {
+        Stmt::Choice(exprs) => {
             for e in exprs {
                 walk_expr(e, names, refs);
             }
         }
-        Stm::Case { expr, cases } => {
+        Stmt::Case { expr, cases } => {
             walk_expr(expr, names, refs);
             if let Some(nc) = &cases.nat_case {
                 if let Some(zk) = &nc.zk {
-                    walk_stm(zk, names, refs);
+                    walk_stmt(zk, names, refs);
                 }
                 if let Some(sk) = &nc.sk {
-                    walk_stm(&sk.body, names, refs);
+                    walk_stmt(&sk.body, names, refs);
                 }
             }
             if let Some(lc) = &cases.list_case {
                 if let Some(nk) = &lc.nilk {
-                    walk_stm(nk, names, refs);
+                    walk_stmt(nk, names, refs);
                 }
                 if let Some(ck) = &lc.consk {
-                    walk_stm(&ck.body, names, refs);
+                    walk_stmt(&ck.body, names, refs);
                 }
             }
         }
-        Stm::If { cond, then, r#else } => {
-            walk_stm(cond, names, refs);
-            walk_stm(then, names, refs);
-            walk_stm(r#else, names, refs);
+        Stmt::If { cond, then, r#else } => {
+            walk_stmt(cond, names, refs);
+            walk_stmt(then, names, refs);
+            walk_stmt(r#else, names, refs);
         }
     }
 }
@@ -221,14 +221,14 @@ fn walk_expr(expr: &Expr, names: &HashSet<String>, refs: &mut HashSet<String>) {
             walk_expr(b, names, refs);
         }
         Expr::Succ(e) => walk_expr(e, names, refs),
-        Expr::Lambda(_, body) => walk_stm(body, names, refs),
+        Expr::Lambda(_, body) => walk_stmt(body, names, refs),
         Expr::List(es) => {
             for e in es {
                 walk_expr(e, names, refs);
             }
         }
         Expr::BExpr(b) => walk_bexpr(b, names, refs),
-        Expr::Stm(s) => walk_stm(s, names, refs),
+        Expr::Stmt(s) => walk_stmt(s, names, refs),
         _ => {}
     }
 }
@@ -245,7 +245,7 @@ fn walk_bexpr(bexpr: &BExpr, names: &HashSet<String>, refs: &mut HashSet<String>
 
 // --- Translation ---
 
-fn translate_func<'a>(arena: &'a Bump, name: &str, args: Vec<Arg>, body: Stm, tenv: &mut TEnv) -> &'a MValue<'a> {
+fn translate_func<'a>(arena: &'a Bump, name: &str, args: Vec<Arg>, body: Stmt, tenv: &mut TEnv) -> &'a MValue<'a> {
     tenv.bind(name);
 
     let mut vars: Vec<String> = args
@@ -259,7 +259,7 @@ fn translate_func<'a>(arena: &'a Bump, name: &str, args: Vec<Arg>, body: Stm, te
     for v in &vars {
         tenv.bind(v);
     }
-    let mbody = translate_stm(arena, body, tenv);
+    let mbody = translate_stmt(arena, body, tenv);
     for _ in &vars {
         tenv.unbind();
     }
@@ -285,7 +285,10 @@ fn translate_vtype(ptype: Type) -> ValueType {
     match ptype {
         Type::Arrow(_, _) => panic!("don't translate thunks"),
         Type::Ident(s) if s == "Nat" => ValueType::Nat,
-        Type::Ident(_) => todo!(),
+        Type::Ident(s) if s == "Bool" => {
+            ValueType::Sum(Box::new(ValueType::Unit), Box::new(ValueType::Unit))
+        }
+        Type::Ident(s) => panic!("cannot translate type {}", s),
         Type::List(t) => ValueType::List(Box::new(translate_vtype(*t))),
         Type::Product(t1, t2) => {
             ValueType::Product(Box::new(translate_vtype(*t1)), Box::new(translate_vtype(*t2)))
@@ -294,37 +297,50 @@ fn translate_vtype(ptype: Type) -> ValueType {
     }
 }
 
-fn translate_stm<'a>(arena: &'a Bump, stm: Stm, tenv: &mut TEnv) -> &'a MComputation<'a> {
-    match stm {
-        Stm::If { cond, .. } => {
-            let comp = translate_stm(arena, *cond, tenv);
-            arena.alloc(MComputation::Bind {
-                comp,
-                cont: todo!("need sums to complete this"),
-            })
+fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComputation<'a> {
+    match stmt {
+        Stmt::If { cond, then, r#else } => {
+            let comp = translate_stmt(arena, *cond, tenv);
+            tenv.bind("_");
+            let var0 = arena.alloc(MValue::Var(0));
+            // Inl = true → then branch (bind unit, discard it)
+            tenv.bind("_");
+            let then_comp = translate_stmt(arena, *then, tenv);
+            tenv.unbind();
+            // Inr = false → else branch (bind unit, discard it)
+            tenv.bind("_");
+            let else_comp = translate_stmt(arena, *r#else, tenv);
+            tenv.unbind();
+            let case = arena.alloc(MComputation::Case {
+                sum: var0,
+                inlk: then_comp,
+                inrk: else_comp,
+            });
+            tenv.unbind();
+            arena.alloc(MComputation::Bind { comp, cont: case })
         }
-        Stm::Let { var, val, body } => {
-            let comp = translate_stm(arena, *val, tenv);
+        Stmt::Let { var, val, body } => {
+            let comp = translate_stmt(arena, *val, tenv);
             tenv.bind(&var);
-            let cont = translate_stm(arena, *body, tenv);
+            let cont = translate_stmt(arena, *body, tenv);
             tenv.unbind();
             arena.alloc(MComputation::Bind { comp, cont })
         }
-        Stm::Exists { var, r#type, body } => {
+        Stmt::Exists { var, r#type, body } => {
             tenv.bind(&var);
-            let body = translate_stm(arena, *body, tenv);
+            let body = translate_stmt(arena, *body, tenv);
             tenv.unbind();
             arena.alloc(MComputation::Exists {
                 ptype: translate_vtype(r#type),
                 body,
             })
         }
-        Stm::Equate { lhs, rhs, body } => {
+        Stmt::Equate { lhs, rhs, body } => {
             let lhs_comp = translate_expr(arena, lhs, tenv);
             tenv.bind("_");
             let rhs_comp = translate_expr(arena, rhs, tenv);
             tenv.bind("_");
-            let body_comp = translate_stm(arena, *body, tenv);
+            let body_comp = translate_stmt(arena, *body, tenv);
             tenv.unbind();
             tenv.unbind();
             let var0 = arena.alloc(MValue::Var(0));
@@ -343,8 +359,8 @@ fn translate_stm<'a>(arena: &'a Bump, stm: Stm, tenv: &mut TEnv) -> &'a MComputa
                 cont: inner_bind,
             })
         }
-        Stm::Fail => arena.alloc(MComputation::Choice(&[])),
-        Stm::Choice(exprs) => {
+        Stmt::Fail => arena.alloc(MComputation::Choice(&[])),
+        Stmt::Choice(exprs) => {
             let choices: Vec<_> = exprs
                 .into_iter()
                 .map(|e| translate_expr(arena, e, tenv))
@@ -352,26 +368,26 @@ fn translate_stm<'a>(arena: &'a Bump, stm: Stm, tenv: &mut TEnv) -> &'a MComputa
             let slice = arena.alloc_slice_copy(&choices);
             arena.alloc(MComputation::Choice(slice))
         }
-        Stm::Case { expr, cases } => {
+        Stmt::Case { expr, cases } => {
             tenv.bind("_");
             let var0 = arena.alloc(MValue::Var(0));
             let cont = match cases.r#type.unwrap() {
                 CasesType::Nat => {
                     let nat_case = cases.nat_case.unwrap();
-                    let zk = translate_stm(arena, *nat_case.zk.unwrap(), tenv);
+                    let zk = translate_stmt(arena, *nat_case.zk.unwrap(), tenv);
                     let succ_case = nat_case.sk.unwrap();
                     tenv.bind(&succ_case.var);
-                    let sk = translate_stm(arena, *succ_case.body, tenv);
+                    let sk = translate_stmt(arena, *succ_case.body, tenv);
                     tenv.unbind();
                     arena.alloc(MComputation::Ifz { num: var0, zk, sk })
                 }
                 CasesType::List => {
                     let list_case = cases.list_case.unwrap();
-                    let nilk = translate_stm(arena, *list_case.nilk.unwrap(), tenv);
+                    let nilk = translate_stmt(arena, *list_case.nilk.unwrap(), tenv);
                     let cons_case = list_case.consk.unwrap();
                     tenv.bind(&cons_case.x);
                     tenv.bind(&cons_case.xs);
-                    let consk = translate_stm(arena, *cons_case.body, tenv);
+                    let consk = translate_stmt(arena, *cons_case.body, tenv);
                     tenv.unbind();
                     tenv.unbind();
                     arena.alloc(MComputation::Match { list: var0, nilk, consk })
@@ -381,7 +397,7 @@ fn translate_stm<'a>(arena: &'a Bump, stm: Stm, tenv: &mut TEnv) -> &'a MComputa
             let comp = translate_expr(arena, expr, tenv);
             arena.alloc(MComputation::Bind { comp, cont })
         }
-        Stm::Expr(e) => translate_expr(arena, e, tenv),
+        Stmt::Expr(e) => translate_expr(arena, e, tenv),
     }
 }
 
@@ -417,7 +433,7 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
                 tenv.bind(&var);
-                let body = translate_stm(arena, *body, tenv);
+                let body = translate_stmt(arena, *body, tenv);
                 tenv.unbind();
                 let lam = arena.alloc(MComputation::Lambda { body });
                 let thunk = arena.alloc(MValue::Thunk(lam));
@@ -444,9 +460,17 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             arena.alloc(MComputation::Return(var))
         }
         Expr::Nat(n) => translate_nat(arena, n),
-        Expr::Bool(_) => todo!("no bools yet"),
+        Expr::Bool(b) => {
+            let unit = arena.alloc(MValue::Unit);
+            let val = if b {
+                arena.alloc(MValue::Inl(unit))
+            } else {
+                arena.alloc(MValue::Inr(unit))
+            };
+            arena.alloc(MComputation::Return(val))
+        }
         Expr::Pair(lhs, rhs) => translate_pair(arena, *lhs, *rhs, tenv),
-        Expr::Stm(s) => translate_stm(arena, *s, tenv),
+        Expr::Stmt(s) => translate_stmt(arena, *s, tenv),
     }
 }
 

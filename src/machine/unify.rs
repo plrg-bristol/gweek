@@ -52,7 +52,9 @@ pub fn unify<'a>(
                     env: renv_r,
                 },
             ) => match (lv, rv) {
-                (MValue::Zero, MValue::Zero) | (MValue::Nil, MValue::Nil) => continue,
+                (MValue::Unit, MValue::Unit)
+                | (MValue::Zero, MValue::Zero)
+                | (MValue::Nil, MValue::Nil) => continue,
                 (MValue::Succ(v), MValue::Succ(w)) => {
                     q.push_back((VClosure::mk_clos(v, *lenv_r), VClosure::mk_clos(w, *renv_r)));
                 }
