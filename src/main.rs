@@ -23,6 +23,8 @@ Options:
   --timeout <N>      Timeout in seconds (default: 60)
   --no-occurs-check  Skip occurs check in unification (unsound but faster)
   --eager-vars       Eagerly resolve variable indirections in env
+  --strict           Strict bind: evaluate RHS before binding (no suspensions)
+  --first            Stop after finding the first solution
   --help             Show this help message";
 
 fn main() {
@@ -32,6 +34,8 @@ fn main() {
     let mut timeout_secs: u64 = 60;
     let mut occurs_check = true;
     let mut eager_vars = false;
+    let mut strict = false;
+    let mut first_only = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -43,6 +47,8 @@ fn main() {
             "-o" => optimize = true,
             "--no-occurs-check" => occurs_check = false,
             "--eager-vars" => eager_vars = true,
+            "--strict" => strict = true,
+            "--first" => first_only = true,
             "--timeout" => {
                 timeout_secs = args.next().unwrap_or_else(|| {
                     eprintln!("Error: --timeout requires a value\n{USAGE}");
@@ -98,6 +104,8 @@ fn main() {
         timeout_secs,
         occurs_check,
         eager_vars,
+        strict,
+        first_only,
     });
 
     let arena = Bump::new();

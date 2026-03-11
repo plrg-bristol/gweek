@@ -1,0 +1,45 @@
+%% CPO
+
+\NewDocumentCommand{\Omegacpo}{}{$\omega$-cpo}
+\NewDocumentCommand{\Omegacppo}{}{$\omega$-cppo}
+
+\NewDocumentCommand{\Cpo}{}{cpo}
+\NewDocumentCommand{\Cppo}{}{cppo}
+
+%% SUPREMA
+
+\NewDocumentCommand{\Sup}{sO{}O{}m}{%
+  \IfBooleanTF{#1}{
+    \DelimMin{2} \bigsqcup^{#3}_{#2} \DelimPrn{#4}
+  }{
+    \DelimMin{2} \bigsqcup^{#3}_{#2} #4
+  }
+}
+
+%% CONTINUOUS FUNCTIONS
+
+\NewDocumentCommand{\ContFunc}{mm}{\DelimBrk{#1 \to #2}}
+
+%% DOWN SET
+\NewDocumentCommand{\Lowerset}{sm}{
+  \IfBooleanTF{#1}{\mathop{\downarrow}\DelimPrn{#2}}{\mathop{\downarrow}#2}
+}
+
+%% COMPACT
+\NewDocumentCommand{\Compact}{O{}m}{\mathcal{K}_{#1}\DelimPrn{#2}}
+
+
+% SCOTT CLOSURE
+\NewDocumentCommand{\ScottCl}{sm}{\IfBooleanTF{#1}{\DelimPrn{#2}^\sharp}{#2^\sharp}}
+
+% LOWER POWERDOMAIN
+
+\NewDocumentCommand{\LowerPDom}{g}{\mathcal{P}_{\ell}\IfValueT{#1}{\DelimPrn{#1}}}
+
+\NewDocumentCommand{\StepFunc}{smm}{
+  \IfBooleanTF{#1}{
+    \DelimPrn{#2 \mathbin{\searrow} #3}
+  }{
+    #2 \mathbin{\searrow} #3
+  }
+}

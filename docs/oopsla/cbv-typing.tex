@@ -1,0 +1,136 @@
+\begin{footnotesize}
+\begin{mathpar}
+  \inferH{Var}{
+    \strut
+  }{
+    \IsCBV[\Gamma, x : A, \Gamma']{x}{A}
+  }
+  \and
+  \inferH{Unit}{
+  }{
+    \IsCBV{\UnitV}{\UnitT}
+  }
+  \and
+  \inferH{Zero}{
+    \strut
+  }{
+    \IsCBV{\Zero}{\NatT}
+  }
+  \and
+  \inferH{Succ}{
+    \IsCBV{E}{\NatT}
+  }{
+    \IsCBV{\Succ{E}}{\NatT}
+  }
+  \and
+  \inferH{Pair}{
+    \IsCBV{E_1}{A_1} \\
+    \IsCBV{E_2}{A_2}
+  }{
+    \IsCBV{\VTuple{E_1}{E_2}}{A_1 \times A_2}
+  }
+  \and
+  \inferH{In}{
+    \IsCBV{E}{A_i}
+  }{
+    \IsCBV{\In[i]{E}}{A_1 + A_2}
+  }
+  \and
+  \inferH{Nil}{
+    \strut
+  }{
+    \IsCBV{\Nil}{\ListT{A}}
+  }
+  \and
+  \inferH{Cons}{
+    \IsCBV{E_1}{A} \\
+    \IsCBV{E_2}{\ListT{A}}
+  }{
+    \IsCBV{\Cons{E_1}{E_2}}{\ListT{A}}
+  }
+  \and
+  \inferH{Lam}{
+    \IsCBV[\Gamma, \DeclVar{x}{A_1}]{E}{A_2}
+  }{
+    \IsCBV{\CBVLam{x}[A_1]{E}}{A_1 \to A_2}
+  }
+  \and
+  \inferH{App}{
+    \IsCBV{E_1}{A_1 \to A_2} \\
+    \IsCBV{E_2}{A_1}
+  }{
+    \IsCBV{\CBVApp{E_1}{E_2}}{A_2}
+  }
+  \and
+  \inferH{Let}{
+    \IsCBV{E_1}{A_1} \\
+    \IsCBV[\Gamma, \DeclVar{x}{A_1}]{E_2}{A_2}
+  }{
+    \IsCBV{\CBVLet{x}{E_1}{E_2}}{A_2}
+  }
+  \and
+  \inferH{Rec}{
+    \IsCBV[\Gamma, f : A]{E}{A}
+  }{
+    \IsCBV{\CBVFix{f}[A]{E}}{A}
+  }
+  \and
+  \inferH{Ifz}{
+    \IsCBV{E}{\NatT} \\
+    \IsCBV{E_0}{A} \\
+    \IsCBV[\Gamma, n : \NatT]{E_1}{A}
+  }{
+    \IsCBV{\CBVIfz{E}{E_0}{n}{E_1}}{A}
+  }
+  \and
+  \inferH{Match}{
+    \IsCBV{E}{\ListT{A'}} \\
+    \IsCBV{E_0}{A} \\
+    \IsCBV[\Gamma, x : A', xs : \ListT{A'}]{E_1}{A}
+  }{
+    \IsCBV{\CBVMatch{E}{E_0}{x}{xs}{E_1}}{A}
+  }
+  \and
+  \inferH{Split}{
+    \IsCBV{E}{A_1 \times A_2} \\
+    \IsCBV[\Gamma, x_1 : A_1, x_2 : A_2]{E'}{A}
+  }{
+    \IsCBV{\CBVSplit{E}{x_1}{x_2}{E'}}{A}
+  }
+  \and
+  \inferH{Case}{
+    \IsCBV{E}{A_1 + A_2} \\
+    \IsCBV[\Gamma, x : A_1]{E_1}{A} \\
+    \IsCBV[\Gamma, y : A_2]{E_2}{A}
+  }{
+    \IsCBV{\CBVCase{E}{x}{E_1}{y}{E_2}}{A}
+  }
+  \and
+  \inferH{Fail}{
+    \strut
+  }{
+    \IsCBV{\Fail}{A}
+  }
+  \and
+  \inferH{Choice}{
+    \IsCBV{E_1}{A} \\
+    \IsCBV{E_2}{A}
+  }{
+    \IsCBV{\Choice{}{E_1}{E_2}}{A}
+  }
+  \and
+  \inferH{Exists}{
+    \IsCBV[\Gamma, x : \sigma]{E}{A}
+  }{
+    \IsCBV{\Exists{x}[\sigma]{E}}{A}
+  }
+  \and
+  \inferH{Equate}{
+    \IsCBV{E_1}{\sigma} \\
+    \IsCBV{E_2}{\sigma} \\
+    \IsCBV{E}{A}
+  }{
+    \IsCBV{\CBVEquate{E_1}{E_2}{E}}{A}
+  }
+\end{mathpar}
+\end{footnotesize}

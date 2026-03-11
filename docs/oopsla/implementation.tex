@@ -1,0 +1,99 @@
+The implementation of \Gweek{} is written in Rust and consists of approximately
+3{,}000 lines of code. In this section we describe the compilation pipeline and
+the key engineering decisions that make the implementation practical.
+
+\subsection{Pipeline}
+
+A \Gweek{} program passes through four stages before execution. The source text
+is first \emph{parsed} into an AST of declarations and expressions, using
+parser combinators (the \texttt{chumsky} crate). Each top-level declaration
+consists of a type signature and a definition; the body is a single expression
+in the syntax of \cref{section:source}. The AST is then \emph{type-checked}
+against the type system of \cref{figure:cbv}: the checker infers types for
+local bindings and verifies that existential quantifiers range only over
+first-order types.
+
+The type-checked AST is then \emph{translated} into CBPV machine terms,
+following the translation of \cref{subsection:translation}. Values become
+\texttt{MValue} terms and computations become \texttt{MComputation} terms.
+Named variables are replaced by de Bruijn indices: each variable occurrence
+becomes an index into an environment of value closures, eliminating the need for
+$\alpha$-renaming during substitution. Function definitions are topologically
+sorted and compiled into an environment of closures; each definition becomes a
+fixed-point $\CTerm{\Fix{f}{\Lam{x}{M}}}$ over a thunked computation. An
+optional peephole optimiser (\cref{section:optimisation}) is then applied to the
+resulting terms.
+
+Finally, the translated term is handed to the abstract machine of
+\cref{section:machine}, which generates a nondeterministic search tree. A search
+strategy (\cref{subsection:search-strategies}) explores the tree and collects
+results, printing them as they are discovered.
+
+\subsection{Arena Allocation}
+
+All values, computations, environments, and stack frames are allocated in a
+single bump arena (using the \texttt{bumpalo} crate). A bump arena allocates by
+advancing a pointer, making allocation essentially free; deallocation is
+all-or-nothing, with the entire arena freed when the program terminates.
+
+This design is well-suited to the execution model. The machine continuously
+creates new terms, environments, and stack frames as it steps, but it never
+deallocates individual objects during execution. The arena also enables a
+simple representation of sharing: closures and environments are arena-allocated
+references that can be freely duplicated without the overhead of reference
+counting or garbage collection.
+
+\subsection{Persistent Data Structures and Cheap Branching}
+
+The central performance requirement of an FLP implementation is that
+\emph{branching must be cheap}. At every choice point or narrowing split, the
+machine duplicates its state so that each branch can proceed independently. If
+this duplication were $O(n)$ in the size of the environment or stack, the cost
+of nondeterminism would quickly become prohibitive.
+
+We address this by representing the variable environment and the stack as
+\emph{persistent cons-lists} allocated in the arena. Each node is immutable;
+extending an environment or pushing a stack frame allocates a single new cons
+cell that points to the existing list. Duplicating a machine state therefore
+copies only the root pointers---an $O(1)$ operation---and the two branches
+share the entire prefix of their environments and stacks.
+
+The logic context, which tracks logical variables and their bindings, uses a
+different strategy. It is represented as a reference-counted vector of entries
+(each storing a type and an optional value binding) paired with a union-find
+structure for variable aliasing. When the machine branches, both children
+initially share the same backing storage. If either branch subsequently modifies
+the context---by binding a variable during narrowing or unification---the
+storage is copied on write via \texttt{Rc::make\_mut}. This \emph{copy-on-write}
+discipline ensures that branching is cheap in the common case (no copy is made
+until a modification occurs) while maintaining the invariant that each branch
+has an independent view of the logic context. The suspension environment uses
+the same copy-on-write strategy: a reference-counted vector of entries, each
+either a pending computation closure or a resolved value closure.
+
+\subsection{Value Closures}
+
+Because the machine uses de Bruijn indices, a value in isolation is not
+meaningful: it must be interpreted relative to an environment $\rho$ that maps
+its free indices to actual values. We call the pair of a value and its
+environment a \emph{value closure}. Value closures come in three variants:
+\texttt{Clos}$(\VTerm{V}, \rho)$ is an ordinary value paired with its
+environment; \texttt{LogicVar}$(x)$ is a reference to a logical variable in the
+logic context; and \texttt{Susp}$(s)$ is a reference to a suspension in the
+suspension environment.
+
+The operation \texttt{close\_head} resolves a value closure to its \emph{head
+form}: the outermost constructor or an unbound logical variable. It works by
+following a chain of indirections: if the closure is a \texttt{Clos} wrapping a
+de Bruijn variable, it looks up the index in the environment; if it is a
+\texttt{LogicVar} with a binding in the logic context, it follows the binding;
+if it is a \texttt{Susp}, it checks whether the suspension has been resolved.
+This loop terminates when it reaches a constructor, an unbound logical variable,
+or an unresolved suspension. In the last case, \texttt{close\_head} does not
+transparently force the suspension; instead, it signals to the caller that
+forcing is required, and the machine initiates the forcing protocol described
+in \cref{section:suspensions}.
+
+This operation is called at every case expression and every unification step,
+and must be efficient. It terminates because the chain of indirections is always
+finite---an invariant maintained by the occurs check in unification.

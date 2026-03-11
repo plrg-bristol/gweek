@@ -1,0 +1,45 @@
+\begin{small}
+\begin{minipage}{0.28\textwidth}
+  {\color{CBVGreen}\fbox{\color{black}\text{types}}}
+  \[
+    \begin{array}{rcl}
+           A     & \Coloneqq\ & \UnitT \mid \NatT \\
+                 &            & A_1 + A_2 \\
+                 &            & A_1 \times A_2 \\
+                 &            & \ListT{A} \\
+                 &            & A_1 \to A_2
+    \end{array}
+  \]
+  {\color{CBVGreen}\fbox{\color{black}\text{first-order types}}}
+  \[
+    \begin{array}{rcl}
+      \sigma    & \Coloneqq\ & \UnitT \mid \NatT \\
+                &            & \sigma_1 + \sigma_2 \\
+                &            & \sigma_1 \times \sigma_2 \\
+                &            & \ListT{\sigma}
+    \end{array}
+  \]
+\end{minipage}
+\begin{minipage}{0.70\textwidth}
+  {\color{CBVGreen}\fbox{\color{black}\text{expressions}}} \; $\CBV{e}$
+  \[
+    \begin{array}{rcll}
+      \CBV{e}   & \Coloneqq\ & \CBV{x}                                          & \text{variable} \\
+                &            & \CBV{\UnitV} \mid \CBV{\Zero} \mid \CBV{\Succ{e}} & \text{unit, zero, successor} \\
+                &            & \CBV{\VTuple{e_1}{e_2}} \mid \CBV{\In[i]{e}}      & \text{pair, injection} \\
+                &            & \CBV{\Nil} \mid \CBV{\Cons{e_1}{e_2}}             & \text{nil, cons} \\
+                &            & \CBV{\CBVLam{x}[A]{e}}                            & \text{abstraction} \\
+                &            & \CBV{\CBVApp{e_1}{e_2}}                           & \text{application} \\
+                &            & \CBV{\CBVLet{x}{e_1}{e_2}}                        & \text{binding} \\
+                &            & \CBV{\CBVIfz{e}{e_0}{n}{e_1}}                     & \text{nat case} \\
+                &            & \CBV{\CBVMatch{e}{e_0}{x}{xs}{e_1}}              & \text{list case} \\
+                &            & \CBV{\CBVSplit{e}{x_1}{x_2}{e'}}                 & \text{pair elim.} \\
+                &            & \CBV{\CBVCase{e}{x}{e_1}{y}{e_2}}               & \text{sum case} \\
+                &            & \CBV{\CBVFix{f}[A]{e}}                            & \text{recursion} \\[0.3ex]
+                &            & \CBV{\Fail} \mid \CBV{\Choice{}{e_1}{e_2}}        & \text{failure, choice} \\
+                &            & \CBV{\Exists{x}[\sigma]{e}}                       & \text{fresh variable} \\
+                &            & \CBV{\CBVEquate{e_1}{e_2}{e}}                     & \text{unification}
+    \end{array}
+  \]
+\end{minipage}
+\end{small}

@@ -1,0 +1,145 @@
+\documentclass[
+  acmsmall,
+  screen,
+  natbib=false,
+]{acmart}
+
+\usepackage{preamble}
+
+%% BIBLIOGRAPHY
+
+\RequirePackage[
+  datamodel=acmdatamodel,
+  style=acmauthoryear,
+  uniquename=false,
+]{biblatex}
+\addbibresource{refs.bib}
+
+%% CCS CONCEPTS
+
+\begin{CCSXML}
+<ccs2012>
+   <concept>
+       <concept_id>10003752.10003790.10003795</concept_id>
+       <concept_desc>Theory of computation~Constraint and logic programming</concept_desc>
+       <concept_significance>500</concept_significance>
+       </concept>
+   <concept>
+       <concept_id>10011007.10011006.10011008.10011009.10011015</concept_id>
+       <concept_desc>Software and its engineering~Constraint and logic languages</concept_desc>
+       <concept_significance>300</concept_significance>
+       </concept>
+   <concept>
+       <concept_id>10003752.10003753.10010622</concept_id>
+       <concept_desc>Theory of computation~Abstract machines</concept_desc>
+       <concept_significance>300</concept_significance>
+       </concept>
+ </ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Theory of computation~Constraint and logic programming}
+\ccsdesc[300]{Software and its engineering~Constraint and logic languages}
+\ccsdesc[300]{Theory of computation~Abstract machines}
+
+\keywords{functional logic programming, narrowing, algebraic effects, implementation}
+
+
+\begin{document}
+
+\title{\Gweek{}: Implementing Functional Logic Programming from Algebraic Equations}
+
+\author{Samson Main}
+\orcid{0009-0002-1580-9032}
+\affiliation{%
+  \institution{University of Bristol}
+  \city{Bristol}
+  \country{United Kingdom}
+}
+\email{ib21231@bristol.ac.uk}
+
+\author{Eddie Jones}
+\orcid{0000-0003-1762-5405}
+\affiliation{%
+  \institution{University of Bristol}
+  \city{Bristol}
+  \country{United Kingdom}
+}
+\email{eddie.jones@bristol.ac.uk}
+
+\author{G. A. Kavvos}
+\orcid{0000-0001-7953-7975}
+\affiliation{%
+  \institution{University of Bristol}
+  \city{Bristol}
+  \country{United Kingdom}
+}
+\email{alex.kavvos@bristol.ac.uk}
+
+\begin{abstract}
+
+We present \Gweek{}, an implementation of a functional logic programming (FLP)
+language whose design is derived directly from the algebraic theory of FLP
+effects developed in a companion paper. That paper showed that the
+characteristic constructs of FLP---nondeterministic choice, logical variables,
+and equational constraints---are algebraic effects, and used a domain-theoretic
+semantics based on the lower powerdomain to validate a comprehensive equational
+theory and derive an abstract machine. Here we implement a variant of that
+machine in Rust. The source language is a small Haskell-like language that is
+compiled to a call-by-value core calculus, translated to Call-by-Push-Value
+(CBPV), and then executed by a CEK-style abstract machine that explores a
+nondeterministic search tree. Because every transition of the machine is
+validated by the denotational semantics, the machine is evidently correct, and
+the equations of the theory serve directly as the rewrite rules of a peephole
+optimiser. We describe a suspension mechanism that defers the evaluation of
+\texttt{let} bindings, dramatically improving termination at the cost of some
+overhead, and discuss the engineering techniques---arena allocation, persistent
+data structures, and four search strategies---that make the implementation
+practical.
+
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+  \label{section:introduction}
+  \input{intro}
+
+\section{The Source Language}
+  \label{section:source}
+  \input{language}
+
+\section{Intermediate Representation}
+  \label{section:ir}
+  \input{ir}
+
+\section{The Abstract Machine}
+  \label{section:machine}
+  \input{machine}
+
+\section{The Rust Implementation}
+  \label{section:implementation}
+  \input{implementation}
+
+\section{Optimisation}
+  \label{section:optimisation}
+  \input{optimisation}
+
+\section{Suspensions}
+  \label{section:suspensions}
+  \input{suspensions}
+
+\section{Benchmarking}
+  \label{section:benchmarking}
+  \input{benchmarking}
+
+\section{Related Work}
+  \label{section:related-work}
+  \input{related-work}
+
+\section{Conclusions}
+  \label{section:conclusions}
+  \input{conclusions}
+
+\printbibliography
+
+\end{document}

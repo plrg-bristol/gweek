@@ -74,15 +74,20 @@ fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) 
     }
 }
 
-fn record_solution(m: &Machine, solns: &mut usize, print: bool) {
+/// Record a solution; returns true if we should stop (--first mode).
+fn record_solution(m: &Machine, solns: &mut usize, print: bool) -> bool {
     if let MComputation::Return(v) = m.cclos.0 {
         if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
             if print {
                 println!("> {}", s);
             }
             *solns += 1;
+            if config().first_only {
+                return true;
+            }
         }
     }
+    false
 }
 
 fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
@@ -98,7 +103,9 @@ fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
             }
             for m in m.run_to_branch() {
                 if m.done {
-                    record_solution(&m, &mut solns, print);
+                    if record_solution(&m, &mut solns, print) {
+                        return (solns, false);
+                    }
                 } else {
                     next.push(m);
                 }
@@ -120,7 +127,9 @@ fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
         }
         for m in m.run_to_branch().into_iter().rev() {
             if m.done {
-                record_solution(&m, &mut solns, print);
+                if record_solution(&m, &mut solns, print) {
+                    return (solns, false);
+                }
             } else {
                 stack.push(m);
             }
@@ -157,6 +166,9 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, pri
                                     println!("> {}", s);
                                 }
                                 solns += 1;
+                                if config().first_only {
+                                    return (solns, false);
+                                }
                             }
                         }
                     }
@@ -196,7 +208,9 @@ fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, prin
             steps += 1;
             for m in m.run_to_branch().into_iter().rev() {
                 if m.done {
-                    record_solution(&m, &mut solns, print);
+                    if record_solution(&m, &mut solns, print) {
+                        return (solns, false);
+                    }
                 } else {
                     local.push(m);
                 }

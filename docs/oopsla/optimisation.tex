@@ -1,0 +1,157 @@
+A distinctive feature of \Gweek{} is that its optimiser is derived directly from
+the equational theory. The equations of \cref{figure:equations}, validated by
+the denotational semantics of \parencite{jones_2026}, serve as rewrite rules:
+each rule replaces a term with an equal one, and the soundness of the
+transformation follows from the full abstraction theorem of the semantics rather
+than from ad hoc argument.
+
+The optimiser operates as a \emph{peephole pass} over the CBPV term produced by
+the translation of \cref{subsection:translation}. It traverses the term
+bottom-up, applying rewrites at each node until a fixed point is reached.
+Because the machine uses de Bruijn indices, the rewrites require shifting and
+substitution on indices, which we implement as straightforward recursive
+traversals. \Cref{figure:rewrites} lists all rewrite rules alongside the
+equations that justify them. We now describe them in detail.
+
+\begin{figure}
+\begin{small}
+\begin{tabular}{@{}lll@{}}
+  \toprule
+  \textbf{Rewrite} & \textbf{Equation} & \textbf{Law} \\
+  \midrule
+  \textsc{bind-eta}
+    & $\CTerm{\CTo{\Return{V}}{x}{M}} \leadsto \CTerm{\CSubst{M}{V}{x}}$
+    & $\beta$-bind \\
+  \textsc{dead-bind}
+    & $\CTerm{\CTo{\Return{V}}{x}{N}} \leadsto \CTerm{N}$ \quad ($x \notin \textsf{fv}(N)$)
+    & $\beta$-bind \\
+  \textsc{bind-assoc}
+    & $\CTerm{\CTo*{\CTo{M}{x}{N}}{y}{P}} \leadsto \CTerm{\CTo{M}{x}{(\CTo{N}{y}{P})}}$
+    & seq.\ assoc. \\
+  \textsc{app-bind}
+    & $\CTerm{\CApp*{\CTo{M}{x}{N}}{V}} \leadsto \CTerm{\CTo{M}{x}{\CApp{N}{V}}}$
+    & seq.\ app. \\
+  \textsc{lam-beta}
+    & $\CTerm{\CApp*{\Lam{x}{M}}{V}} \leadsto \CTerm{\CSubst{M}{V}{x}}$
+    & $\beta$-app \\
+  \textsc{force-beta}
+    & $\CTerm{\Force*{\Thunk{M}}} \leadsto \CTerm{M}$
+    & $\beta$-thunk \\
+  \textsc{ifz-beta}
+    & $\CTerm{\CIfz{\Zero}{M}{n}{N}} \leadsto \CTerm{M}$ (etc.)
+    & $\beta$-ifz \\
+  \textsc{match-beta}
+    & $\CTerm{\CMatch{\Cons{V}{W}}{M}{x}{xs}{N}} \leadsto \CTerm{\SubstTwo{N}{V}{W}{x}{xs}}$ (etc.)
+    & $\beta$-match \\
+  \textsc{case-beta}
+    & $\CTerm{\CCase{\In[1]{V}}{x}{M}{y}{N}} \leadsto \CTerm{\CSubst{M}{V}{x}}$ (etc.)
+    & $\beta$-case \\
+  \textsc{dead-end}
+    & $\CTerm{\CTo{M}{x}{\Fail}} \leadsto \CTerm{\Fail}$ \quad ($M$ total)
+    & dead-end \\
+  \textsc{lam-choice}
+    & $\CTerm{\Lam*{x}{\Choice{M}{N}}} \leadsto \CTerm{\Choice{\Lam{x}{M}}{\Lam{x}{N}}}$
+    & $\lambda$-$\talloblong$ \\
+  \textsc{lam-exists}
+    & $\CTerm{\Lam*{x}{\Exists{z}[\sigma]{M}}} \leadsto \CTerm{\Exists*{z}[\sigma]{\Lam{x}{M}}}$
+    & $\lambda$-$\exists$ \\
+  \textsc{lam-equate}
+    & $\CTerm{\Lam*{x}{\Equate{V}{W}{M}}} \leadsto \CTerm{\Equate{V}{W}{\Lam{x}{M}}}$
+    & $\lambda$-eq \\
+  \textsc{eq-choice}
+    & $\CTerm{\Equate{V}{W}{\Choice{M}{N}}} \leadsto \CTerm{\Choice{(\Equate{V}{W}{M})}{(\Equate{V}{W}{N})}}$
+    & eq-$\talloblong$ \\
+  \textsc{eq-exists}
+    & $\CTerm{\Equate{V}{W}{\Exists{z}[\sigma]{M}}} \leadsto \CTerm{\Exists*{z}[\sigma]{\Equate{V}{W}{M}}}$
+    & eq-$\exists$ \\
+  \textsc{cycle}
+    & $\CTerm{\Equate{V}{\Succ{V}}{M}} \leadsto \CTerm{\Fail}$ (etc.)
+    & occurs \\
+  \bottomrule
+\end{tabular}
+\end{small}
+\caption{Peephole rewrite rules and their justifying equations. All equations
+  appear in \cref{figure:equations} or are validated by the denotational
+  semantics of \parencite{jones_2026}. In addition, the choice identity laws
+  ($\CTerm{\Choice{\Fail}{M}} = \CTerm{M}$), the idempotence law
+  ($\CTerm{\Choice{M}{M}} = \CTerm{M}$), the reflexivity of unification
+  ($\CTerm{\Equate{V}{V}{M}} = \CTerm{M}$), and the narrowing
+  decomposition rules are applied.}
+\label{figure:rewrites}
+\end{figure}
+
+\paragraph{$\beta$-reductions}
+The $\beta$-laws of \cref{figure:equations} are the workhorses of the
+optimiser. The bind-return law
+$\CTerm{\CTo{\Return{V}}{x}{M}} = \CTerm{\CSubst{M}{V}{x}}$
+(\textsc{bind-eta}) is the most frequently applied: it eliminates the overhead
+of a continuation push and pop by substituting the value directly. A special
+case arises when the returned value is a variable
+($\CTerm{\CTo{\Return{x}}{y}{M}}$), which is reduced by aliasing $y$ to $x$.
+When $x$ does not appear free in the continuation, the bind is dead and the
+continuation is returned unchanged (\textsc{dead-bind}).
+
+The remaining $\beta$-laws reduce eliminators applied to known constructors:
+\textsc{ifz-beta} reduces $\CTerm{\CIfz{\Zero}{M}{n}{N}}$ to $\CTerm{M}$ and
+$\CTerm{\CIfz{\Succ{V}}{M}{n}{N}}$ to $\CTerm{\CSubst{N}{V}{n}}$;
+\textsc{match-beta} reduces
+$\CTerm{\CMatch{\Cons{V}{W}}{M}{x}{xs}{N}}$ to
+$\CTerm{\SubstTwo{N}{V}{W}{x}{xs}}$;
+\textsc{case-beta} reduces
+$\CTerm{\CCase{\In[1]{V}}{x}{M}{y}{N}}$ to $\CTerm{\CSubst{M}{V}{x}}$.
+The \textsc{force-beta} rule reduces $\CTerm{\Force*{\Thunk{M}}}$ to
+$\CTerm{M}$, and \textsc{lam-beta} reduces
+$\CTerm{\CApp*{\Lam{x}{M}}{V}}$ to $\CTerm{\CSubst{M}{V}{x}}$.
+
+\paragraph{Sequencing laws}
+The associativity law (\textsc{bind-assoc}) reassociates
+$\CTerm{\CTo*{\CTo{M}{x}{N}}{y}{P}}$ to
+$\CTerm{\CTo{M}{x}{(\CTo{N}{y}{P})}}$, exposing opportunities for
+\textsc{bind-eta}. The application-bind law (\textsc{app-bind}) rewrites
+$\CTerm{\CApp*{\CTo{M}{x}{N}}{V}}$ to $\CTerm{\CTo{M}{x}{\CApp{N}{V}}}$.
+
+\paragraph{$\lambda$-laws}
+The optimiser distributes $\lambda$-abstractions over effects using the three
+$\lambda$-laws of \cref{figure:equations}: \textsc{lam-choice} rewrites
+$\CTerm{\Lam*{x}{\Choice{M}{N}}}$ to
+$\CTerm{\Choice{\Lam{x}{M}}{\Lam{x}{N}}}$; \textsc{lam-exists} rewrites
+$\CTerm{\Lam*{x}{\Exists{z}[\sigma]{M}}}$ to
+$\CTerm{\Exists*{z}[\sigma]{\Lam{x}{M}}}$; and \textsc{lam-equate} rewrites
+$\CTerm{\Lam*{x}{\Equate{V}{W}{M}}}$ to
+$\CTerm{\Equate{V}{W}{\Lam{x}{M}}}$ (when $\VTerm{V}$ and $\VTerm{W}$ do not
+reference $x$). These normalise terms so that effects appear at the outermost
+level.
+
+\paragraph{Effect equations}
+The identity law $\CTerm{\Choice{\Fail}{M}} = \CTerm{M}$ removes dead branches,
+and the idempotence law $\CTerm{\Choice{M}{M}} = \CTerm{M}$ collapses
+duplicates. Nested choices are flattened using associativity. The dead-end law
+(\textsc{dead-end}) rewrites $\CTerm{\CTo{M}{x}{\Fail}}$ to $\CTerm{\Fail}$
+when $\CTerm{M}$ is total---a condition we check by a conservative syntactic
+analysis. Reflexive unification $\CTerm{\Equate{V}{V}{M}} = \CTerm{M}$
+eliminates trivially satisfied constraints.
+
+\paragraph{Equational constraint rules}
+The \textsc{eq-choice} rule distributes an equational constraint over a choice:
+$\CTerm{\Equate{V}{W}{\Choice{M}{N}}} =
+\CTerm{\Choice{(\Equate{V}{W}{M})}{(\Equate{V}{W}{N})}}$.
+The \textsc{eq-exists} rule commutes an equational constraint past an
+existential: $\CTerm{\Equate{V}{W}{\Exists{z}[\sigma]{M}}} =
+\CTerm{\Exists*{z}[\sigma]{\Equate{V}{W}{M}}}$.
+The narrowing equations decompose unification on known constructors: for
+example, $\CTerm{\Equate{\Succ{V}}{\Succ{W}}{M}}$ reduces to
+$\CTerm{\Equate{V}{W}{M}}$, and
+$\CTerm{\Equate{\Cons{V_1}{W_1}}{\Cons{V_2}{W_2}}{M}}$ reduces to
+$\CTerm{\Equate{V_1}{V_2}{\Equate{W_1}{W_2}{M}}}$.
+Mismatched constructors ($\CTerm{\Equate{\Succ{V}}{\Zero}{M}}$,
+$\CTerm{\Equate{\Cons{V}{W}}{\Nil}{M}}$, etc.)\ reduce to $\CTerm{\Fail}$.
+The \textsc{cycle} rule detects cyclic constraints
+($\CTerm{\Equate{V}{\Succ{V}}{M}}$, $\CTerm{\Equate{W}{\Cons{V}{W}}{M}}$,
+etc.)\ and reduces them to $\CTerm{\Fail}$.
+
+\paragraph{Discussion}
+The key point is not the magnitude of the improvement but its
+\emph{trustworthiness}: because every rewrite is a validated equation, the
+optimiser cannot change the observable behaviour of the program. This is a
+stronger guarantee than is typical for compiler optimisations, and it is a
+direct consequence of basing the implementation on the algebraic theory.

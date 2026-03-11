@@ -11,6 +11,8 @@ pub struct Config {
     pub timeout_secs: u64,
     pub occurs_check: bool,
     pub eager_vars: bool,
+    pub strict: bool,
+    pub first_only: bool,
 }
 
 impl Default for Config {
@@ -21,6 +23,8 @@ impl Default for Config {
             timeout_secs: 60,
             occurs_check: true,
             eager_vars: false,
+            strict: false,
+            first_only: false,
         }
     }
 }

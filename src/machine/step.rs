@@ -1,6 +1,7 @@
 use bumpalo::Bump;
 use smallvec::{smallvec, SmallVec};
 
+use super::config::config;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
 use super::senv::{SuspAt, SuspEnv};
@@ -137,6 +138,17 @@ impl<'a> Machine<'a> {
                         arena,
                         cclos: (cont, new_env),
                         stack,
+                        lenv,
+                        senv,
+                        done: false,
+                    })
+                }
+                _ if config().strict => {
+                    let new_stack = stack.push(arena, StkFrame::To(cont), env);
+                    Step::Continue(Machine {
+                        arena,
+                        cclos: (inner, env),
+                        stack: new_stack,
                         lenv,
                         senv,
                         done: false,
