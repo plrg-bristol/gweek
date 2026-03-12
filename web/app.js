@@ -1,5 +1,5 @@
 const EXAMPLES = {
-    coins: `-- Coin change: how many ways to make 50
+    coins: `-- Coin change: how many ways to make 20
 -- using coins of value 1, 2, or 10?
 
 add :: Nat -> Nat -> Nat
@@ -7,18 +7,18 @@ add n m = case m of
     Z -> n
   | S z -> S (add n z).
 
-coin :: Nat -> Nat
-coin n = 1 <> 2 <> 10.
+coin :: Nat
+coin = 1 <> 2 <> 10.
 
 change :: Nat -> [Nat]
 change n = case n of
     Z -> []
-  | S m -> let c = coin 0 in
+  | S m -> let c = coin in
             exists rest :: Nat.
             add c rest =:= n.
             c : change rest.
 
-change 50.`,
+change 20.`,
 
     perm: `-- Generate all permutations of [1,2,3,4,5,6]
 -- by non-deterministic insertion
