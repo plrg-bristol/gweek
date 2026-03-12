@@ -24,8 +24,12 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
       - name: Install wasm-pack
-        run: cargo install wasm-pack
+        run: which wasm-pack || cargo install wasm-pack
 
       - name: Build WASM
         run: wasm-pack build --target web --out-dir web/pkg --no-typescript
@@ -36,10 +40,10 @@ jobs:
           rm -f web/pkg/package.json
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: web/
 
@@ -52,4 +56,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
