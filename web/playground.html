@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GWEEK Playground</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="crt">
+        <div class="scanlines"></div>
+        <div class="playground">
+            <!-- Header -->
+            <div class="pg-header">
+                <a href="index.html" class="pg-logo">GWEEK</a>
+                <div class="pg-toolbar-group">
+                    <select class="example-select" id="examples">
+                        <option value="">-- examples --</option>
+                        <option value="coins">coins</option>
+                        <option value="perm">permutations</option>
+                        <option value="pythagorean">pythagorean</option>
+                        <option value="nqueens">n-queens</option>
+                        <option value="fair">fair search</option>
+                        <option value="hello">hello</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Toolbar -->
+            <div class="pg-toolbar">
+                <!-- Strategy -->
+                <div class="pg-toolbar-group">
+                    <span class="pg-toolbar-label">Strategy:</span>
+                    <input type="radio" name="strategy" value="bfs" id="strat-bfs" class="strategy-btn" checked>
+                    <label for="strat-bfs" class="strategy-label">BFS</label>
+                    <input type="radio" name="strategy" value="dfs" id="strat-dfs" class="strategy-btn">
+                    <label for="strat-dfs" class="strategy-label">DFS</label>
+                    <input type="radio" name="strategy" value="iddfs" id="strat-iddfs" class="strategy-btn">
+                    <label for="strat-iddfs" class="strategy-label">IDDFS</label>
+                    <input type="radio" name="strategy" value="fair" id="strat-fair" class="strategy-btn">
+                    <label for="strat-fair" class="strategy-label">FAIR</label>
+                </div>
+
+                <div class="pg-toolbar-divider"></div>
+
+                <!-- Flags -->
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-optimize" class="flag-check">
+                    <label for="flag-optimize" class="flag-label">-o</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-first" class="flag-check">
+                    <label for="flag-first" class="flag-label">--first</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-strict" class="flag-check">
+                    <label for="flag-strict" class="flag-label">--strict</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-eager" class="flag-check">
+                    <label for="flag-eager" class="flag-label">--eager-vars</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-no-occurs" class="flag-check">
+                    <label for="flag-no-occurs" class="flag-label">--no-occurs-check</label>
+                </div>
+
+                <div class="pg-toolbar-divider"></div>
+
+                <!-- Timeout -->
+                <div class="pg-toolbar-group">
+                    <label for="flag-timeout" class="flag-label">--timeout</label>
+                    <input type="number" id="flag-timeout" class="timeout-input" value="30" min="1" max="300">
+                    <span class="flag-label">s</span>
+                </div>
+
+                <div class="pg-toolbar-divider"></div>
+
+                <!-- Run -->
+                <button class="run-btn" id="run-btn" disabled>RUN</button>
+            </div>
+
+            <!-- Editor + Output -->
+            <div class="pg-main">
+                <div class="pg-editor-pane">
+                    <div class="pg-pane-header">source</div>
+                    <textarea class="pg-editor" id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                </div>
+                <div class="pg-output-pane">
+                    <div class="pg-pane-header">output</div>
+                    <div class="pg-output" id="output"><span class="loading">Loading WASM runtime...</span></div>
+                </div>
+            </div>
+
+            <!-- Status bar -->
+            <div class="pg-status">
+                <span id="status">Initializing...</span>
+                <span>Ctrl+Enter to run/stop</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

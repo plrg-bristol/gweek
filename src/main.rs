@@ -5,11 +5,9 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use bumpalo::Bump;
 use chumsky::prelude::Simple;
 
-use crate::machine::{translate::translate, Config, Strategy};
-
-mod machine;
-mod parser;
-mod type_check;
+use gweek::machine::{self, translate::translate, Config, Strategy};
+use gweek::parser;
+use gweek::type_check;
 
 const USAGE: &str = "\
 Usage: gweek [OPTIONS] <source_file>
@@ -167,8 +165,10 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::machine::{run, Strategy};
+    use bumpalo::Bump;
+    use gweek::machine::{self, translate::translate, run, Strategy};
+    use gweek::parser;
+    use std::fs;
 
     fn run_example(path: &str, strategy: Strategy) -> usize {
         run_example_inner(path, strategy, false)

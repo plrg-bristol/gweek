@@ -4,7 +4,7 @@ add n m = case m of
   | S z -> S (add n z).
 
 coin :: Nat -> Nat
-coin n = 1 <> 2 <> 3.
+coin n = 1 <> 2 <> 10.
 
 change :: Nat -> [Nat]
 change n = case n of
@@ -14,4 +14,4 @@ change n = case n of
             add c rest =:= n.
             c : change rest.
 
-change 7.
+change 50.

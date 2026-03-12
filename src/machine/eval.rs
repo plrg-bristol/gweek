@@ -1,5 +1,9 @@
 use std::collections::{HashSet, VecDeque};
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use bumpalo::Bump;
 
@@ -23,43 +27,48 @@ pub enum Strategy {
 pub fn eval<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) {
     let cfg = config();
     let arena = Bump::new();
-    eval_with_arena(&arena, comp, vals, cfg.strategy, true, cfg.timeout_secs);
-}
-
-/// Run without output (for tests). Creates its own runtime arena.
-pub fn run<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, print: bool) -> usize {
-    let arena = Bump::new();
-    run_with_arena(&arena, comp, vals, strategy, print)
-}
-
-fn eval_with_arena<'r>(
-    arena: &'r Bump,
-    comp: &'r MComputation<'r>,
-    vals: &[&'r MValue<'r>],
-    strategy: Strategy,
-    print: bool,
-    timeout_secs: u64,
-) {
-    let env = import_env(arena, vals);
-    let deadline = Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let (solns, timed_out) = run_internal(arena, comp, env, strategy, print, deadline);
+    let env = import_env(&arena, vals);
+    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let mut on_solution = |s: &str| println!("> {}", s);
+    let (solns, timed_out) = run_internal(&arena, comp, env, cfg.strategy, deadline, &mut on_solution);
     if timed_out {
-        println!(">>> timed out after {}s, {} solutions found", timeout_secs, solns);
+        println!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns);
     } else {
         println!(">>> {} solutions", solns);
     }
 }
 
-fn run_with_arena<'r>(
-    arena: &'r Bump,
-    comp: &'r MComputation<'r>,
-    vals: &[&'r MValue<'r>],
-    strategy: Strategy,
-    print: bool,
-) -> usize {
-    let env = import_env(arena, vals);
+/// Collect all solutions into a String (for WASM).
+pub fn eval_collect<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) -> String {
+    let cfg = config();
+    let arena = Bump::new();
+    let env = import_env(&arena, vals);
+    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let mut solutions = Vec::new();
+    let (solns, timed_out) = {
+        let mut on_solution = |s: &str| solutions.push(format!("> {}", s));
+        run_internal(&arena, comp, env, cfg.strategy, deadline, &mut on_solution)
+    };
+    if timed_out {
+        solutions.push(format!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns));
+    } else {
+        solutions.push(format!(">>> {} solutions", solns));
+    }
+    solutions.join("\n")
+}
+
+/// Run without output (for tests). Creates its own runtime arena.
+pub fn run<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, print: bool) -> usize {
+    let arena = Bump::new();
+    let env = import_env(&arena, vals);
     let deadline = Instant::now() + std::time::Duration::from_secs(3600);
-    run_internal(arena, comp, env, strategy, print, deadline).0
+    if print {
+        let mut on_solution = |s: &str| println!("> {}", s);
+        run_internal(&arena, comp, env, strategy, deadline, &mut on_solution).0
+    } else {
+        let mut on_solution = |_: &str| {};
+        run_internal(&arena, comp, env, strategy, deadline, &mut on_solution).0
+    }
 }
 
 /// Build an Env from the compile-time list of top-level values.
@@ -76,14 +85,14 @@ fn run_internal<'a>(
     comp: &'a MComputation<'a>,
     env: Env<'a>,
     strategy: Strategy,
-    print: bool,
     deadline: Instant,
+    on_solution: &mut dyn FnMut(&str),
 ) -> (usize, bool) {
     match strategy {
-        Strategy::Bfs => eval_bfs(arena, comp, env, print, deadline),
-        Strategy::Dfs => eval_dfs(arena, comp, env, print, deadline),
-        Strategy::Iddfs => eval_iddfs(arena, comp, env, print, deadline),
-        Strategy::Fair => eval_fair(arena, comp, env, print, deadline),
+        Strategy::Bfs => eval_bfs(arena, comp, env, deadline, on_solution),
+        Strategy::Dfs => eval_dfs(arena, comp, env, deadline, on_solution),
+        Strategy::Iddfs => eval_iddfs(arena, comp, env, deadline, on_solution),
+        Strategy::Fair => eval_fair(arena, comp, env, deadline, on_solution),
     }
 }
 
@@ -99,12 +108,10 @@ fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) 
 }
 
 /// Record a solution; returns true if we should stop (--first mode).
-fn record_solution(m: &Machine, solns: &mut usize, print: bool) -> bool {
+fn record_solution(m: &Machine, solns: &mut usize, on_solution: &mut dyn FnMut(&str)) -> bool {
     if let MComputation::Return(v) = m.cclos.0 {
         if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
-            if print {
-                println!("> {}", s);
-            }
+            on_solution(&s);
             *solns += 1;
             if config().first_only {
                 return true;
@@ -114,7 +121,7 @@ fn record_solution(m: &Machine, solns: &mut usize, print: bool) -> bool {
     false
 }
 
-fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
+fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     let mut machines = vec![fresh_machine(arena, comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
@@ -127,7 +134,7 @@ fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
             }
             for m in m.run_to_branch() {
                 if m.done {
-                    if record_solution(&m, &mut solns, print) {
+                    if record_solution(&m, &mut solns, on_solution) {
                         return (solns, false);
                     }
                 } else {
@@ -140,7 +147,7 @@ fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
     (solns, false)
 }
 
-fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
+fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     let mut stack = vec![fresh_machine(arena, comp, env)];
     let mut solns = 0;
     let mut iters = 0u32;
@@ -151,7 +158,7 @@ fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
         }
         for m in m.run_to_branch().into_iter().rev() {
             if m.done {
-                if record_solution(&m, &mut solns, print) {
+                if record_solution(&m, &mut solns, on_solution) {
                     return (solns, false);
                 }
             } else {
@@ -162,7 +169,7 @@ fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print
     (solns, false)
 }
 
-fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
+fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
     let mut seen = HashSet::new();
@@ -186,9 +193,7 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, pri
                     if let MComputation::Return(v) = m.cclos.0 {
                         if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
                             if seen.insert(s.clone()) {
-                                if print {
-                                    println!("> {}", s);
-                                }
+                                on_solution(&s);
                                 solns += 1;
                                 if config().first_only {
                                     return (solns, false);
@@ -210,7 +215,7 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, pri
     (solns, false)
 }
 
-fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, print: bool, deadline: Instant) -> (usize, bool) {
+fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     const QUOTA: usize = 10000;
     let mut queue = VecDeque::new();
     queue.push_back(fresh_machine(arena, comp, env));
@@ -232,7 +237,7 @@ fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, prin
             steps += 1;
             for m in m.run_to_branch().into_iter().rev() {
                 if m.done {
-                    if record_solution(&m, &mut solns, print) {
+                    if record_solution(&m, &mut solns, on_solution) {
                         return (solns, false);
                     }
                 } else {

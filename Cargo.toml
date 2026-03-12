@@ -3,6 +3,9 @@ name = "gweek"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [features]
 opt-stats = []
 
@@ -11,6 +14,11 @@ ariadne = "0.4"
 bumpalo = { version = "3.20.2", features = ["collections"] }
 chumsky = "0.9"
 smallvec = "1.15.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-time = "1"
+getrandom = { version = "0.2", features = ["js"] }
 
 [lints.rust]
 unused = "allow"
