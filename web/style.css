@@ -494,37 +494,82 @@ body {
     flex-shrink: 0;
 }
 
-/* Editor */
-.pg-editor {
+/* Editor wrapper — layers textarea over highlight pre */
+.pg-editor-wrap {
     flex: 1;
-    background: var(--bg);
-    color: var(--green);
-    border: none;
-    outline: none;
-    resize: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.pg-highlight,
+.pg-editor {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
     padding: 0.8rem;
+    border: none;
     font-family: var(--font-mono);
     font-size: 14px;
     line-height: 1.6;
     tab-size: 4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow: auto;
+}
+
+.pg-highlight {
+    background: var(--bg);
+    color: var(--green);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.pg-highlight code {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    color: inherit;
+}
+
+.pg-editor {
+    background: transparent;
+    color: transparent;
     caret-color: var(--green);
+    outline: none;
+    resize: none;
+    z-index: 2;
+    -webkit-text-fill-color: transparent;
 }
 
 .pg-editor::selection {
     background: rgba(0, 255, 65, 0.2);
+    -webkit-text-fill-color: transparent;
 }
 
-.pg-editor::-webkit-scrollbar {
+.pg-editor::-webkit-scrollbar,
+.pg-highlight::-webkit-scrollbar {
     width: 8px;
 }
 
-.pg-editor::-webkit-scrollbar-track {
+.pg-editor::-webkit-scrollbar-track,
+.pg-highlight::-webkit-scrollbar-track {
     background: var(--bg);
 }
 
-.pg-editor::-webkit-scrollbar-thumb {
+.pg-editor::-webkit-scrollbar-thumb,
+.pg-highlight::-webkit-scrollbar-thumb {
     background: var(--border-solid);
 }
+
+/* Syntax highlighting tokens */
+.hl-keyword { color: var(--cyan); }
+.hl-type { color: var(--amber); }
+.hl-operator { color: var(--red); }
+.hl-number { color: #88ff88; }
+.hl-comment { color: var(--text-dim); font-style: italic; }
 
 /* Output */
 .pg-output {

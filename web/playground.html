@@ -84,7 +84,10 @@
             <div class="pg-main">
                 <div class="pg-editor-pane">
                     <div class="pg-pane-header">source</div>
-                    <textarea class="pg-editor" id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                    <div class="pg-editor-wrap">
+                        <pre class="pg-highlight" id="highlight" aria-hidden="true"><code id="highlight-code"></code></pre>
+                        <textarea class="pg-editor" id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                    </div>
                 </div>
                 <div class="pg-output-pane">
                     <div class="pg-pane-header">output</div>

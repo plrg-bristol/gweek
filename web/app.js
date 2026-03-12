@@ -117,6 +117,73 @@ hello xs = exists ys :: [Nat]. case ys of
 hello [1, 2, 3].`,
 };
 
+// ── Syntax Highlighting ─────────────────────────
+
+const highlightCode = document.getElementById('highlight-code');
+const highlightPre = document.getElementById('highlight');
+
+function highlight(source) {
+    // Process line by line so comments don't interfere with other tokens
+    const lines = source.split('\n');
+    const highlighted = lines.map(line => {
+        // Check for comment
+        const commentIdx = line.indexOf('--');
+        if (commentIdx === 0) {
+            return `<span class="hl-comment">${esc(line)}</span>`;
+        }
+        let code = line;
+        let commentHtml = '';
+        if (commentIdx > 0) {
+            code = line.slice(0, commentIdx);
+            commentHtml = `<span class="hl-comment">${esc(line.slice(commentIdx))}</span>`;
+        }
+        return highlightLine(code) + commentHtml;
+    });
+    return highlighted.join('\n');
+}
+
+function highlightLine(line) {
+    // Tokenize with regex, preserving whitespace
+    const tokens = line.match(/(\s+|=:=|<>|::|->|\d+|\w+|.)/g);
+    if (!tokens) return '';
+    return tokens.map(tok => {
+        if (/^\s+$/.test(tok)) return tok;
+        if (isKeyword(tok)) return `<span class="hl-keyword">${esc(tok)}</span>`;
+        if (isType(tok)) return `<span class="hl-type">${esc(tok)}</span>`;
+        if (isOperator(tok)) return `<span class="hl-operator">${esc(tok)}</span>`;
+        if (/^\d+$/.test(tok)) return `<span class="hl-number">${esc(tok)}</span>`;
+        return esc(tok);
+    }).join('');
+}
+
+function isKeyword(tok) {
+    return /^(case|of|let|in|exists|if|then|else|fail|S|Z)$/.test(tok);
+}
+
+function isType(tok) {
+    return /^(Nat|Bool|List)$/.test(tok);
+}
+
+function isOperator(tok) {
+    return /^(=:=|<>|::|->)$/.test(tok);
+}
+
+function esc(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function updateHighlight() {
+    // Append a trailing newline so the pre matches the textarea's scroll height
+    highlightCode.innerHTML = highlight(editor.value) + '\n';
+}
+
+function syncScroll() {
+    highlightPre.scrollTop = editor.scrollTop;
+    highlightPre.scrollLeft = editor.scrollLeft;
+}
+
+// ── Main ────────────────────────────────────────
+
 const editor = document.getElementById('editor');
 const output = document.getElementById('output');
 const runBtn = document.getElementById('run-btn');
@@ -240,6 +307,9 @@ function runCode() {
 // Event listeners
 runBtn.addEventListener('click', runCode);
 
+editor.addEventListener('input', updateHighlight);
+editor.addEventListener('scroll', syncScroll);
+
 editor.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
@@ -252,6 +322,7 @@ editor.addEventListener('keydown', (e) => {
         const end = editor.selectionEnd;
         editor.value = editor.value.substring(0, start) + '    ' + editor.value.substring(end);
         editor.selectionStart = editor.selectionEnd = start + 4;
+        updateHighlight();
     }
 });
 
@@ -259,6 +330,7 @@ exampleSelect.addEventListener('change', () => {
     const key = exampleSelect.value;
     if (key && EXAMPLES[key]) {
         editor.value = EXAMPLES[key];
+        updateHighlight();
         output.innerHTML = '<span style="color: var(--text-dim)">Example loaded. Hit RUN to execute.</span>';
     }
     exampleSelect.value = '';
@@ -266,4 +338,5 @@ exampleSelect.addEventListener('change', () => {
 
 // Init
 editor.value = EXAMPLES.coins;
+updateHighlight();
 worker = spawnWorker();
