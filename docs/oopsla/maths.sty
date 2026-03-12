@@ -1,0 +1,47 @@
+\RequirePackage{xparse}
+\RequirePackage{mathtools}
+\RequirePackage{jmsdelim}
+
+%% Defining equality and equivalence
+\NewDocumentCommand{\defeq}{}{\stackrel{\mathclap{\mbox{\tiny def}}}{=}}
+\newcommand{\defequiv}{\stackrel{\mathclap{\mbox{\tiny def}}}{\equiv}}
+
+%% Some bracket shorthands
+\NewDocumentCommand{\prn}{m}{\DelimPrn{#1}}
+\NewDocumentCommand{\brc}{m}{\DelimBrc{#1}}
+\NewDocumentCommand{\brk}{m}{\DelimBrk{#1}}
+\NewDocumentCommand{\gls}{m}{\DelimGl{#1}}
+\NewDocumentCommand{\sem}{m}{\DelimBbrk{#1}}
+
+%% Sets
+\NewDocumentCommand{\FinSub}{}{\subseteq_\text{fin}}
+\NewDocumentCommand{\SetComp}{mm}{\DelimBetweenSurround{\lbrace}{\vert}{\rbrace}{#1}{#2}}
+\NewDocumentCommand{\Powerset}{so}{
+  \mathcal{P}\IfNoValueTF{#2}{}{
+    \IfBooleanTF{#1}{\DelimPrn{#2}}{#2}
+  }
+}
+
+%% Functions
+\NewDocumentCommand{\FunctionSet}{smm}{
+  \IfBooleanTF{#1}{\DelimPrn{#2 \to #3}}{#2 \to #3}
+}
+\NewDocumentCommand{\Surj}{}{\twoheadrightarrow}
+\NewDocumentCommand{\Image}{sm}{
+  \IfBooleanTF{#1}{\mathop{\text{im}}\DelimPrn{#2}}{\mathop{\text{im}} #2}
+}
+\NewDocumentCommand{\DepFun}{mmm}{\DelimPrn{#1 : #2} \to #3}
+
+%% Lists
+\NewDocumentCommand{\List}{sm}{\SuperscriptS{#1}{#2}{\ast}}
+\NewDocumentCommand{\FinInfList}{sm}{\SuperscriptS{#1}{#2}{\infty}}
+\NewDocumentCommand{\ListBrk}{m}{\DelimBrk{#1}}
+\NewDocumentCommand{\ListComp}{mm}{\DelimBetweenSurround{[}{\vert}{]}{#1}{#2}}
+\NewDocumentCommand{\EmptyList}{}{[\,]}
+\NewDocumentCommand{\ConsList}{mm}{#1{:}#2}
+\NewDocumentCommand{\ConcatOp}{}{\mathrel{+\!\!+}}
+
+%% Booleans
+\NewDocumentCommand{\Booleans}{}{\mathbb{B}}
+\NewDocumentCommand{\TrueBool}{}{\textbf{tt}}
+\NewDocumentCommand{\FalseBool}{}{\textbf{ff}}

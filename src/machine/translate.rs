@@ -9,11 +9,13 @@ use super::mterms::{MComputation, MValue};
 
 struct TEnv {
     env: Vec<String>,
+    /// Names of nullary functions (thunks that need forcing at use sites).
+    nullary: HashSet<String>,
 }
 
 impl TEnv {
     fn new() -> TEnv {
-        TEnv { env: vec![] }
+        TEnv { env: vec![], nullary: HashSet::new() }
     }
 
     /*
@@ -30,7 +32,16 @@ impl TEnv {
             .unwrap_or_else(|| panic!("Variable {} not found in environment", v))
     }
 
+    fn is_nullary(&self, v: &str) -> bool {
+        self.nullary.contains(v)
+    }
+
     fn bind(&mut self, v: &str) {
+        self.env.push(v.to_owned())
+    }
+
+    fn bind_nullary(&mut self, v: &str) {
+        self.nullary.insert(v.to_owned());
         self.env.push(v.to_owned())
     }
 
@@ -60,8 +71,13 @@ pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, 
         match decl {
             Decl::FuncType { .. } => (),
             Decl::Func { name, args, body } => {
+                let nullary = args.is_empty();
                 let result = translate_func(arena, &name, args, body, &mut tenv);
-                tenv.bind(&name);
+                if nullary {
+                    tenv.bind_nullary(&name);
+                } else {
+                    tenv.bind(&name);
+                }
                 env.push(result);
             }
             Decl::Stmt(stmt) => {
@@ -475,7 +491,14 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
         Expr::List(elems) => translate_list(arena, &elems, tenv),
         Expr::Ident(s) => {
             let var = arena.alloc(MValue::Var(tenv.find(&s)));
-            arena.alloc(MComputation::Return(var))
+            if tenv.is_nullary(&s) {
+                let ret = arena.alloc(MComputation::Return(var));
+                let var0 = arena.alloc(MValue::Var(0));
+                let force = arena.alloc(MComputation::Force(var0));
+                arena.alloc(MComputation::Bind { comp: ret, cont: force })
+            } else {
+                arena.alloc(MComputation::Return(var))
+            }
         }
         Expr::Nat(n) => translate_nat(arena, n),
         Expr::Bool(b) => {

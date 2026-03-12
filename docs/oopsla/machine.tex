@@ -1,0 +1,203 @@
+\begin{figure*}
+  \input{cbpv-machine}
+  \caption{Abstract Machine. A basic machine $\SLMachine{M}{K}$ carries a
+    logic context $\Gamma$, a computation $\CTerm{M}$, a suspension environment
+    $\Susp{S}$, and a stack $\Stk{K}$. The bind transition suspends
+    $\CTerm{M}$ in $\Susp{S}$ rather than evaluating it immediately; the
+    forcing transition reverses this when $x$ is needed. Narrowing transitions
+    fire only when a logical variable blocks the current computation.}
+  \label{figure:machine}
+\end{figure*}
+
+The CBPV term produced by the translation of \cref{section:ir} is not evaluated
+directly. Instead, it gives rise to a \emph{nondeterministic search tree}: a
+(possibly infinite) tree whose internal nodes are choice points and whose leaves
+are either results or failures. The task of execution is to explore this tree
+and collect the results. We decompose this task into two parts: a
+\emph{basic machine} that steps a single CBPV computation until it reaches a
+branch point, and a \emph{search strategy} that manages the collection of
+active machines.
+
+This decomposition is a direct realisation of the abstract machine of
+\parencite{jones_2026}. That paper organises machine states into
+\emph{configurations}: binary trees whose leaves are basic machines or
+failures. A configuration transition selects a non-terminal leaf and steps it,
+possibly splitting it into further branches. The theory is silent on
+\emph{which} leaf to step:
+%
+\begin{quote}
+  \emph{``Observe that this is highly nondeterministic: it may be that one or
+  more leaves of $\Conf{C}$ may be able to make a basic transition! We leave
+  the choice to the implementer, who may use any strategy to explore the tree
+  (e.g.~DFS, BFS, parallel).''} \hfill---\parencite{jones_2026}
+\end{quote}
+%
+\noindent This freedom is justified by the denotational semantics: because the
+semantics is based on the lower powerdomain, which is insensitive to the order
+of exploration, all strategies produce the same set of results for terminating
+programs.
+
+\subsection{The Basic Machine}
+
+The basic machine (\cref{figure:machine}) is a state machine whose transitions
+correspond to the evaluation of a single CBPV computation. Its state consists
+of:
+%
+\begin{itemize}
+  \item A \emph{computation closure} $(\CTerm{M}, \rho)$: the current
+    computation paired with an environment $\rho$ mapping de Bruijn indices to
+    value closures.
+  \item A \emph{stack} $\Stk{K}$: a list of frames representing pending
+    continuations ($\textsf{to}\ x.\, \CTerm{N}$), argument values
+    ($\VTerm{V}$), and suspension-set frames that record which suspension to
+    update when a forced computation completes.
+  \item A \emph{logic context} $\Gamma$: a record of logical variables, their
+    first-order types, and their current bindings.
+  \item A \emph{suspension environment} $\Susp{S}$: a map from suspension
+    identifiers to deferred computation closures (discussed in
+    \cref{section:suspensions}).
+\end{itemize}
+
+\noindent The machine steps by pattern-matching on the current computation. Most
+transitions are standard CBPV reductions: a $\CTerm{\Return{V}}$ pops a
+continuation from the stack and substitutes $\VTerm{V}$ into the continuation
+body; an application $\CTerm{\CApp{M}{V}}$ pushes $\VTerm{V}$ onto the stack;
+forcing a thunk $\CTerm{\Force*{\Thunk{M}}}$ unwraps the suspended computation;
+a case expression selects the appropriate branch based on the head constructor
+of the scrutinee. Each of these transitions corresponds to a $\beta$-law of the
+equational theory (\cref{figure:equations}).
+
+The machine is structured around a tight inner loop that executes deterministic
+steps until a branch point (choice or narrowing) or a terminal state (return
+with empty stack, or failure) is reached. Control is returned to the search
+strategy only at points where a genuine scheduling decision must be made; all
+deterministic transitions are executed in place.
+
+\subsection{Effect Transitions}
+
+The FLP effects produce the branching structure of the search tree.
+
+\paragraph{Choice}
+When the machine encounters $\CTerm{\Choice{M}{N}}$, it produces a
+\emph{branch point}: two copies of the current state, one continuing with
+$\CTerm{M}$ and the other with $\CTerm{N}$. This is the fundamental source of
+nondeterminism. The equational theory guarantees that choice is associative,
+commutative, and idempotent, so the tree's branching structure does not affect
+the set of results.
+
+\paragraph{Failure}
+$\CTerm{\Fail}$ discards the current branch: it is a leaf of the search tree
+with no result.
+
+\paragraph{Logical variables}
+$\CTerm{\Exists{x}[\sigma]{M}}$ allocates a fresh entry in the logic context
+with type $\sigma$ and no binding, extends the environment with a reference to
+this entry, and continues with $\CTerm{M}$. The variable $x$ is initially
+unconstrained; its value is determined later by narrowing or unification.
+
+\paragraph{Narrowing}
+The critical interaction between logical variables and case analysis is handled
+by narrowing. When the machine encounters a case expression whose scrutinee
+resolves---through the environment and logic context---to an \emph{unbound}
+logical variable $x : \sigma$, it cannot proceed: the variable's head
+constructor is unknown. The machine responds by \emph{splitting} into branches,
+one for each constructor of $\sigma$. In each branch, $x$ is bound to the
+appropriate constructor applied to fresh logical variables.
+
+For example, if $x : \NatT$ is unbound and the machine reaches
+$\textsf{ifz}(x; \ldots)$, it produces two branches: one binding $x$ to
+$\VTerm{\Zero}$, and one binding $x$ to $\VTerm{\Succ{y}}$ for a fresh
+$y : \NatT$. This corresponds to the \emph{parameter equation}
+$\CTerm{\Exists{n}[\NatT]{M}} =
+\CTerm{\Choice{\CSubst{M}{\Zero}{n}}{\Exists{m}[\NatT]{\CSubst{M}{\Succ{m}}{n}}}}$
+of \cref{figure:equations}: the equation says that introducing a logical
+variable of type $\NatT$ is the same as choosing between zero and the successor
+of a fresh variable.
+
+The machine narrows only when a variable \emph{blocks} a computation, in the
+sense of \parencite{jones_2026}: the next step directly depends on the
+variable's value. This strategy, called \emph{weak head narrowing}, ensures that
+narrowing happens only when necessary. Its completeness---every closed value of
+type $\sigma$ is eventually considered as a possible instantiation---is proved
+in \parencite{jones_2026}.
+
+\paragraph{Unification}
+$\CTerm{\Equate{V}{W}{M}}$ attempts to unify $\VTerm{V}$ and $\VTerm{W}$ using
+the standard first-order unification algorithm. The algorithm processes a queue
+of pairs of value closures, decomposing constructors and binding variables via
+the logic context. Three outcomes are possible: \emph{success}, in which the
+logic context is updated with the most general unifier and execution continues
+with $\CTerm{M}$; \emph{failure}, in which the values have incompatible head
+constructors and the branch is discarded; or \emph{suspension}, in which one of
+the values refers to a deferred computation that must be forced before
+unification can proceed.
+
+An optional occurs check prevents the construction of infinite terms (e.g.\
+$x = \textsf{S}(x)$). It can be disabled for performance at the cost of
+soundness.
+
+\subsection{Search Strategies}
+\label{subsection:search-strategies}
+
+The search tree generated by the machine must be explored to collect results.
+\Gweek{} implements four strategies, each corresponding to a different
+traversal of the tree.
+
+\paragraph{Breadth-first search (\BFS{})}
+The default strategy maintains two vectors: the current generation and the next
+generation. Each machine in the current generation is stepped to its next branch
+point; the resulting branches are placed in the next generation. When the
+current generation is exhausted, the vectors are swapped. \BFS{} is
+\emph{complete}---if a solution exists at any finite depth, it will be
+found---and \emph{fair}: no branch is starved. Its limitation is memory: the
+number of active machines can grow exponentially in the depth of the tree.
+
+\paragraph{Depth-first search (\DFS{})}
+\DFS{} maintains a stack and always steps the most recently created branch. It
+uses memory proportional to the depth of the tree, but it is
+\emph{incomplete}: if the tree has an infinite branch, \DFS{} may follow it
+forever. Infinite branches arise naturally when logical variables of type
+$\NatT$ or $\ListT{A}$ are narrowed, so \DFS{} is appropriate only for finite
+search spaces or when a single solution is sufficient.
+
+\paragraph{Iterative deepening (\IDDFS{})}
+Iterative deepening combines the completeness of \BFS{} with the memory
+efficiency of \DFS{}. The strategy runs \DFS{} with a depth limit that starts
+at~1 and doubles after each complete pass. Solutions found in previous passes
+are deduplicated by a hash set of previously seen outputs. The overhead of
+re-exploring shallow nodes is bounded by a constant factor.
+
+\paragraph{Fair round-robin (\Fair{})}
+The fair strategy maintains a queue of \emph{threads}, where each thread is a
+local \DFS{} work stack. A single thread is created initially; new threads are
+created at branch points. When the machine encounters a branch while executing a
+thread, the first alternative continues in the current thread and each remaining
+alternative is placed in the queue as a new single-machine thread. Each thread
+is allowed a fixed quota of steps (currently $10{,}000$). If a thread exhausts
+its quota without completing, its remaining work stack is re-enqueued as a
+single entry, and the scheduler moves to the next thread.
+
+The key invariant is that \emph{branch alternatives are distributed across
+threads}, so every branch receives its own share of the round-robin schedule.
+Within a thread, execution is depth-first, so the local work stack remains
+small (proportional to the depth of the sub-tree being explored). To bound
+memory, the total number of threads is capped at a configurable maximum
+(currently $10{,}000$); when the cap is reached, new branch alternatives remain
+in their parent thread and are explored depth-first. This degrades gracefully:
+the branches that have already been distributed across threads continue to
+receive fair scheduling, while only new branches within a full thread lose
+individual time-slicing.
+
+This strategy is both complete and fair: every branch is eventually explored,
+and no branch is starved indefinitely. It avoids the memory blow-up of \BFS{}
+while retaining completeness, and is particularly effective for programs that
+mix finite branching (explicit choice) with infinite branching (logical variable
+narrowing).
+
+\paragraph{Discussion}
+The theoretical licence to choose any exploration order is powerful, but it
+places a practical burden on the programmer. In general, \BFS{} is the safest
+default for programs involving logical variables, as it does not require the
+programmer to reason about the finiteness of branches. \DFS{} is fastest for
+finite search spaces. The fair strategy offers a practical compromise when the
+structure of the search space is unknown.

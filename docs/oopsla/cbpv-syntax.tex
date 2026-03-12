@@ -1,0 +1,39 @@
+\begin{minipage}{0.48\textwidth}
+  \fbox{\text{value types}}
+  \[
+    \begin{array}{rcll}
+           A    & \Coloneqq\ & \UnitT                 & \text{unit} \\
+                &            & \NatT                  & \text{nat.\ numbers} \\
+                &            & A_1 + A_2              & \text{sums} \\
+                &            & A_1 \times A_2         & \text{products} \\
+                &            & \ListT{A}              & \text{lists} \\
+                &            & \ThunkT{\CType{C}}     & \text{thunks}
+   \end{array}
+  \]
+  \fbox{\text{computation types}}
+  \[
+    \begin{array}{rcll}
+      \CType{C} & \Coloneqq\ & \ReturnerT{A}   & \text{\; returners \phantom{aaa}} \\
+                &            & A \to \CType{C} & \text{\; functions}
+    \end{array}
+  \]
+\end{minipage}
+\begin{minipage}{0.48\textwidth}
+  \fbox{\text{first-order types}}
+  \[
+    \begin{array}{rcll}
+      \sigma    & \Coloneqq\ & \UnitT                   \\
+                &            & \NatT                    \\
+                &            & \sigma_1 + \sigma_2      \\
+                &            & \sigma_1 \times \sigma_2 \\
+                &            & \ListT{\sigma}
+    \end{array}
+  \]
+  \fbox{\text{contexts}}
+  \[
+    \begin{array}{rcll}
+      \Gamma  & \Coloneqq\ &               & \text{empty ctx.} \\
+              &            & \Gamma, x : A & \text{ctx.\ extension}
+    \end{array}
+  \]
+\end{minipage}

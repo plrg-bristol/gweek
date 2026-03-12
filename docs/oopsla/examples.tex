@@ -1,0 +1,229 @@
+We now present a series of examples that illustrate the central features of
+\Gweek{} and the programming patterns they enable. These examples are chosen not
+merely to showcase functionality, but to demonstrate the interaction between the
+three FLP effects (choice, logical variables, constraints), the suspension
+mechanism, and the narrowing strategy. Each example highlights a different
+aspect of the design.
+
+\subsection{Running Functions Backwards}
+
+The paradigmatic example of FLP is `running a function backwards': given a
+standard functional definition, using logical variables and constraints to
+compute \emph{inverses}. Given the standard list concatenation:
+%
+\begin{haskellcode}
+cat :: [Nat] -> [Nat] -> [Nat]
+cat xs ys = case xs of
+      [] -> ys
+    | (x:xs) -> x : (cat xs ys).
+\end{haskellcode}
+%
+\noindent we can compute the last element of a list by searching for a
+decomposition:
+%
+\begin{haskellcode}
+last :: [Nat] -> Nat
+last xs = exists ys :: [Nat]. exists y :: Nat.
+    cat ys [y] =:= xs. y.
+\end{haskellcode}
+%
+\noindent Evaluating \mintinline{haskell}|last [1,2,3]| introduces logical
+variables \mintinline{haskell}|ys| and \mintinline{haskell}|y|, then attempts
+to unify \mintinline{haskell}|cat ys [y]| with \mintinline{haskell}|[1,2,3]|.
+The unification triggers the evaluation of \mintinline{haskell}|cat ys [y]|,
+which pattern-matches on its first argument \mintinline{haskell}|ys|. Since
+\mintinline{haskell}|ys| is a logical variable, the machine \emph{narrows}:
+it splits into a branch where $\mathit{ys} = \texttt{[]}$ and a branch where
+$\mathit{ys} = h : t$ for fresh variables $h$ and $t$. The narrowing continues
+recursively until the concatenation matches \mintinline{haskell}|[1,2,3]|,
+binding \mintinline{haskell}|y| to \mintinline{haskell}|3|.
+
+This example illustrates the completeness of weak head narrowing: the logical
+variable \mintinline{haskell}|ys| is refined \emph{only} because it appears as
+the scrutinee of a case expression inside \mintinline{haskell}|cat|. If it were
+never scrutinised, it would remain unbound.
+
+\subsection{Permutation Sort}
+
+Sorting can be expressed as a search problem: find a permutation of the input
+that is sorted. This demonstrates how nondeterministic choice (\texttt{<>})
+combines with the suspension mechanism to enable early pruning.
+%
+\begin{haskellcode}
+insert :: Nat -> [Nat] -> [Nat]
+insert x xs = case xs of
+    [] -> [x]
+  | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
+
+perm :: [Nat] -> [Nat]
+perm xs = case xs of
+    [] -> []
+  | (z:zs) -> insert z (perm zs).
+
+guard_sorted :: [Nat] -> Nat
+guard_sorted xs = case xs of
+    [] -> 0
+  | (y:ys) -> (case ys of
+      [] -> 0
+    | (z:zs) -> (let c = leq y z in guard_sorted (z:zs))).
+
+let ys = perm [5, 3, 1, 4, 2] in
+let c = guard_sorted ys in
+ys.
+\end{haskellcode}
+%
+\noindent The function \mintinline{haskell}|perm| generates all permutations
+using choice. The function \mintinline{haskell}|guard_sorted| checks
+sortedness, failing on any unsorted pair. The use of \texttt{let} bindings for
+both the permutation and the constraint means that both are \emph{suspended}.
+The suspension mechanism ensures that the sortedness check is interleaved with
+the generation: as each element of the permuted list is demanded, the check
+runs on the elements seen so far, pruning unsorted prefixes before the complete
+permutation is constructed.
+
+\subsection{N-Queens}
+
+The $n$-queens problem asks for all placements of $n$ queens on an $n \times n$
+chessboard such that no two attack each other. This example demonstrates the
+importance of \emph{forcing} constraints, as discussed in
+\cref{section:suspensions}.
+%
+\begin{haskellcode}
+safe :: Nat -> Nat -> [Nat] -> Nat
+safe q d rest = case rest of
+    [] -> 0
+  | (r:rs) -> case neq (add q d) r of
+        Z -> (case neq (add r d) q of
+            Z -> safe q (S d) rs
+          | S n -> fail)
+      | S n -> fail.
+
+queens :: [Nat] -> [Nat] -> [Nat] -> [Nat]
+queens skipped rest placed = case rest of
+    [] -> (case skipped of
+        [] -> placed
+      | (y:ys) -> fail)
+  | (q:qs) ->
+      (case safe q 1 placed of
+         Z -> (let remaining = revappend skipped qs in
+               case remaining of
+                 [] -> (q : placed)
+               | (y:ys) -> queens [] remaining (q : placed))
+       | S n -> fail)
+      <>
+      (queens (q : skipped) qs placed).
+
+queens [] [1,2,3,4,5,6,7,8] [].
+\end{haskellcode}
+%
+\noindent The safety check uses \texttt{case} expressions---not \texttt{let}
+bindings---to scrutinise the results of \mintinline{haskell}|neq|. This is
+essential: a \texttt{let} binding would suspend the check, allowing the machine
+to place queens in conflicting positions before discovering the conflict. The
+\texttt{case} expression forces the check immediately, pruning invalid branches
+at each step. The 8-queens problem finds all 92 solutions in under 200ms.
+
+\subsection{Magic Squares}
+
+A $3 \times 3$ magic square arranges the numbers 1--9 so that each row, column,
+and diagonal sums to 15. This example illustrates the dramatic effect of
+\emph{interleaving generation and constraint checking}, the second programming
+pattern of \cref{section:suspensions}.
+
+A naive approach generates all permutations and checks each:
+%
+\begin{haskellcode}
+let sq = perm [1,2,3,4,5,6,7,8,9] in
+exists a :: Nat. exists b :: Nat. (* ... *)
+sq =:= [a, b, c, d, e, f, g, h, i].
+add3 a b c =:= 15. (* ... *)
+sq.
+\end{haskellcode}
+%
+\noindent This must explore all $9! = 362{,}880$ permutations before any
+constraint prunes the search, and takes over 30 seconds.
+
+The efficient version uses an incremental selection function that
+nondeterministically picks one element from a list:
+%
+\begin{haskellcode}
+pick :: [Nat] -> [Nat] -> [Nat]
+pick skipped rest = case rest of
+    [] -> fail
+  | (x:xs) -> (x : revappend skipped xs)
+              <> (pick (x : skipped) xs).
+\end{haskellcode}
+%
+\noindent Elements are picked one at a time, and row-sum constraints are checked
+as soon as each row of three is complete. After picking $a$, $b$, $c$, the
+constraint \mintinline{haskell}|add3 a b c =:= 15| runs immediately, pruning
+the vast majority of branches before $d$, $e$, $f$ are ever chosen. This
+version completes in under 250ms---a factor of $120\times$ improvement, arising
+purely from the order in which nondeterministic choices and constraints are
+combined.
+
+\subsection{Searching over Structures}
+
+Logical variables can be used to search over structured data, demonstrating how
+narrowing lazily enumerates the inhabitants of a type.
+%
+\begin{haskellcode}
+exists xs :: [Nat]. length xs =:= 7. sum xs =:= 5. xs.
+\end{haskellcode}
+%
+\noindent The machine introduces a logic variable \mintinline{haskell}|xs| of
+type \mintinline{haskell}|[Nat]|. The constraint
+\mintinline{haskell}|length xs =:= 7| forces the machine to narrow
+\mintinline{haskell}|xs|: the function \mintinline{haskell}|length|
+case-analyses its argument, triggering a split into $\texttt{[]}$ and
+$h : t$. Only the cons branch can produce a list of length 7, so
+\mintinline{haskell}|xs| is progressively instantiated as a 7-element list of
+logic variables. The constraint \mintinline{haskell}|sum xs =:= 5| then narrows
+each element. The program finds all 462 solutions in under 100ms.
+
+\subsection{Pythagorean Triples}
+
+Logical variables over $\NatT$ can solve simple number-theoretic problems:
+%
+\begin{haskellcode}
+exists a :: Nat. exists b :: Nat. exists c :: Nat.
+add (mult a a) (mult b b) =:= (mult c c).
+c =:= 5.
+(a, (b, c)).
+\end{haskellcode}
+%
+\noindent This searches for Pythagorean triples $(a, b, c)$ with $c = 5$ by
+narrowing $a$ and $b$ over the natural numbers and checking the constraint at
+each instantiation. The constraint $c \mathbin{\texttt{=:=}} 5$ bounds the
+search, as the multiplication $c \cdot c = 25$ limits the range of $a$ and $b$.
+
+\subsection{Constraint Satisfaction}
+
+Constraint satisfaction problems are a natural fit for FLP. The following
+program colours the map of Australia with three colours such that no two
+adjacent regions share a colour:
+%
+\begin{haskellcode}
+color :: Nat -> Nat
+color n = 0 <> 1 <> 2.
+
+let wa = color 0 in let nt = color 0 in
+let sa = color 0 in let q  = color 0 in
+let nsw = color 0 in let v = color 0 in
+let t = color 0 in
+let c1 = neq wa nt in let c2 = neq wa sa in
+(* ... further adjacency constraints ... *)
+[wa, nt, sa, q, nsw, v, t].
+\end{haskellcode}
+%
+\noindent The function \mintinline{haskell}|color| returns one of three colours
+nondeterministically. The constraints \mintinline{haskell}|neq| between adjacent
+regions are suspended until the result list is constructed, at which point all
+variables must be resolved. The program finds all valid colourings.
+
+This example also illustrates the subtlety of the suspension mechanism: the
+\mintinline{haskell}|neq| constraints are bound by \texttt{let}, not forced by
+\texttt{case}. They are therefore checked only during the drain phase, after
+all colours have been chosen. For a map with many constraints, forcing the
+constraints earlier---by wrapping them in \texttt{case} expressions---would
+provide better pruning.

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GWEEK Playground</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="crt">
+        <div class="scanlines"></div>
+        <div class="playground">
+            <!-- Header -->
+            <div class="pg-header">
+                <a href="index.html" class="pg-logo">GWEEK</a>
+                <div class="pg-toolbar-group">
+                    <select class="example-select" id="examples">
+                        <option value="">-- examples --</option>
+                        <option value="coins">coins</option>
+                        <option value="perm">permutations</option>
+                        <option value="pythagorean">pythagorean</option>
+                        <option value="nqueens">n-queens</option>
+                        <option value="fair">fair search</option>
+                        <option value="hello">hello</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Toolbar -->
+            <div class="pg-toolbar">
+                <!-- Strategy -->
+                <div class="pg-toolbar-group">
+                    <span class="pg-toolbar-label">Strategy:</span>
+                    <input type="radio" name="strategy" value="bfs" id="strat-bfs" class="strategy-btn" checked>
+                    <label for="strat-bfs" class="strategy-label" data-tip="Breadth-first search (default). Complete, finds shortest solutions first.">BFS</label>
+                    <input type="radio" name="strategy" value="dfs" id="strat-dfs" class="strategy-btn">
+                    <label for="strat-dfs" class="strategy-label" data-tip="Depth-first search. Fast, but incomplete on infinite branches.">DFS</label>
+                    <input type="radio" name="strategy" value="iddfs" id="strat-iddfs" class="strategy-btn">
+                    <label for="strat-iddfs" class="strategy-label" data-tip="Iterative deepening DFS. Complete, but re-explores work at each depth.">IDDFS</label>
+                    <input type="radio" name="strategy" value="fair" id="strat-fair" class="strategy-btn">
+                    <label for="strat-fair" class="strategy-label" data-tip="Fair round-robin DFS. Complete, no re-exploration. Good for infinite branches.">FAIR</label>
+                </div>
+
+                <div class="pg-toolbar-divider"></div>
+
+                <!-- Flags -->
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-optimize" class="flag-check">
+                    <label for="flag-optimize" class="flag-label" data-tip="Enable peephole optimizer on the compiled program.">-o</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-first" class="flag-check">
+                    <label for="flag-first" class="flag-label" data-tip="Stop after finding the first solution.">--first</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-strict" class="flag-check">
+                    <label for="flag-strict" class="flag-label" data-tip="Strict bind: evaluate RHS before binding (no suspensions).">--strict</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-eager" class="flag-check">
+                    <label for="flag-eager" class="flag-label" data-tip="Eagerly resolve variable indirections in the environment.">--eager-vars</label>
+                </div>
+                <div class="pg-toolbar-group">
+                    <input type="checkbox" id="flag-no-occurs" class="flag-check">
+                    <label for="flag-no-occurs" class="flag-label" data-tip="Skip the occurs check in unification. Unsound but faster.">--no-occurs-check</label>
+                </div>
+
+                <div class="pg-toolbar-divider"></div>
+
+                <!-- Timeout -->
+                <div class="pg-toolbar-group">
+                    <label for="flag-timeout" class="flag-label" data-tip="Maximum execution time in seconds.">--timeout</label>
+                    <input type="number" id="flag-timeout" class="timeout-input" value="5" min="1" max="300">
+                    <span class="flag-label">s</span>
+                </div>
+
+                <div class="pg-toolbar-divider"></div>
+
+                <!-- Run -->
+                <button class="run-btn" id="run-btn" disabled data-tip="Run and display all results at once. No I/O overhead — use this for benchmarking.">RUN</button>
+                <button class="run-btn batch-btn" id="batch-btn" disabled data-tip="Stream results one at a time as they are found. Higher overhead, but shows progress live.">RUN (LINE-BY-LINE)</button>
+            </div>
+
+            <!-- Editor + Output -->
+            <div class="pg-main">
+                <div class="pg-editor-pane">
+                    <div class="pg-pane-header">source</div>
+                    <div class="pg-editor-wrap">
+                        <pre class="pg-highlight" id="highlight" aria-hidden="true"><code id="highlight-code"></code></pre>
+                        <textarea class="pg-editor" id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                    </div>
+                </div>
+                <div class="pg-output-pane">
+                    <div class="pg-pane-header">output</div>
+                    <div class="pg-output" id="output"><span class="loading">Loading WASM runtime...</span></div>
+                </div>
+            </div>
+
+            <!-- Status bar -->
+            <div class="pg-status">
+                <span id="status">Initializing...</span>
+                <span>Ctrl+Enter to run/stop</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

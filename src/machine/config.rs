@@ -1,34 +1,34 @@
-use std::sync::OnceLock;
+use std::cell::Cell;
 
 use super::eval::Strategy;
 
-static CONFIG: OnceLock<Config> = OnceLock::new();
+thread_local! {
+    static CONFIG: Cell<Config> = Cell::new(Config {
+        strategy: Strategy::Bfs,
+        optimize: false,
+        timeout_secs: 60,
+        occurs_check: true,
+        eager_vars: false,
+        strict: false,
+        first_only: false,
+    });
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Config {
     pub strategy: Strategy,
     pub optimize: bool,
     pub timeout_secs: u64,
     pub occurs_check: bool,
     pub eager_vars: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            strategy: Strategy::Bfs,
-            optimize: false,
-            timeout_secs: 60,
-            occurs_check: true,
-            eager_vars: false,
-        }
-    }
+    pub strict: bool,
+    pub first_only: bool,
 }
 
 pub fn init(cfg: Config) {
-    CONFIG.set(cfg).expect("config already initialized");
+    CONFIG.with(|c| c.set(cfg));
 }
 
-pub fn config() -> &'static Config {
-    CONFIG.get_or_init(Config::default)
+pub fn config() -> Config {
+    CONFIG.with(|c| c.get())
 }

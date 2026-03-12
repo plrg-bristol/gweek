@@ -1,0 +1,74 @@
+\paragraph{Functional Logic Programming Languages}
+
+The combination of functional and logic programming has a long history, surveyed
+by
+\textcite{bellia_1986,darlington_1986,hanus_1994,antoy_2010}. The most
+prominent FLP language is Curry \parencite{hanus_2013,hanus_2016}, which extends
+Haskell with logical variables, equational constraints, and nondeterministic
+functions. Curry has multiple implementations, including KiCS2
+\parencite{brassel_2011}, which compiles Curry to Haskell, and PAKCS
+\parencite{hanus_2022}, which targets Prolog. \Gweek{} is intentionally much
+simpler than Curry---it lacks type classes, modules, and I/O---but it makes the
+underlying algebraic theory explicit in its design.
+
+The Verse language \parencite{EpicGames_2023,augustsson_2023} is a recent FLP
+language whose core calculus is an untyped $\lambda$-calculus with choice and
+logical variables. Verse uses a stream semantics and supports encapsulated
+search. \Gweek{} differs from Verse in being typed, in using CBPV as its
+foundation, and in not supporting encapsulated search. As discussed in
+\parencite{jones_2026}, encapsulated search requires moving beyond algebraic
+effects to \emph{effect handlers}, and raises questions about the interaction of
+encapsulation with the commutativity and idempotence of choice.
+
+The miniKanren family of relational programming languages
+\parencite{friedman_2005,friedman_2018,byrd_2009} embeds logic programming in a
+host language (typically Scheme). miniKanren is conceptually close to \Gweek{} in
+its use of logical variables and unification, but it is purely relational: it
+lacks the functional programming features (higher-order functions, algebraic
+data types, pattern matching) that \Gweek{} inherits from CBPV.
+
+\paragraph{Semantics of FLP}
+
+The semantic foundations of \Gweek{} are developed in our companion paper
+\parencite{jones_2026}. That paper presents a domain-theoretic semantics for a
+CBPV-based FLP calculus, based on the lower powerdomain, and proves it sound,
+adequate, and fully abstract for a termination-insensitive notion of
+observational equivalence. The equational theory derived from this semantics
+validates the rewrite rules used in \Gweek{}'s peephole optimiser.
+
+Previous semantic work on FLP includes the CRWL rewriting logic framework of
+\textcite{gonzalez-moreno_1999}, the operational semantics of
+\textcite{albert_2005}, and the denotational approaches of
+\textcite{christiansen_2011} and \textcite{mehner_2014}. The monad-based
+approach to FLP effects, which \Gweek{} follows, originates with
+\textcite{staton_2013}. The observation that logical variables are an effect that
+can be added to a language in isolation goes back to \textcite{lindstrom_1985}.
+
+\paragraph{Narrowing}
+
+Narrowing \parencite{reddy_1985} is the standard execution strategy for FLP.
+\Gweek{} implements \emph{weak head narrowing}: a logical variable is refined
+only when it is scrutinised by a case expression or required by unification.
+This is related to the \emph{needed narrowing} strategy of
+\textcite{antoy_1997}, which refines variables only when they are `needed' by
+the outermost function. In the CBPV framework, the distinction between values
+and computations provides a clean account of when narrowing must occur: it
+happens precisely when a computation attempts to eliminate a value that turns out
+to be a logic variable. The completeness of this strategy is proved in
+\parencite{jones_2026}.
+
+\paragraph{Implementation Techniques}
+
+\Gweek{}'s use of arena allocation for term representation is standard in
+high-performance language implementations; see e.g.\ the Zig compiler and the
+Rust compiler's use of arenas. The persistent cons-list representation of
+environments is a classical technique in functional language implementations
+\parencite{landin_1964,henderson_1980}. The union-find structure for logic
+variables is the standard choice in logic programming implementations
+\parencite{warren_1983}.
+
+Embeddings of logic programming in functional languages
+\parencite{claessen_2001,seres_1999,hinze_1998} provide similar functionality
+to \Gweek{} but at the cost of embedding overhead and the loss of the host
+language's type system for the logical fragment. As a standalone language,
+\Gweek{} retains control over term representation and search implementation.

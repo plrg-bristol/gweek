@@ -5,11 +5,9 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use bumpalo::Bump;
 use chumsky::prelude::Simple;
 
-use crate::machine::{translate::translate, Config, Strategy};
-
-mod machine;
-mod parser;
-mod type_check;
+use gweek::machine::{self, translate::translate, Config, Strategy};
+use gweek::parser;
+use gweek::type_check;
 
 const USAGE: &str = "\
 Usage: gweek [OPTIONS] <source_file>
@@ -23,6 +21,8 @@ Options:
   --timeout <N>      Timeout in seconds (default: 60)
   --no-occurs-check  Skip occurs check in unification (unsound but faster)
   --eager-vars       Eagerly resolve variable indirections in env
+  --strict           Strict bind: evaluate RHS before binding (no suspensions)
+  --first            Stop after finding the first solution
   --help             Show this help message";
 
 fn main() {
@@ -32,6 +32,8 @@ fn main() {
     let mut timeout_secs: u64 = 60;
     let mut occurs_check = true;
     let mut eager_vars = false;
+    let mut strict = false;
+    let mut first_only = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -43,6 +45,8 @@ fn main() {
             "-o" => optimize = true,
             "--no-occurs-check" => occurs_check = false,
             "--eager-vars" => eager_vars = true,
+            "--strict" => strict = true,
+            "--first" => first_only = true,
             "--timeout" => {
                 timeout_secs = args.next().unwrap_or_else(|| {
                     eprintln!("Error: --timeout requires a value\n{USAGE}");
@@ -98,6 +102,8 @@ fn main() {
         timeout_secs,
         occurs_check,
         eager_vars,
+        strict,
+        first_only,
     });
 
     let arena = Bump::new();
@@ -112,7 +118,7 @@ fn main() {
     } else {
         (main_comp, env)
     };
-    machine::eval(&arena, main_comp, &env);
+    machine::eval(main_comp, &env);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
@@ -159,8 +165,10 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::machine::{run, Strategy};
+    use bumpalo::Bump;
+    use gweek::machine::{self, translate::translate, run, Strategy};
+    use gweek::parser;
+    use std::fs;
 
     fn run_example(path: &str, strategy: Strategy) -> usize {
         run_example_inner(path, strategy, false)
@@ -178,9 +186,9 @@ mod tests {
         if opt {
             let comp = machine::optimize::optimize(&arena, comp);
             let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
-            run(&arena, comp, &env, strategy, false)
+            run(comp, &env, strategy, false)
         } else {
-            run(&arena, comp, &env, strategy, false)
+            run(comp, &env, strategy, false)
         }
     }
 

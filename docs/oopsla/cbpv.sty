@@ -1,0 +1,205 @@
+%% LaTeX macros for Call-by-Push-Value
+%% Alex Kavvos, 2021-2024
+
+\ProvidesPackage{cbpv}[2023/01/11 cbpv-macros]
+
+%% We require Jon Sterling's delimiters package for nice parentheses.
+
+\RequirePackage{jmsdelim}
+
+%% THE FOLLOWING MACROS REQUIRE THE USE OF **xparse**
+%% I HIGHLY RECOMMEND YOU LEARN HOW TO USE IT
+%% IT IS ONE OF THE FEW PACKAGES THAT MAKE LaTeX MORE BEARABLE
+
+\RequirePackage{xparse}
+
+%% We also need this to make pretty colours
+
+\RequirePackage{xcolor}
+
+%% This package requires lambda-macros for most of the lambda calculus
+\RequirePackage{lambda-macros}
+
+\definecolor{IdiotPurple}{RGB}{102, 51, 102}
+\definecolor{FernGreen}{HTML}{467D5E}
+\definecolor{ThroneBlue}{RGB}{51, 51, 102}
+\definecolor{PermaRed}{RGB}{255, 102, 102}
+\definecolor{DogwoodRose}{RGB}{204, 51, 102}
+\definecolor{MaizeCrayola}{RGB}{255, 204, 102}
+\definecolor{CommandPurple}{RGB}{135, 23, 77}
+\definecolor{RegalBlue}{RGB}{3,69,117}
+\definecolor{Marooon}{HTML}{573F0E}
+\definecolor{Petrol}{HTML}{006D63}
+\definecolor{ACMMatch1}{HTML}{006AC4}
+\definecolor{ACMMatch2}{HTML}{694A00}
+\definecolor{ACMMatch3}{HTML}{006768}
+
+\NewDocumentCommand{\SuperscriptS}{mmm}{
+  \IfBooleanTF{#1}{\DelimPrn{#2}^{#3}}{#2^#3}
+}
+
+\NewDocumentCommand{\VTerm}{m}{{\color{ACMMatch1}{#1}}}
+\NewDocumentCommand{\CTerm}{m}{{\color{ACMMatch2}{#1}}}
+\NewDocumentCommand{\Stk}{m}{{\color{CommandPurple}{#1}}}
+\NewDocumentCommand{\TmT}{m}{{\color{MaizeCrayola}{#1}}}
+\NewDocumentCommand{\MTerm}{m}{{\color{ACMMatch3}{#1}}}
+\RenewDocumentCommand{\Tm}{m}{\CTerm{#1}}
+
+%%%%%%%%%%%%%%%%%%%% TYPES %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\NewDocumentCommand{\CType}{m}{\DelimMin{1} \underline{#1}}
+\NewDocumentCommand{\CAnd}{}{\mathbin{\binampersand}}
+\NewDocumentCommand{\ReturnerT}{sm}{%
+  F\IfBooleanTF{#1}{\DelimPrn{#2}}{#2}
+}
+\NewDocumentCommand{\ThunkT}{sm}{%
+  U\IfBooleanTF{#1}{\DelimPrn{#2}}{#2}
+}
+
+%%%%%%%%%%%%%%%%%%%% TERMS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\NewDocumentCommand{\Return}{sm}{%
+  \textsf{return}\;\IfBooleanTF{#1}{\DelimPrn{\VTerm{#2}}}{\VTerm{#2}}
+}
+% old fashioned, Moggi let-style bind
+% \NewDocumentCommand{\Bind}{smmm}{%
+%   \textsf{bind}\ 
+%     #2
+%   \leftarrow 
+%     \IfBooleanTF{#1}{\DelimPrn{#3}}{#3}\
+%   \textsf{in}\
+%     #4
+% }
+\NewDocumentCommand{\CTo}{smmm}{%
+  \IfBooleanTF{#1}{\DelimPrn{#2}}{#2} \textsf{ to } #3.\, #4
+}
+\NewDocumentCommand{\Thunk}{sm}{%
+  \textsf{thunk}\IfBooleanTF{#1}{\DelimPrn{\CTerm{#2}}}{\;\CTerm{#2}}
+}
+\NewDocumentCommand{\Force}{sm}{%
+  \textsf{force}\IfBooleanTF{#1}{\DelimPrn{\VTerm{#2}}}{\;\VTerm{#2}}
+}
+\NewDocumentCommand{\CAbort}{m}{%
+  \textsf{abort}\DelimPrn{#1}%
+}
+\NewDocumentCommand{\CCase}{mmmmm}{\textsf{case}\DelimPrn{\VTerm{#1}; #2.\, #3; #4.\, #5}}
+
+% value product
+\NewDocumentCommand{\VTuple}{mm}{\DelimPrn{#1, #2}}
+\NewDocumentCommand{\Split}{mmmm}{\textsf{split}\DelimPrn{\VTerm{#1}; #2, #3.\, #4}}
+
+% computation product
+\NewDocumentCommand{\CTuple}{mm}{\DelimGl{#1, #2}}
+
+%%%%%%%%%%%%% ADDITIONAL TYPES AND TERMS %%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% booleans
+\NewDocumentCommand{\CIf}{mmm}{
+  \textsf{if } \VTerm{#1} \textsf{ then } #2 \textsf{ else } #3
+}
+\NewDocumentCommand{\Arb}{}{\textsf{arb}}
+
+% natural numbers
+\NewDocumentCommand{\CIfz}{mmmm}{\textsf{ifz}(\VTerm{#1}; #2; #3.\, #4)}
+\NewDocumentCommand{\CRec}{mmmmm}{\textsf{rec}(\VTerm{#1}; #2; #3, #4.\, #5)}
+
+% application
+\NewDocumentCommand{\CApp}{smm}{\IfBooleanTF{#1}{\DelimPrn{#2}}{#2}\DelimPrn{\VTerm{#3}}}
+
+% finite choice type
+\NewDocumentCommand{\FinT}{m}{\underline{\mathbf{#1}}}
+\NewDocumentCommand{\Fin}{m}{\widehat{#1}}
+\NewDocumentCommand{\CFinCase}{mm}{\textsf{case}\DelimPrn{\VTerm{#1}; #2}}
+\NewDocumentCommand{\CFam}{mm}{\DelimMin{1} \DelimPrn{#1}_{#2}}
+
+% indexed sums
+% use \Inj[i] from lambda-macros for the introduction form
+%\NewDocumentCommand{\IdxSumT}{mmm}{\DelimMin{1} \DelimPrn{#1 < #2} \times #3}
+\NewDocumentCommand{\CCaseG}{mmmm}{
+  \textsf{case}\DelimPrn{\VTerm{#1}; \DelimMin{1} \DelimPrn{#2.\, #3}_{#4}}
+}
+
+% algebraic effects
+\ExplSyntaxOn
+\NewDocumentCommand{\COp}{oog}{%
+  \textsf{op}%
+  \IfValueTF{#3}{
+    \DelimPrn{%
+      \tl_if_empty:nTF{#1}{}{\VTerm{#1};}%
+      \tl_if_empty:nTF{#2}{}{#2.\,}%
+      #3
+    }
+  }{
+    \IfValueT{#1}{\DelimPrn{\VTerm{#1}}}
+  }
+}
+\ExplSyntaxOff
+
+% value lists
+\NewDocumentCommand{\ListT}{m}{
+  \textsf{List}\;#1
+}
+\NewDocumentCommand{\CMatch}{mmmmm}{%
+  \textsf{match}\DelimPrn{\VTerm{#1}; #2; #3, #4.\, #5}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%% TYPING JUDGMENTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\NewDocumentCommand{\IsCTerm}{O{\Gamma}mm}{%
+  #1 \DelimMin{1} \vdash^\text{c} \CTerm{#2} : #3
+}
+\NewDocumentCommand{\IsVTerm}{O{\Gamma}mm}{%
+  #1 \DelimMin{1} \vdash^\text{v} \VTerm{#2} : #3
+}
+
+% the Amp versions are used in aligns, arrays, etc.
+\NewDocumentCommand{\IsCTermEq}{O{\Gamma}mmm}{#1 \DelimMin{2} \vdash^\text{c} \CTerm{#2} = \CTerm{#3} : #4}
+\NewDocumentCommand{\IsCTermEqAmp}{O{\Gamma}mmm}{\CTerm{#2} &= \CTerm{#3} : #4}
+\NewDocumentCommand{\IsCTermEqAmpNoType}{O{\Gamma}mmm}{\CTerm{#2} &= \CTerm{#3}}
+\NewDocumentCommand{\IsVTermEq}{O{\Gamma}mmm}{#1 \DelimMin{2} \vdash^\text{v} \VTerm{#2} = \VTerm{#3} : #4}
+\NewDocumentCommand{\IsVTermEqAmp}{O{\Gamma}mmm}{\VTerm{#2} &= \VTerm{#3} : #4}
+\NewDocumentCommand{\IsVTermEqAmpNoType}{O{\Gamma}mmm}{\VTerm{#2} &= \VTerm{#3}}
+
+%%%% SUBSTITUTION
+
+\NewDocumentCommand{\CSubst}{smmm}{%
+  \IfBooleanTF{#1}{\DelimBrk{\CTerm{#2}}}{\CTerm{#2}}\Meta{[\VTerm{#3}/\VTerm{#4}]}
+}
+\NewDocumentCommand{\VSubst}{smmm}{%
+  \IfBooleanTF{#1}{\DelimBrk{\VTerm{#2}}}{\VTerm{#2}}\Meta{[\VTerm{#3}/\VTerm{#4}]}
+}
+\NewDocumentCommand{\SubstTwo}{smmmmm}{%
+  \IfBooleanTF{#1}{\parens{#2}}{#2}\Meta{[\VTerm{#3}, \VTerm{#4}/\VTerm{#5}, \VTerm{#6}]}
+}
+
+\NewDocumentCommand{\IsTerminal}{m}{\CTerm{#1}\ \textsf{terminal}}
+\NewDocumentCommand{\Terminals}{O{}}{\textsf{Tmn}\IfValueT{#1}{\DelimPrn{#1}}}
+
+\NewDocumentCommand{\HasHaltedWith}{mm}{%
+  \CTerm{#1} \mathbin{\scalebox{-1}[1]{$\lightning$}} \CTerm{#2}%
+}
+
+%%% VARIOUS SETS
+
+\NewDocumentCommand{\Val}{g}{\mathsf{Val}\IfValueT{#1}{\DelimPrn{#1}}}
+\NewDocumentCommand{\OVal}{g}{\mathsf{OVal}\IfValueT{#1}{\DelimPrn{#1}}}
+\NewDocumentCommand{\Comp}{g}{\mathsf{Comp}\IfValueT{#1}{\DelimPrn{#1}}}
+\NewDocumentCommand{\FOType}{}{\textsf{FO}}
+% \NewDocumentCommand{\FOVal}{o}{
+%   \textsf{FOVal}_{\IfNoValueTF{#1}{}{#1}}
+% }
+\NewDocumentCommand{\Term}{O{\CType{C}}}{
+  \textsf{Term}\DelimPrn{#1}
+}
+
+%%% DISMANTLE
+
+\NewDocumentCommand{\Dismantle}{smm}{%
+    \CTerm{#2}%
+  \mathbin{\bullet}%
+    \IfBooleanTF{#1}{%
+      \DelimPrn{\Stk{#3}}%
+    }{%
+      \Stk{#3}%
+    }%
+}

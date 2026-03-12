@@ -1,0 +1,137 @@
+\begin{minipage}{0.49\textwidth}
+  \[
+  \begin{array}{lrcl}
+    \text{stacks}
+        & \Stk{K} & \Coloneqq\  & \Stk{\StkEmpty}         \\
+        &         &             & \Stk{\StkKont{x}{N}{K}} \\
+        &         &             & \Stk{\StkVal{V}{K}}     \\[0.8ex]
+    \text{logic ctx.}
+        & \Gamma  & \Coloneqq\  & \\
+        &         &             & \Gamma, x : \sigma      \\[0.8ex]
+    \text{susp.\ env.}
+        & \Susp{S} & \Coloneqq & \SuspEmpty{} \\
+        &          &           & \AddSusp{S}{x}{M}
+  \end{array}
+  \]
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+  \[
+  \begin{array}{lrcl}
+    \text{basic machine}
+        & \Machine{L} & \Coloneqq & \SLMachine{M}{K} \\[0.8ex]
+    \text{configurations}
+        & \Conf{C} & \Coloneqq & \FailC{}       \\
+        &          &           & \Machine{L}    \\
+        &          &           & \ChoiceC{C}{C} \\[0.8ex]
+    \text{terminals}
+        & \CTerm{T} & \Coloneqq\ & \CTerm{\Return{V}}     \\
+        &           &            & \CTerm{\Lam{x}{M}}
+  \end{array}
+  \]
+\end{minipage}
+
+\bigskip
+\raggedright
+
+\fbox{ $\MSteps{L}{C}\phantom{'} $ } \quad \textbf{Basic transitions} \\[1ex]
+
+\emph{Structural transitions}:
+
+\begin{minipage}{0.48\textwidth}
+\begin{align*}
+  \SLMachine{\CTo{M}{x}{N}}{K}
+    &\MStep{} \SLMachine{N}[\AddSusp{S}{x}{M}]{K}
+\end{align*}
+\end{minipage}
+\begin{minipage}{0.48\textwidth}
+\begin{align*}
+  \SLMachine{\Return{V}}{\StkKont{x}{N}{K}}
+    &\MStep{} \SLMachine{\CSubst{N}{V}{x}}{K}
+\end{align*}
+\end{minipage}
+
+\begin{align*}
+  \SLMachine{M}[\DisjSusp{S}{x}{N}]{K}
+    &\MStep \SLMachine{N}{\StkKont{x}{M}{K}}
+    && \text{(if $x$ is needed in $\CTerm{M}$)} \\[0.5ex]
+  \SLMachine{\CApp{M}{V}}{K}
+    &\MStep{} \SLMachine{M}{\StkVal{V}{K}} \\
+  \SLMachine{\Lam{x}{M}}{\StkVal{V}{K}}
+    &\MStep{} \SLMachine{\CSubst{M}{V}{x}}{K} \\
+  \SLMachine{\Force*{\Thunk{M}}}{K}
+    &\MStep \SLMachine{M}{K} \\
+  \SLMachine{\Fix{x}{M}}{K}
+    &\MStep \SLMachine{\CSubst{M}{\Thunk*{\Fix{x}{M}}}{x}}{K} \\
+  \SLMachine{\CIfz{\Zero}{M}{n}{N}}{K}
+    &\MStep \SLMachine{M}{K} \\
+  \SLMachine{\CIfz{\Succ{V}}{M}{n}{N}}{K}
+    &\MStep \SLMachine{\CSubst{N}{V}{n}}{K} \\
+  \SLMachine{\CMatch{\Nil}{M}{x}{xs}{N}}{K}
+    &\MStep \SLMachine{M}{K} \\
+  \SLMachine{\CMatch{\Cons{V}{W}}{M}{x}{xs}{N}}{K}
+    &\MStep \SLMachine{\SubstTwo{N}{V}{W}{x}{xs}}{K}
+\end{align*}
+
+\emph{Effect transitions}: \hfill
+\begin{minipage}{0.9\textwidth}
+\begin{align*}
+  \SLMachine{\Fail}{K}
+    &\MStep{} \FailC{} \\
+  \SLMachine{\Choice{M}{N}}{K}
+    &\MStep{} \ChoiceC{\SLMachine{M}{K}}{\SLMachine{N}{K}} \\
+  \SLMachine{\Exists{x}[\sigma]{M}}{K}
+    &\MStep{} \SLMachine[\Gamma, x : \sigma]{M}{K}
+\end{align*}
+\end{minipage}
+
+\emph{Narrowing transitions}
+  (only if $\SLMachine{M}{K}$ is \emph{blocked} on $x$):
+\begin{align*}
+  \SLMachine[\Gamma, x : \NatT, \Gamma']{M}{K}
+    &\MStep
+    \ChoiceC{
+      \MSubst{\SLMachine[\Gamma, \Gamma']{M}{K}}{\Zero}{x}
+    }{
+      \MSubst{\SLMachine[\Gamma, n : \NatT, \Gamma']{M}{K}}{\Succ{n}}{x}
+    } \\
+  \SLMachine[\Gamma, x : \ListT{\sigma}, \Gamma']{M}{K}
+    &\MStep
+    \ChoiceC{
+      \MSubst{\SLMachine[\Gamma, \Gamma']{M}{K}}{\Nil}{x}
+    }{
+      \MSubst{\SLMachine[\Gamma, y : \sigma, ys :
+      \ListT{\sigma}, \Gamma']{M}{K}}{\Cons{y}{ys}}{x}
+    }
+\end{align*}
+
+\emph{Unification transitions}:
+\begin{align*}
+  \SLMachine[\Gamma]{\Equate{V}{W}{M}}{K}
+    &\MStep \SimSubM{\prn{\SLMachine[\Gamma]{M}{K}}}{\gamma}
+    && (\Mgu{\Gamma,\, \VTerm{V},\, \VTerm{W}} = (\Delta,\, \gamma)) \\
+  \SLMachine[\Gamma] {\Equate{V}{W}{M}}{K}
+    &\MStep \FailC{}
+    && (\Mgu{\Gamma,\, \VTerm{V},\, \VTerm{W}} = \bot)
+\end{align*}
+
+\fbox{ $\CSteps{C}{C'}$ } \quad \textbf{Configuration transitions}
+\begin{mathpar}
+  \inferH{Leaf}{
+    \MSteps{L}{C} \\
+  }{
+    \CSteps{\Ctx{M}[L]}{\Ctx{M}[C]}
+  }
+  \and
+  \inferH{Refl}{
+    \strut
+  }{
+    \CSteps{C}{C}
+  }
+  \and
+  \inferH{Trans}{
+    \CSteps{C_1}{C_2} \\
+    \CSteps{C_2}{C_3}
+  }{
+    \CSteps{C_1}{C_3}
+  }
+\end{mathpar}

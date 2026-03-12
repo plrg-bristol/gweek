@@ -65,7 +65,6 @@ impl<'a> Env<'a> {
         Env(arena.alloc(EnvInner::Cons(VClosure::Susp { ident }, *self)))
     }
 
-    /// Count total IR nodes across all function definitions (top-level vals only).
     #[cfg(feature = "opt-stats")]
     pub fn count_nodes(&self) -> usize {
         let mut total = 0;
