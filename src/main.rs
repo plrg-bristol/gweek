@@ -120,7 +120,7 @@ fn main() {
     } else {
         (main_comp, env)
     };
-    machine::eval(&arena, main_comp, &env);
+    machine::eval(main_comp, &env);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
@@ -186,9 +186,9 @@ mod tests {
         if opt {
             let comp = machine::optimize::optimize(&arena, comp);
             let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
-            run(&arena, comp, &env, strategy, false)
+            run(comp, &env, strategy, false)
         } else {
-            run(&arena, comp, &env, strategy, false)
+            run(comp, &env, strategy, false)
         }
     }
 

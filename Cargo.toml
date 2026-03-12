@@ -8,7 +8,7 @@ opt-stats = []
 
 [dependencies]
 ariadne = "0.4"
-bumpalo = "3.20.2"
+bumpalo = { version = "3.20.2", features = ["collections"] }
 chumsky = "0.9"
 smallvec = "1.15.1"
 

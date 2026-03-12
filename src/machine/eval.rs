@@ -19,26 +19,50 @@ pub enum Strategy {
     Fair,
 }
 
-pub fn eval<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) {
+/// Run with output, using config for strategy/timeout. Creates its own runtime arena.
+pub fn eval<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) {
     let cfg = config();
+    let arena = Bump::new();
+    eval_with_arena(&arena, comp, vals, cfg.strategy, true, cfg.timeout_secs);
+}
+
+/// Run without output (for tests). Creates its own runtime arena.
+pub fn run<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, print: bool) -> usize {
+    let arena = Bump::new();
+    run_with_arena(&arena, comp, vals, strategy, print)
+}
+
+fn eval_with_arena<'r>(
+    arena: &'r Bump,
+    comp: &'r MComputation<'r>,
+    vals: &[&'r MValue<'r>],
+    strategy: Strategy,
+    print: bool,
+    timeout_secs: u64,
+) {
     let env = import_env(arena, vals);
-    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
-    let (solns, timed_out) = run_internal(arena, comp, env, cfg.strategy, true, deadline);
+    let deadline = Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let (solns, timed_out) = run_internal(arena, comp, env, strategy, print, deadline);
     if timed_out {
-        println!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns);
+        println!(">>> timed out after {}s, {} solutions found", timeout_secs, solns);
     } else {
         println!(">>> {} solutions", solns);
     }
 }
 
-pub fn run<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, print: bool) -> usize {
+fn run_with_arena<'r>(
+    arena: &'r Bump,
+    comp: &'r MComputation<'r>,
+    vals: &[&'r MValue<'r>],
+    strategy: Strategy,
+    print: bool,
+) -> usize {
     let env = import_env(arena, vals);
     let deadline = Instant::now() + std::time::Duration::from_secs(3600);
     run_internal(arena, comp, env, strategy, print, deadline).0
 }
 
-/// Build a bump-allocated Env from the compile-time list of top-level values.
-/// Each function's closure env is the env built so far (its predecessors).
+/// Build an Env from the compile-time list of top-level values.
 fn import_env<'a>(arena: &'a Bump, vals: &[&'a MValue<'a>]) -> Env<'a> {
     let mut env = Env::empty(arena);
     for val in vals {
