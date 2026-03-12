@@ -32,13 +32,13 @@
                 <div class="pg-toolbar-group">
                     <span class="pg-toolbar-label">Strategy:</span>
                     <input type="radio" name="strategy" value="bfs" id="strat-bfs" class="strategy-btn" checked>
-                    <label for="strat-bfs" class="strategy-label">BFS</label>
+                    <label for="strat-bfs" class="strategy-label" data-tip="Breadth-first search (default). Complete, finds shortest solutions first.">BFS</label>
                     <input type="radio" name="strategy" value="dfs" id="strat-dfs" class="strategy-btn">
-                    <label for="strat-dfs" class="strategy-label">DFS</label>
+                    <label for="strat-dfs" class="strategy-label" data-tip="Depth-first search. Fast, but incomplete on infinite branches.">DFS</label>
                     <input type="radio" name="strategy" value="iddfs" id="strat-iddfs" class="strategy-btn">
-                    <label for="strat-iddfs" class="strategy-label">IDDFS</label>
+                    <label for="strat-iddfs" class="strategy-label" data-tip="Iterative deepening DFS. Complete, but re-explores work at each depth.">IDDFS</label>
                     <input type="radio" name="strategy" value="fair" id="strat-fair" class="strategy-btn">
-                    <label for="strat-fair" class="strategy-label">FAIR</label>
+                    <label for="strat-fair" class="strategy-label" data-tip="Fair round-robin DFS. Complete, no re-exploration. Good for infinite branches.">FAIR</label>
                 </div>
 
                 <div class="pg-toolbar-divider"></div>
@@ -46,38 +46,39 @@
                 <!-- Flags -->
                 <div class="pg-toolbar-group">
                     <input type="checkbox" id="flag-optimize" class="flag-check">
-                    <label for="flag-optimize" class="flag-label">-o</label>
+                    <label for="flag-optimize" class="flag-label" data-tip="Enable peephole optimizer on the compiled program.">-o</label>
                 </div>
                 <div class="pg-toolbar-group">
                     <input type="checkbox" id="flag-first" class="flag-check">
-                    <label for="flag-first" class="flag-label">--first</label>
+                    <label for="flag-first" class="flag-label" data-tip="Stop after finding the first solution.">--first</label>
                 </div>
                 <div class="pg-toolbar-group">
                     <input type="checkbox" id="flag-strict" class="flag-check">
-                    <label for="flag-strict" class="flag-label">--strict</label>
+                    <label for="flag-strict" class="flag-label" data-tip="Strict bind: evaluate RHS before binding (no suspensions).">--strict</label>
                 </div>
                 <div class="pg-toolbar-group">
                     <input type="checkbox" id="flag-eager" class="flag-check">
-                    <label for="flag-eager" class="flag-label">--eager-vars</label>
+                    <label for="flag-eager" class="flag-label" data-tip="Eagerly resolve variable indirections in the environment.">--eager-vars</label>
                 </div>
                 <div class="pg-toolbar-group">
                     <input type="checkbox" id="flag-no-occurs" class="flag-check">
-                    <label for="flag-no-occurs" class="flag-label">--no-occurs-check</label>
+                    <label for="flag-no-occurs" class="flag-label" data-tip="Skip the occurs check in unification. Unsound but faster.">--no-occurs-check</label>
                 </div>
 
                 <div class="pg-toolbar-divider"></div>
 
                 <!-- Timeout -->
                 <div class="pg-toolbar-group">
-                    <label for="flag-timeout" class="flag-label">--timeout</label>
-                    <input type="number" id="flag-timeout" class="timeout-input" value="30" min="1" max="300">
+                    <label for="flag-timeout" class="flag-label" data-tip="Maximum execution time in seconds.">--timeout</label>
+                    <input type="number" id="flag-timeout" class="timeout-input" value="5" min="1" max="300">
                     <span class="flag-label">s</span>
                 </div>
 
                 <div class="pg-toolbar-divider"></div>
 
                 <!-- Run -->
-                <button class="run-btn" id="run-btn" disabled>RUN</button>
+                <button class="run-btn" id="run-btn" disabled data-tip="Run and display all results at once. No I/O overhead — use this for benchmarking.">RUN</button>
+                <button class="run-btn batch-btn" id="batch-btn" disabled data-tip="Stream results one at a time as they are found. Higher overhead, but shows progress live.">RUN (LINE-BY-LINE)</button>
             </div>
 
             <!-- Editor + Output -->

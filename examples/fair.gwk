@@ -1,4 +1,4 @@
 f :: Nat -> Nat
-f n = n <> f (n + 1).
+f n = n <> f (S n).
 
 let y = (f 0) in y =:= 42. y.

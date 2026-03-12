@@ -103,7 +103,7 @@ queens [] [1,2,3,4,5,6,7] [].`,
 -- DFS would diverge here; Fair finds it.
 
 f :: Nat -> Nat
-f n = n <> f (n + 1).
+f n = n <> f (S n).
 
 let y = (f 0) in y =:= 42. y.`,
 
@@ -187,12 +187,15 @@ function syncScroll() {
 const editor = document.getElementById('editor');
 const output = document.getElementById('output');
 const runBtn = document.getElementById('run-btn');
+const batchBtn = document.getElementById('batch-btn');
 const status = document.getElementById('status');
 const exampleSelect = document.getElementById('examples');
 
 let worker = null;
 let running = false;
 let startTime = 0;
+let crashed = false;
+let lineCount = 0;
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -218,6 +221,7 @@ function getStrategy() {
 
 function setRunning(isRunning) {
     running = isRunning;
+    batchBtn.disabled = isRunning;
     if (isRunning) {
         runBtn.textContent = 'STOP';
         runBtn.classList.add('running');
@@ -233,24 +237,74 @@ function spawnWorker() {
     w.onmessage = (e) => {
         if (e.data.type === 'ready') {
             runBtn.disabled = false;
-            output.innerHTML = '<span style="color: var(--text-dim)">Ready. Write some gweek and hit RUN.</span>';
-            status.textContent = 'Ready';
+            batchBtn.disabled = false;
+            if (!crashed) {
+                output.innerHTML = '<span style="color: var(--text-dim)">Ready. Write some gweek and hit RUN.</span>';
+                status.textContent = 'Ready';
+            }
+            crashed = false;
+        } else if (e.data.type === 'line') {
+            if (lineCount === 0) {
+                output.innerHTML = '';
+            }
+            lineCount++;
+            output.innerHTML += formatOutput(e.data.line) + '\n';
+            status.textContent = `Running... (${lineCount} solutions)`;
+            output.scrollTop = output.scrollHeight;
+        } else if (e.data.type === 'done') {
+            const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+            output.innerHTML += `<span class="summary-line">${escapeHtml(e.data.summary)}</span>\n`;
+            status.textContent = `Completed in ${elapsed}s`;
+            setRunning(false);
         } else if (e.data.type === 'result') {
             const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
             output.innerHTML = formatOutput(e.data.result);
             status.textContent = `Completed in ${elapsed}s`;
             setRunning(false);
         } else if (e.data.type === 'error') {
-            output.innerHTML = `<span class="error">${escapeHtml(e.data.message)}</span>`;
-            status.textContent = 'Error';
+            const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+            const raw = e.data.message || '';
+            let msg;
+            if (raw.includes('memory') || raw.includes('grow')) {
+                msg = 'Out of memory. Try --first, a shorter timeout, or a different strategy.';
+            } else {
+                msg = raw;
+            }
+            if (lineCount === 0) {
+                output.innerHTML = `<span class="error">${escapeHtml(msg)}</span>`;
+            } else {
+                output.innerHTML += `\n<span class="error">${escapeHtml(msg)}</span>`;
+            }
+            status.textContent = `Error after ${elapsed}s`;
             setRunning(false);
+            // WASM panics corrupt the module; respawn so the next run works
+            crashed = true;
+            w.terminate();
+            worker = spawnWorker();
         }
     };
 
     w.onerror = (e) => {
-        output.innerHTML = `<span class="error">Worker error: ${escapeHtml(e.message || String(e))}</span>`;
-        status.textContent = 'Error';
+        e.preventDefault();
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+        const msg = String(e.message || '');
+        let hint;
+        if (msg.includes('memory') || msg.includes('grow')) {
+            hint = 'Out of memory. Try --first, a shorter timeout, or a different strategy.';
+        } else {
+            hint = 'Runtime error (stack overflow or out of memory). Try a different strategy or simpler input.';
+        }
+        if (lineCount === 0) {
+            output.innerHTML = `<span class="error">${hint}</span>`;
+        } else {
+            output.innerHTML += `\n<span class="error">${hint}</span>`;
+        }
+        status.textContent = `Error after ${elapsed}s`;
         setRunning(false);
+        // Worker is dead after a WASM trap; respawn
+        crashed = true;
+        w.terminate();
+        worker = spawnWorker();
     };
 
     return w;
@@ -270,7 +324,7 @@ function stopExecution() {
     worker = spawnWorker();
 }
 
-function runCode() {
+function sendRun(batch) {
     if (running) {
         stopExecution();
         return;
@@ -287,12 +341,14 @@ function runCode() {
     }
 
     setRunning(true);
+    lineCount = 0;
     output.innerHTML = '<span class="loading">Evaluating...</span>';
     status.textContent = 'Running...';
     startTime = performance.now();
 
     worker.postMessage({
         type: 'run',
+        batch,
         source,
         strategy: getStrategy(),
         optimize: document.getElementById('flag-optimize').checked,
@@ -305,7 +361,8 @@ function runCode() {
 }
 
 // Event listeners
-runBtn.addEventListener('click', runCode);
+runBtn.addEventListener('click', () => sendRun(true));
+batchBtn.addEventListener('click', () => sendRun(false));
 
 editor.addEventListener('input', updateHighlight);
 editor.addEventListener('scroll', syncScroll);
@@ -313,7 +370,7 @@ editor.addEventListener('scroll', syncScroll);
 editor.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
-        runCode();
+        sendRun(true);
     }
 
     if (e.key === 'Tab') {

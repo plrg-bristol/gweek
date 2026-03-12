@@ -383,6 +383,28 @@ body {
     color: var(--green-dim);
 }
 
+/* Tooltips */
+[data-tip] {
+    position: relative;
+}
+
+[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    background: var(--bg);
+    color: var(--green-dim);
+    border: 1px solid var(--border-solid);
+    padding: 0.4rem 0.6rem;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    white-space: nowrap;
+    z-index: 100;
+    pointer-events: none;
+    box-shadow: 0 0 8px var(--border);
+}
+
 /* Timeout input */
 .timeout-input {
     background: var(--bg);

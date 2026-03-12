@@ -57,6 +57,25 @@ pub fn eval_collect<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) -> 
     solutions.join("\n")
 }
 
+/// Stream solutions one at a time via a callback, then return the summary line.
+pub fn eval_streaming<'a>(
+    comp: &'a MComputation<'a>,
+    vals: &[&'a MValue<'a>],
+    mut on_solution: impl FnMut(&str),
+) -> String {
+    let cfg = config();
+    let arena = Bump::new();
+    let env = import_env(&arena, vals);
+    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let mut cb = |s: &str| on_solution(&format!("> {}", s));
+    let (solns, timed_out) = run_internal(&arena, comp, env, cfg.strategy, deadline, &mut cb);
+    if timed_out {
+        format!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns)
+    } else {
+        format!(">>> {} solutions", solns)
+    }
+}
+
 /// Run without output (for tests). Creates its own runtime arena.
 pub fn run<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], strategy: Strategy, print: bool) -> usize {
     let arena = Bump::new();
