@@ -8,11 +8,18 @@ use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
 use super::{CClosure, Env, VClosure};
 
+/*
+Any step results in either exactly one or two new machines
+(choice is a binary operation and narrowing only produces
+two branches with naturals and lists).
+
+Machine is defined further on.
+*/
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
 enum Step<'a> {
-    Continue(Machine<'a>),
-    Done(Machine<'a>),
+    Continue(Machine<'a>),  // Unfinished
+    Done(Machine<'a>),      // Finished
     Branch(StepResult<'a>),
     Fail,
 }
@@ -24,12 +31,14 @@ enum StkFrame<'a> {
     Set(usize, &'a MComputation<'a>),
 }
 
+// Each stack item requires the environment it should be executed in.
 #[derive(Clone, Copy, Debug)]
 struct StkClosure<'a> {
     frame: StkFrame<'a>,
     env: Env<'a>,
 }
 
+// Representation of stack as a linked list.
 enum StackInner<'a> {
     Nil,
     Cons(StkClosure<'a>, Stack<'a>),
@@ -59,7 +68,7 @@ impl<'a> Stack<'a> {
 #[derive(Clone)]
 pub struct Machine<'a> {
     pub arena: &'a Bump,
-    pub cclos: CClosure<'a>,
+    pub cclos: CClosure<'a>, // Pair consisting of computation and environment
     pub stack: Stack<'a>,
     pub lenv: LogicEnv<'a>,
     pub senv: SuspEnv<'a>,
@@ -86,6 +95,7 @@ impl<'a> Machine<'a> {
         match comp {
             MComputation::Return(val) => match stack.0 {
                 StackInner::Nil => {
+                    // Reached a value, must evaluate all suspensions in case of failure.
                     let mut senv = senv;
                     match senv.next() {
                         Some(a) => {

@@ -16,6 +16,12 @@ impl TEnv {
         TEnv { env: vec![] }
     }
 
+    /*
+    We reverse the iterator because we want to refer to the variable
+    v that was most recently bound (there can be many variables v).
+    The returned index is therefore the index starting from the end
+    of the vector.
+    */
     fn find(&self, v: &str) -> usize {
         self.env
             .iter()
@@ -33,6 +39,16 @@ impl TEnv {
     }
 }
 
+/*
+Translates CBV representation of terms into CBPV.
+A term in the AST is either the type of a function
+(FuncType), the definition of a function (Func),
+or else the main program (Stmt).
+
+Returns a pair whose first component is the main
+program and second is the environment of function
+names and definitions.
+*/
 pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
     let ast = reorder_decls(ast);
 
@@ -60,6 +76,7 @@ pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, 
 // --- Declaration reordering (topological sort) ---
 
 fn reorder_decls(ast: Vec<Decl>) -> Vec<Decl> {
+    // Collect only the function names from the AST
     let func_names: HashSet<String> = ast
         .iter()
         .filter_map(|d| match d {
@@ -319,6 +336,7 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
             tenv.unbind();
             arena.alloc(MComputation::Bind { comp, cont: case })
         }
+        // The variable seems to disappear?
         Stmt::Let { var, val, body } => {
             let comp = translate_stmt(arena, *val, tenv);
             tenv.bind(&var);

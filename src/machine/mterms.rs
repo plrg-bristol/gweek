@@ -4,6 +4,10 @@ use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
 
+/*
+CBPV representation of programs.
+*/
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MValue<'a> {
     Var(usize),
