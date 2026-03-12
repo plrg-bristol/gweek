@@ -64,14 +64,29 @@ search tree is both deep and wide.
 
 \subsection{Fair Round-Robin (\Fair{})}
 
-The fair strategy maintains a queue of active machines. It dequeues the front
-machine and steps it in a \DFS{}-like manner for a fixed quota (currently
-$10{,}000$ steps). If the machine has not terminated or fully branched within
-the quota, it is re-enqueued together with any unexplored branches.
+The fair strategy maintains a queue of \emph{threads}, where each thread is a
+local \DFS{} work stack. A single thread is created initially; new threads are
+spawned at branch points. When the machine encounters a branch while executing a
+thread, the first alternative continues in the current thread and each remaining
+alternative is placed in the queue as a new single-machine thread. Each thread
+is allowed a fixed quota (currently $10{,}000$ steps). If a thread exhausts its
+quota without completing, its remaining work stack is re-enqueued as a single
+entry, and the scheduler moves to the next thread.
+
+The key invariant is that \emph{branch alternatives are distributed across
+threads}, so every branch receives its own share of the round-robin schedule.
+Within a thread, execution is depth-first, so the local work stack remains
+small (proportional to the depth of the sub-tree being explored). To bound
+memory, the total number of threads is capped (currently $10{,}000$); when the
+cap is reached, new branch alternatives remain in their parent thread and are
+explored depth-first. This degrades gracefully: existing threads continue to
+receive fair scheduling, while only new branches within a full thread lose
+individual time-slicing.
 
 This strategy is both complete and fair: every branch receives a bounded share
-of computation, preventing any single branch from starving others. It is
-particularly effective for programs that mix finite branching (explicit
+of computation, preventing any single branch from starving others. It avoids
+the memory blow-up of \BFS{} while retaining completeness, and is particularly
+effective for programs that mix finite branching (explicit
 \mintinline{haskell}|<>|) with infinite branching (logical variable narrowing),
 as the finite branches are fully resolved within their quanta while the
 infinite branches are interleaved.

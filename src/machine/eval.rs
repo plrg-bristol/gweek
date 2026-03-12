@@ -236,12 +236,12 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dea
 
 fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     const QUOTA: usize = 10000;
-    let mut queue = VecDeque::new();
-    queue.push_back(fresh_machine(arena, comp, env));
+    const MAX_THREADS: usize = 10000;
+    let mut queue: VecDeque<Vec<Machine<'a>>> = VecDeque::new();
+    queue.push_back(vec![fresh_machine(arena, comp, env)]);
     let mut solns = 0;
     let mut iters = 0u32;
-    while let Some(m) = queue.pop_front() {
-        let mut local = vec![m];
+    while let Some(mut local) = queue.pop_front() {
         let mut steps = 0;
         while let Some(m) = local.pop() {
             iters += 1;
@@ -249,20 +249,42 @@ fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dead
                 return (solns, true);
             }
             if steps >= QUOTA {
-                queue.push_back(m);
-                queue.extend(local.drain(..));
+                local.push(m);
                 break;
             }
             steps += 1;
-            for m in m.run_to_branch().into_iter().rev() {
-                if m.done {
-                    if record_solution(&m, &mut solns, on_solution) {
-                        return (solns, false);
+            let results = m.run_to_branch();
+            if results.len() > 1 && queue.len() < MAX_THREADS {
+                // Spread branch alternatives across the queue for fairness.
+                // First alternative continues in the current thread (DFS);
+                // remaining alternatives become new threads.
+                let mut first = true;
+                for m in results {
+                    if m.done {
+                        if record_solution(&m, &mut solns, on_solution) {
+                            return (solns, false);
+                        }
+                    } else if first {
+                        local.push(m);
+                        first = false;
+                    } else {
+                        queue.push_back(vec![m]);
                     }
-                } else {
-                    local.push(m);
+                }
+            } else {
+                for m in results.into_iter().rev() {
+                    if m.done {
+                        if record_solution(&m, &mut solns, on_solution) {
+                            return (solns, false);
+                        }
+                    } else {
+                        local.push(m);
+                    }
                 }
             }
+        }
+        if !local.is_empty() {
+            queue.push_back(local);
         }
     }
     (solns, false)
