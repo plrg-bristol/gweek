@@ -1,0 +1,9 @@
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+half :: Nat -> Nat
+half y = exists x :: Nat. add x x =:= y. x.
+
+half 1600.

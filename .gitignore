@@ -1,3 +1,4 @@
 /target
 .claude/
 web/pkg/
+.DS_Store

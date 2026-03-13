@@ -1,0 +1,30 @@
+insert :: Nat -> [Nat] -> [Nat]
+insert x xs = case xs of
+                  [] -> [x]
+                | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
+
+perm :: [Nat] -> [Nat]
+perm xs = case xs of
+               [] -> []
+            |  (z:zs) -> insert z (perm zs).
+
+leq :: Nat -> Nat -> Nat
+leq a b = case a of
+    Z -> 0
+  | S m -> case b of
+      Z -> fail
+    | S n -> leq m n.
+
+sorted :: [Nat] -> [Nat]
+sorted xs = case xs of
+    [] -> []
+  | (z:zs) -> case zs of
+      [] -> [z]
+    | (y:ys) -> case leq z y of
+        Z -> z : sorted (y : ys)
+      | S n -> fail.
+
+psort :: [Nat] -> [Nat]
+psort xs = sorted (perm xs).
+
+psort [2, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 1].

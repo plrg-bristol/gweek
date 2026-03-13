@@ -1,0 +1,11 @@
+insert :: Nat -> [Nat] -> [Nat]
+insert x xs = case xs of
+                  [] -> [x]
+                | (z:zs) -> ((x : z : zs) <> (z : insert x zs)).
+
+perm :: [Nat] -> [Nat]
+perm xs = case xs of
+               [] -> []
+            |  (z:zs) -> insert z (perm zs).
+
+perm [1,2,3,4,5,6,7].

@@ -1,0 +1,17 @@
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+coin :: Nat
+coin = 1 <> 2 <> 10.
+
+change :: Nat -> [Nat]
+change n = case n of
+    Z -> []
+  | S m -> let c = coin in
+            exists rest :: Nat.
+            add c rest =:= n.
+            c : change rest.
+
+change 5.
