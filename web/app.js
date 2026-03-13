@@ -119,8 +119,7 @@ length xs = case xs of
 
 exists xs :: [Nat]. length xs =:= 7. sum xs =:= 5. xs.`,
 
-    fair: `-- Fair search demo: find 42 in an infinite stream
--- DFS would diverge here; Fair finds it.
+    fair: `-- Find 42 in an infinite stream of naturals
 
 f :: Nat -> Nat
 f n = n <> f (S n).
