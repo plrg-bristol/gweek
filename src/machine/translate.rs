@@ -19,10 +19,10 @@ impl TEnv {
     }
 
     /*
-    We reverse the iterator because we want to refer to the variable
-    v that was most recently bound (there can be many variables v).
-    The returned index is therefore the index starting from the end
-    of the vector.
+    The location of a variable in the current execution environment
+    is the number of variables that have been declared after it.
+    Therefore we need to return the location of the last instance of
+    a variable relative to the end of the vector.
     */
     fn find(&self, v: &str) -> usize {
         self.env

@@ -28,8 +28,10 @@ enum Step<'a> {
 #[derive(Clone, Copy, Debug)]
 enum StkFrame<'a> {
     Value(&'a MValue<'a>),
-    To(&'a MComputation<'a>),
-    Set(usize, &'a MComputation<'a>),
+    To(&'a MComputation<'a>),         // Bind (no need to remember variable name as translation into CBPV
+                                      // assigns each variable a number determining its location in the
+                                      // current execution environment).
+    Set(usize, &'a MComputation<'a>), // Used to evaluate suspensions and then return to original computation.
 }
 
 // Each stack item requires the environment it should be executed in.
@@ -66,6 +68,13 @@ impl<'a> Stack<'a> {
     }
 }
 
+/*
+Each machine is equipped with a logical environment since unification
+has a global effect (relative to the machine). The following example
+program illustrates this well:
+
+  let x = (exists y :: Nat. exists z :: Nat. y =:= S z. y) in x =:= 0. x.
+*/
 #[derive(Clone)]
 pub struct Machine<'a> {
     pub arena: &'a Bump,
@@ -306,6 +315,7 @@ impl<'a> Machine<'a> {
                         senv,
                         done: false,
                     }),
+                    // Suspension needs to be evaluated!
                     Err(UnifyError::Susp(a)) => {
                         let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
                         Step::Continue(Machine {
