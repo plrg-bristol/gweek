@@ -28,7 +28,7 @@ pub fn eval<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) {
     let cfg = config();
     let arena = Bump::new();
     let env = import_env(&arena, vals);
-    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let deadline = super::config::deadline();
     let mut on_solution = |s: &str| println!("> {}", s);
     let (solns, timed_out) = run_internal(&arena, comp, env, cfg.strategy, deadline, &mut on_solution);
     if timed_out {
@@ -43,7 +43,7 @@ pub fn eval_collect<'a>(comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) -> 
     let cfg = config();
     let arena = Bump::new();
     let env = import_env(&arena, vals);
-    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let deadline = super::config::deadline();
     let mut solutions = Vec::new();
     let (solns, timed_out) = {
         let mut on_solution = |s: &str| solutions.push(format!("> {}", s));
@@ -66,7 +66,7 @@ pub fn eval_streaming<'a>(
     let cfg = config();
     let arena = Bump::new();
     let env = import_env(&arena, vals);
-    let deadline = Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs);
+    let deadline = super::config::deadline();
     let mut cb = |s: &str| on_solution(&format!("> {}", s));
     let (solns, timed_out) = run_internal(&arena, comp, env, cfg.strategy, deadline, &mut cb);
     if timed_out {

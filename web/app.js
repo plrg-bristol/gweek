@@ -99,8 +99,27 @@ queens skipped rest placed = case rest of
 
 queens [] [1,2,3,4,5,6,7] [].`,
 
-    fair: `-- Fair search demo: find 42 in an infinite stream
--- DFS would diverge here; Fair finds it.
+    find_list: `-- Find all lists of length 7 whose elements sum to 5
+-- Uses logic variables: the solver discovers the lists.
+
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+sum :: [Nat] -> Nat
+sum xs = case xs of
+    [] -> 0
+  | (z:zs) -> add z (sum zs).
+
+length :: [Nat] -> Nat
+length xs = case xs of
+    [] -> 0
+  | (z:zs) -> S (length zs).
+
+exists xs :: [Nat]. length xs =:= 7. sum xs =:= 5. xs.`,
+
+    fair: `-- Find 42 in an infinite stream of naturals
 
 f :: Nat -> Nat
 f n = n <> f (S n).

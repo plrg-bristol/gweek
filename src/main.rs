@@ -79,6 +79,16 @@ fn main() {
         process::exit(1);
     });
 
+    machine::config::init(Config {
+        strategy,
+        optimize,
+        timeout_secs,
+        occurs_check,
+        eager_vars,
+        strict,
+        first_only,
+    });
+
     let src = fs::read_to_string(&file_path).unwrap_or_else(|e| {
         eprintln!("Error: could not read '{file_path}': {e}");
         process::exit(1);
@@ -95,16 +105,6 @@ fn main() {
         }
         process::exit(1);
     }
-
-    machine::config::init(Config {
-        strategy,
-        optimize,
-        timeout_secs,
-        occurs_check,
-        eager_vars,
-        strict,
-        first_only,
-    });
 
     let arena = Bump::new();
     let (main_comp, env) = translate(&arena, ast);
