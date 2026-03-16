@@ -10,7 +10,10 @@ use super::VClosure;
 pub enum UnifyError<'a> {
     Occurs,
     Fail,
-    Susp(SuspAt<'a>),
+    Susp {
+        at: SuspAt<'a>,
+        remaining: Vec<(VClosure<'a>, VClosure<'a>)>,
+    },
 }
 
 pub fn unify<'a>(
@@ -21,32 +24,70 @@ pub fn unify<'a>(
     lenv: &mut LogicEnv<'a>,
     senv: &SuspEnv<'a>,
 ) -> Result<(), UnifyError<'a>> {
-    let mut q: Vec<(VClosure<'a>, VClosure<'a>)> = Vec::new();
-    q.push((VClosure::mk_clos(lhs, env), VClosure::mk_clos(rhs, env)));
+    let q = vec![(VClosure::mk_clos(lhs, env), VClosure::mk_clos(rhs, env))];
+    unify_loop(arena, q, lenv, senv)
+}
 
+pub fn unify_resume<'a>(
+    arena: &'a Bump,
+    queue: &[(VClosure<'a>, VClosure<'a>)],
+    lenv: &mut LogicEnv<'a>,
+    senv: &SuspEnv<'a>,
+) -> Result<(), UnifyError<'a>> {
+    unify_loop(arena, queue.to_vec(), lenv, senv)
+}
+
+fn unify_loop<'a>(
+    arena: &'a Bump,
+    mut q: Vec<(VClosure<'a>, VClosure<'a>)>,
+    lenv: &mut LogicEnv<'a>,
+    senv: &SuspEnv<'a>,
+) -> Result<(), UnifyError<'a>> {
     while let Some((lhs, rhs)) = q.pop() {
-        let lhs = lhs.close_head(lenv, senv).map_err(UnifyError::Susp)?;
-        let rhs = rhs.close_head(lenv, senv).map_err(UnifyError::Susp)?;
+        let lhs_r = match lhs.close_head(lenv, senv) {
+            Ok(v) => v,
+            Err(at) => {
+                q.push((lhs, rhs));
+                return Err(UnifyError::Susp { at, remaining: q });
+            }
+        };
+        let rhs_r = match rhs.close_head(lenv, senv) {
+            Ok(v) => v,
+            Err(at) => {
+                q.push((lhs_r, rhs));
+                return Err(UnifyError::Susp { at, remaining: q });
+            }
+        };
 
-        match (&lhs, &rhs) {
+        match (&lhs_r, &rhs_r) {
             (VClosure::LogicVar { ident: id1 }, VClosure::LogicVar { ident: id2 }) => {
                 lenv.identify(*id1, *id2);
             }
             (VClosure::LogicVar { ident }, _) => {
                 if config().occurs_check {
-                    if rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
-                        return Err(UnifyError::Occurs);
+                    match rhs_r.occurs_lvar(lenv, senv, *ident) {
+                        Ok(true) => return Err(UnifyError::Occurs),
+                        Ok(false) => {}
+                        Err(at) => {
+                            q.push((lhs_r, rhs_r));
+                            return Err(UnifyError::Susp { at, remaining: q });
+                        }
                     }
                 }
-                lenv.set_vclos(*ident, rhs);
+                lenv.set_vclos(*ident, rhs_r);
             }
             (_, VClosure::LogicVar { ident }) => {
                 if config().occurs_check {
-                    if lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
-                        return Err(UnifyError::Occurs);
+                    match lhs_r.occurs_lvar(lenv, senv, *ident) {
+                        Ok(true) => return Err(UnifyError::Occurs),
+                        Ok(false) => {}
+                        Err(at) => {
+                            q.push((lhs_r, rhs_r));
+                            return Err(UnifyError::Susp { at, remaining: q });
+                        }
                     }
                 }
-                lenv.set_vclos(*ident, lhs);
+                lenv.set_vclos(*ident, lhs_r);
             }
             (
                 VClosure::Clos {

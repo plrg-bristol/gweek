@@ -5,7 +5,7 @@ use super::config::config;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
 use super::senv::{SuspAt, SuspEnv};
-use super::unify::{unify, UnifyError};
+use super::unify::{unify, unify_resume, UnifyError};
 use super::value_type::ValueType;
 use super::{CClosure, Env, VClosure};
 
@@ -30,6 +30,7 @@ enum StkFrame<'a> {
     Value(&'a MValue<'a>),
     To(&'a MComputation<'a>),
     Set(usize, &'a MComputation<'a>),
+    UnifyResume(usize, &'a MComputation<'a>, &'a [(VClosure<'a>, VClosure<'a>)]),
 }
 
 // Each stack item requires the environment it should be executed in.
@@ -137,6 +138,34 @@ impl<'a> Machine<'a> {
                             senv,
                             done: false,
                         })
+                    }
+                    StkFrame::UnifyResume(ident, body, queue) => {
+                        let mut senv = senv;
+                        senv.set(&ident, val, env);
+                        let mut lenv = lenv;
+                        match unify_resume(arena, queue, &mut lenv, &senv) {
+                            Ok(()) => Step::Continue(Machine {
+                                arena,
+                                cclos: (body, sc.env),
+                                stack: *tail,
+                                lenv,
+                                senv,
+                                done: false,
+                            }),
+                            Err(UnifyError::Susp { at, remaining }) => {
+                                let q = arena.alloc_slice_copy(&remaining);
+                                let new_stack = tail.push(arena, StkFrame::UnifyResume(at.ident, body, q), sc.env);
+                                Step::Continue(Machine {
+                                    arena,
+                                    cclos: at.cclos,
+                                    stack: new_stack,
+                                    lenv,
+                                    senv,
+                                    done: false,
+                                })
+                            }
+                            Err(_) => Step::Fail,
+                        }
                     }
                 },
             },
@@ -306,11 +335,12 @@ impl<'a> Machine<'a> {
                         senv,
                         done: false,
                     }),
-                    Err(UnifyError::Susp(a)) => {
-                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
+                    Err(UnifyError::Susp { at, remaining }) => {
+                        let q = arena.alloc_slice_copy(&remaining);
+                        let new_stack = stack.push(arena, StkFrame::UnifyResume(at.ident, body, q), env);
                         Step::Continue(Machine {
                             arena,
-                            cclos: a.cclos,
+                            cclos: at.cclos,
                             stack: new_stack,
                             lenv,
                             senv,
