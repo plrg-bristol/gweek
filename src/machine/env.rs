@@ -4,7 +4,6 @@ use super::config::config;
 use super::mterms::MValue;
 use super::{Ident, VClosure};
 
-// Represent environment as a linked list.
 enum EnvInner<'a> {
     Nil,
     Cons(VClosure<'a>, Env<'a>),
@@ -26,7 +25,6 @@ impl<'a> Env<'a> {
         Env(arena.alloc(EnvInner::Nil))
     }
 
-    // i is in the index in the linked list we need to inspect.
     pub fn lookup(&self, i: usize) -> Option<VClosure<'a>> {
         let mut cur = self.0;
         let mut remaining = i;
@@ -44,7 +42,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    // Push a value onto the environment stack.
     pub fn extend_val(&self, arena: &'a Bump, val: &'a MValue<'a>, env: Env<'a>) -> Env<'a> {
         let mut vclos = VClosure::Clos { val, env };
         if config().eager_vars {

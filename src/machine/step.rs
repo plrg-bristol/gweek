@@ -87,7 +87,6 @@ impl<'a> Machine<'a> {
         match comp {
             MComputation::Return(val) => match stack.0 {
                 StackInner::Nil => {
-                    // Reached a value, must evaluate all suspensions in case of failure
                     let mut senv = senv;
                     match senv.next() {
                         Some(a) => {
