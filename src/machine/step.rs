@@ -9,13 +9,6 @@ use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
 use super::{CClosure, Env, VClosure};
 
-/*
-Any step results in either exactly one or two new machines
-(choice is a binary operation and narrowing only produces
-two branches with naturals and lists).
-
-Machine is defined further on.
-*/
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
 enum Step<'a> {
@@ -28,20 +21,16 @@ enum Step<'a> {
 #[derive(Clone, Copy, Debug)]
 enum StkFrame<'a> {
     Value(&'a MValue<'a>),
-    To(&'a MComputation<'a>),         // Bind (no need to remember variable name as translation into CBPV
-                                      // assigns each variable a number determining its location in the
-                                      // current execution environment).
-    Set(usize, &'a MComputation<'a>), // Used to evaluate suspensions and then return to original computation.
+    To(&'a MComputation<'a>),
+    Set(usize, &'a MComputation<'a>),
 }
 
-// Each stack item requires the environment it should be executed in.
 #[derive(Clone, Copy, Debug)]
 struct StkClosure<'a> {
     frame: StkFrame<'a>,
     env: Env<'a>,
 }
 
-// Representation of stack as a linked list.
 enum StackInner<'a> {
     Nil,
     Cons(StkClosure<'a>, Stack<'a>),
@@ -68,17 +57,10 @@ impl<'a> Stack<'a> {
     }
 }
 
-/*
-Each machine is equipped with a logical environment since unification
-has a global effect (relative to the machine). The following example
-program illustrates this well:
-
-  let x = (exists y :: Nat. exists z :: Nat. y =:= S z. y) in x =:= 0. x.
-*/
 #[derive(Clone)]
 pub struct Machine<'a> {
     pub arena: &'a Bump,
-    pub cclos: CClosure<'a>, // Pair consisting of computation and environment
+    pub cclos: CClosure<'a>,
     pub stack: Stack<'a>,
     pub lenv: LogicEnv<'a>,
     pub senv: SuspEnv<'a>,
@@ -105,7 +87,7 @@ impl<'a> Machine<'a> {
         match comp {
             MComputation::Return(val) => match stack.0 {
                 StackInner::Nil => {
-                    // Reached a value, must evaluate all suspensions in case of failure.
+                    // Reached a value, must evaluate all suspensions in case of failure
                     let mut senv = senv;
                     match senv.next() {
                         Some(a) => {
