@@ -12,8 +12,8 @@ use super::{CClosure, Env, VClosure};
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
 enum Step<'a> {
-    Continue(Machine<'a>),  // Unfinished
-    Done(Machine<'a>),      // Finished
+    Continue(Machine<'a>),
+    Done(Machine<'a>),
     Branch(StepResult<'a>),
     Fail,
 }
