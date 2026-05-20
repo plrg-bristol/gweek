@@ -6,18 +6,22 @@ pub mod type_check;
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-pub fn run_gweek(
+use machine::mterms::{MComputation, MValue};
+
+#[cfg(target_arch = "wasm32")]
+fn run_with<F>(
     source: &str,
     strategy: &str,
     optimize: bool,
     no_occurs_check: bool,
-    eager_vars: bool,
     strict: bool,
     first_only: bool,
     timeout_secs: u64,
-    on_line: &js_sys::Function,
-) -> String {
+    eval: F,
+) -> String
+where
+    F: for<'a> FnOnce(&'a MComputation<'a>, &[&'a MValue<'a>]) -> String,
+{
     console_error_panic_hook::set_once();
 
     let strategy = match strategy {
@@ -32,42 +36,13 @@ pub fn run_gweek(
         optimize,
         timeout_secs,
         occurs_check: !no_occurs_check,
-        eager_vars,
         strict,
         first_only,
     });
 
     let ast = match parser::parse(source) {
         Ok(ast) => ast,
-        Err(errs) => {
-            let mut msgs = Vec::new();
-            for err in &errs {
-                let span = err.span();
-                let found = err
-                    .found()
-                    .map(|c| format!("'{c}'"))
-                    .unwrap_or_else(|| "end of input".to_string());
-                let expected: Vec<_> = err
-                    .expected()
-                    .map(|e| match e {
-                        Some(c) => format!("'{c}'"),
-                        None => "end of input".to_string(),
-                    })
-                    .collect();
-                let msg = if expected.is_empty() {
-                    format!("Parse error at {}: unexpected {}", span.start, found)
-                } else {
-                    format!(
-                        "Parse error at {}: found {}, expected {}",
-                        span.start,
-                        found,
-                        expected.join(", ")
-                    )
-                };
-                msgs.push(msg);
-            }
-            return msgs.join("\n");
-        }
+        Err(errs) => return format_parse_errors(&errs),
     };
 
     if let Err(errs) = type_check::type_check(&ast) {
@@ -88,9 +63,66 @@ pub fn run_gweek(
         (main_comp, env)
     };
 
-    machine::eval_streaming(main_comp, &env, |line| {
-        let _ = on_line.call1(&JsValue::NULL, &JsValue::from_str(line));
-    })
+    eval(main_comp, &env)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn format_parse_errors(errs: &[chumsky::error::Simple<char>]) -> String {
+    let mut msgs = Vec::new();
+    for err in errs {
+        let span = err.span();
+        let found = err
+            .found()
+            .map(|c| format!("'{c}'"))
+            .unwrap_or_else(|| "end of input".to_string());
+        let expected: Vec<_> = err
+            .expected()
+            .map(|e| match e {
+                Some(c) => format!("'{c}'"),
+                None => "end of input".to_string(),
+            })
+            .collect();
+        let msg = if expected.is_empty() {
+            format!("Parse error at {}: unexpected {}", span.start, found)
+        } else {
+            format!(
+                "Parse error at {}: found {}, expected {}",
+                span.start,
+                found,
+                expected.join(", ")
+            )
+        };
+        msgs.push(msg);
+    }
+    msgs.join("\n")
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn run_gweek(
+    source: &str,
+    strategy: &str,
+    optimize: bool,
+    no_occurs_check: bool,
+    strict: bool,
+    first_only: bool,
+    timeout_secs: u64,
+    on_line: &js_sys::Function,
+) -> String {
+    run_with(
+        source,
+        strategy,
+        optimize,
+        no_occurs_check,
+        strict,
+        first_only,
+        timeout_secs,
+        |comp, env| {
+            machine::eval_streaming(comp, env, |line| {
+                let _ = on_line.call1(&JsValue::NULL, &JsValue::from_str(line));
+            })
+        },
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -100,80 +132,18 @@ pub fn run_gweek_batch(
     strategy: &str,
     optimize: bool,
     no_occurs_check: bool,
-    eager_vars: bool,
     strict: bool,
     first_only: bool,
     timeout_secs: u64,
 ) -> String {
-    console_error_panic_hook::set_once();
-
-    let strategy = match strategy {
-        "dfs" => machine::Strategy::Dfs,
-        "iddfs" => machine::Strategy::Iddfs,
-        "fair" => machine::Strategy::Fair,
-        _ => machine::Strategy::Bfs,
-    };
-
-    machine::config::init(machine::Config {
+    run_with(
+        source,
         strategy,
         optimize,
-        timeout_secs,
-        occurs_check: !no_occurs_check,
-        eager_vars,
+        no_occurs_check,
         strict,
         first_only,
-    });
-
-    let ast = match parser::parse(source) {
-        Ok(ast) => ast,
-        Err(errs) => {
-            let mut msgs = Vec::new();
-            for err in &errs {
-                let span = err.span();
-                let found = err
-                    .found()
-                    .map(|c| format!("'{c}'"))
-                    .unwrap_or_else(|| "end of input".to_string());
-                let expected: Vec<_> = err
-                    .expected()
-                    .map(|e| match e {
-                        Some(c) => format!("'{c}'"),
-                        None => "end of input".to_string(),
-                    })
-                    .collect();
-                let msg = if expected.is_empty() {
-                    format!("Parse error at {}: unexpected {}", span.start, found)
-                } else {
-                    format!(
-                        "Parse error at {}: found {}, expected {}",
-                        span.start,
-                        found,
-                        expected.join(", ")
-                    )
-                };
-                msgs.push(msg);
-            }
-            return msgs.join("\n");
-        }
-    };
-
-    if let Err(errs) = type_check::type_check(&ast) {
-        let msgs: Vec<String> = errs.iter().map(|e| format!("Type error: {e}")).collect();
-        return msgs.join("\n");
-    }
-
-    let arena = bumpalo::Bump::new();
-    let (main_comp, env) = machine::translate::translate(&arena, ast);
-    let (main_comp, env) = if optimize {
-        let comp = machine::optimize::optimize(&arena, main_comp);
-        let env: Vec<_> = env
-            .iter()
-            .map(|v| machine::optimize::optimize_val(&arena, v))
-            .collect();
-        (comp, env)
-    } else {
-        (main_comp, env)
-    };
-
-    machine::eval_collect(main_comp, &env)
+        timeout_secs,
+        |comp, env| machine::eval_collect(comp, env),
+    )
 }

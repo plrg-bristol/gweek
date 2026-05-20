@@ -36,7 +36,6 @@ gweek [OPTIONS] <source_file>
 | `--timeout <N>` | Timeout in seconds (default: 60) |
 | `--first` | Stop after the first solution |
 | `--strict` | Strict bind: evaluate RHS before binding (no suspensions) |
-| `--eager-vars` | Eagerly resolve variable indirections in the environment |
 | `--no-occurs-check` | Skip occurs check in unification (unsound but faster) |
 
 ## Example

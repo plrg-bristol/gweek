@@ -20,7 +20,6 @@ Options:
   -o                 Enable peephole optimizer
   --timeout <N>      Timeout in seconds (default: 60)
   --no-occurs-check  Skip occurs check in unification (unsound but faster)
-  --eager-vars       Eagerly resolve variable indirections in env
   --strict           Strict bind: evaluate RHS before binding (no suspensions)
   --first            Stop after finding the first solution
   --help             Show this help message";
@@ -31,7 +30,6 @@ fn main() {
     let mut optimize = false;
     let mut timeout_secs: u64 = 60;
     let mut occurs_check = true;
-    let mut eager_vars = false;
     let mut strict = false;
     let mut first_only = false;
 
@@ -44,7 +42,6 @@ fn main() {
             "--fair" => strategy = Strategy::Fair,
             "-o" => optimize = true,
             "--no-occurs-check" => occurs_check = false,
-            "--eager-vars" => eager_vars = true,
             "--strict" => strict = true,
             "--first" => first_only = true,
             "--timeout" => {
@@ -84,7 +81,6 @@ fn main() {
         optimize,
         timeout_secs,
         occurs_check,
-        eager_vars,
         strict,
         first_only,
     });

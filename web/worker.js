@@ -31,7 +31,6 @@ self.onmessage = (e) => {
                     e.data.strategy,
                     e.data.optimize,
                     e.data.noOccursCheck,
-                    e.data.eagerVars,
                     e.data.strict,
                     e.data.firstOnly,
                     BigInt(e.data.timeoutSecs)
@@ -46,7 +45,6 @@ self.onmessage = (e) => {
                     e.data.strategy,
                     e.data.optimize,
                     e.data.noOccursCheck,
-                    e.data.eagerVars,
                     e.data.strict,
                     e.data.firstOnly,
                     BigInt(e.data.timeoutSecs),
