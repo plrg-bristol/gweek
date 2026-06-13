@@ -351,11 +351,6 @@ fn push_env<'a>(env: &[Option<&'a MValue<'a>>], entry: Option<&'a MValue<'a>>) -
     e
 }
 
-/// Resolve a value through the compile-time env (deep-resolve all variables).
-fn resolve_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, env: &[Option<&'a MValue<'a>>]) -> &'a MValue<'a> {
-    deep_resolve(arena, val, env)
-}
-
 /// Recursively resolve all variables in a value through the compile-time env.
 /// Used to build fully-concrete env entries for decision-making.
 fn deep_resolve<'a>(arena: &'a Bump, val: &'a MValue<'a>, env: &[Option<&'a MValue<'a>>]) -> &'a MValue<'a> {
@@ -583,7 +578,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
 
         // force(thunk M)  -->  M  (resolve through env)
         MComputation::Force(v) => {
-            let resolved = resolve_val(arena, v, env);
+            let resolved = deep_resolve(arena, v, env);
             if let MValue::Thunk(c) = resolved {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("force-beta");
@@ -662,8 +657,8 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                 return fail(arena);
             }
             // Resolve through env so parameter laws can see constructors
-            let rlhs = resolve_val(arena, lhs, env);
-            let rrhs = resolve_val(arena, rhs, env);
+            let rlhs = deep_resolve(arena, lhs, env);
+            let rrhs = deep_resolve(arena, rhs, env);
             if rlhs == rrhs {
                 return body;
             }
@@ -813,7 +808,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
 
         // ifz(num, zk, n.sk): resolve num through env, then subst
         MComputation::Ifz { num, zk, sk } => {
-            let resolved = resolve_val(arena, num, env);
+            let resolved = deep_resolve(arena, num, env);
             match resolved {
                 MValue::Zero => {
                     #[cfg(feature = "opt-stats")]
@@ -831,7 +826,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
 
         // match(list, nilk, x.xs.consk): resolve list through env, then subst
         MComputation::Match { list, nilk, consk } => {
-            let resolved = resolve_val(arena, list, env);
+            let resolved = deep_resolve(arena, list, env);
             match resolved {
                 MValue::Nil => {
                     #[cfg(feature = "opt-stats")]
@@ -851,7 +846,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
 
         // case(sum, x.inlk, y.inrk): resolve sum through env, then subst
         MComputation::Case { sum, inlk, inrk } => {
-            let resolved = resolve_val(arena, sum, env);
+            let resolved = deep_resolve(arena, sum, env);
             match resolved {
                 MValue::Inl(v) => {
                     #[cfg(feature = "opt-stats")]
