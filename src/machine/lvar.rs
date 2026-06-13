@@ -7,40 +7,83 @@ use super::{Ident, VClosure};
 
 #[derive(Clone)]
 pub struct LogicEnv<'a> {
-    entries: Rc<Vec<(ValueType, Option<VClosure<'a>>)>>,
-    union_vars: Rc<UnionFind>,
+    store: Rc<UnionFind<(ValueType, Option<VClosure<'a>>)>>,
 }
 
 impl<'a> LogicEnv<'a> {
     pub fn new() -> LogicEnv<'a> {
         LogicEnv {
-            entries: Rc::new(Vec::new()),
-            union_vars: Rc::new(UnionFind::new()),
+            store: Rc::new(UnionFind::new()),
         }
     }
 
     pub fn fresh(&mut self, ptype: ValueType) -> Ident {
-        let next = self.entries.len();
-        Rc::make_mut(&mut self.union_vars).register(next);
-        Rc::make_mut(&mut self.entries).push((ptype, None));
-        next
+        Rc::make_mut(&mut self.store).register((ptype, None))
     }
 
     pub fn lookup(&self, ident: Ident) -> Option<VClosure<'a>> {
-        let root = self.union_vars.find(ident);
-        self.entries.get(root)?.1
+        let root = self.store.find(ident);
+        self.store.get(root).1
     }
 
     pub fn set_vclos(&mut self, ident: Ident, vclos: VClosure<'a>) {
-        let ptype = self.get_type(ident);
-        Rc::make_mut(&mut self.entries)[ident] = (ptype, Some(vclos));
+        let store = Rc::make_mut(&mut self.store);
+        let root = store.find(ident);
+        store.get_mut(root).1 = Some(vclos);
     }
 
     pub fn get_type(&self, ident: Ident) -> ValueType {
-        self.entries[ident].0.clone()
+        let root = self.store.find(ident);
+        self.store.get(root).0.clone()
     }
 
     pub fn identify(&mut self, ident1: Ident, ident2: Ident) {
-        Rc::make_mut(&mut self.union_vars).union(ident1, ident2);
+        Rc::make_mut(&mut self.store).union(ident1, ident2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::env::Env;
+    use crate::machine::mterms::MValue;
+    use bumpalo::Bump;
+
+    /// Regression for B1: binding a *non-root* member of a merged class must be
+    /// visible through every ident in that class.
+    ///
+    /// On the buggy code (`set_vclos` writing at the raw ident while `lookup`
+    /// reads at the root) the binding placed on the non-root ident was written
+    /// to a slot nobody reads, so both lookups returned `None` and the
+    /// constraint was silently lost. `union` makes its second argument the root
+    /// on equal rank, so binding the *first* ident exercises the non-root write.
+    #[test]
+    fn binding_non_root_is_visible_through_class() {
+        let arena = Bump::new();
+
+        let mut lenv = LogicEnv::new();
+        let a = lenv.fresh(ValueType::Nat);
+        let b = lenv.fresh(ValueType::Nat);
+
+        lenv.identify(a, b);
+
+        let three = arena.alloc(MValue::Nat(3));
+        let vclos = VClosure::mk_clos(three, Env::empty(&arena));
+        // `a` is the non-root member of {a, b} after the union above.
+        lenv.set_vclos(a, vclos);
+
+        // The binding must be visible through both idents.
+        assert!(
+            matches!(lenv.lookup(a), Some(VClosure::Clos { val: MValue::Nat(3), .. })),
+            "binding lost when looked up via the non-root ident"
+        );
+        assert!(
+            matches!(lenv.lookup(b), Some(VClosure::Clos { val: MValue::Nat(3), .. })),
+            "binding lost when looked up via the root ident"
+        );
+
+        // The type must remain consistent across the whole class.
+        assert_eq!(lenv.get_type(a), ValueType::Nat);
+        assert_eq!(lenv.get_type(b), ValueType::Nat);
     }
 }

@@ -1,5 +1,17 @@
 use std::cell::Cell;
 
+use super::Ident;
+
+/// The canonical index of a logic variable's equivalence class.
+///
+/// A `Root` can only be produced by [`UnionFind::find`] (or the self-root
+/// established by [`UnionFind::register`]). Because its field is private to
+/// this module, per-variable storage keyed by `Root` cannot be indexed by a
+/// raw [`Ident`] — that is a compile error. This makes the read/write
+/// canonicalization invariant inexpressible to violate from outside.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Root(usize);
+
 #[derive(Clone)]
 struct Node {
     depth: usize,
@@ -15,50 +27,73 @@ impl Node {
     }
 }
 
+/// A union-find over [`Ident`]s that also owns the per-variable data `T`,
+/// stored once per node and only ever addressed through a [`Root`].
+///
+/// Fusing the union-find with its associated storage removes the desync
+/// surface between two parallel vectors: there is no way to read a binding at
+/// one slot while writing it at another, because the only handle into the data
+/// is the `Root` returned by [`find`](Self::find).
 #[derive(Clone)]
-pub struct UnionFind {
-    array: Vec<Node>,
+pub struct UnionFind<T> {
+    nodes: Vec<Node>,
+    data: Vec<T>,
 }
 
-impl UnionFind {
-    pub fn new() -> UnionFind {
-        UnionFind { array: vec![] }
+impl<T> UnionFind<T> {
+    pub fn new() -> UnionFind<T> {
+        UnionFind {
+            nodes: vec![],
+            data: vec![],
+        }
     }
 
-    pub fn find(&self, i: usize) -> usize {
+    pub fn find(&self, ident: Ident) -> Root {
         // Find root
-        let mut j = i;
-        while let Some(p) = self.array[j].parent.get() {
+        let mut j = ident;
+        while let Some(p) = self.nodes[j].parent.get() {
             j = p;
         }
         let root = j;
         // Path compression
-        let mut j = i;
-        while let Some(p) = self.array[j].parent.get() {
-            self.array[j].parent.set(Some(root));
+        let mut j = ident;
+        while let Some(p) = self.nodes[j].parent.get() {
+            self.nodes[j].parent.set(Some(root));
             j = p;
         }
-        root
+        Root(root)
     }
 
-    pub fn register(&mut self, i: usize) {
-        assert!(i >= self.array.len());
-        self.array.resize_with(i + 1, Node::new);
+    /// Register a fresh node carrying `datum`, returning its [`Ident`].
+    /// The node is its own root.
+    pub fn register(&mut self, datum: T) -> Ident {
+        let ident = self.nodes.len();
+        self.nodes.push(Node::new());
+        self.data.push(datum);
+        ident
     }
 
-    pub fn union(&mut self, i: usize, j: usize) {
-        let a = self.find(i);
-        let b = self.find(j);
+    pub fn get(&self, root: Root) -> &T {
+        &self.data[root.0]
+    }
+
+    pub fn get_mut(&mut self, root: Root) -> &mut T {
+        &mut self.data[root.0]
+    }
+
+    pub fn union(&mut self, i: Ident, j: Ident) {
+        let a = self.find(i).0;
+        let b = self.find(j).0;
         if a == b {
             return;
         }
-        if self.array[a].depth > self.array[b].depth {
-            self.array[b].parent.set(Some(a));
-        } else if self.array[a].depth < self.array[b].depth {
-            self.array[a].parent.set(Some(b));
+        if self.nodes[a].depth > self.nodes[b].depth {
+            self.nodes[b].parent.set(Some(a));
+        } else if self.nodes[a].depth < self.nodes[b].depth {
+            self.nodes[a].parent.set(Some(b));
         } else {
-            self.array[a].parent.set(Some(b));
-            self.array[b].depth += 1;
+            self.nodes[a].parent.set(Some(b));
+            self.nodes[b].depth += 1;
         }
     }
 }
