@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -197,7 +197,6 @@ fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadl
 fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
-    let mut seen = HashSet::new();
     let mut iters = 0u32;
     loop {
         let mut stack = vec![(fresh_machine(arena, comp, env), 0)];
@@ -217,19 +216,19 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dea
             };
             let is_branch = results.len() > 1;
             for m in results.into_iter().rev() {
+                let next_depth = if is_branch { depth + 1 } else { depth };
                 if m.done {
-                    if let MComputation::Return(v) = m.cclos.0 {
-                        let s = output(v, m.cclos.1, &m.lenv, &m.senv);
-                        if seen.insert(s.clone()) {
-                            on_solution(&s);
-                            solns += 1;
-                            if config().first_only {
-                                return (solns, false);
-                            }
+                    // Count a solution only in the round that first reaches its
+                    // depth (the frontier (depth_limit/2, depth_limit]): every
+                    // round with a larger limit re-derives it, but the window
+                    // selects exactly one, so distinct derivations that happen
+                    // to print identically are no longer collapsed.
+                    if next_depth >= depth_limit / 2 && next_depth < depth_limit {
+                        if record_solution(&m, &mut solns, on_solution) {
+                            return (solns, false);
                         }
                     }
                 } else {
-                    let next_depth = if is_branch { depth + 1 } else { depth };
                     stack.push((m, next_depth));
                 }
             }
@@ -305,5 +304,59 @@ fn output<'a>(val: &'a MValue<'a>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &Sus
     match VClosure::mk_clos(val, env).close(lenv, senv) {
         Ok(closed) => closed.to_string(),
         Err(_) => "<cyclic term: cannot print (occurs check disabled)>".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser;
+    use crate::machine::translate::translate;
+
+    /// Parse, translate and run `src`, collecting the rendered solutions.
+    fn solutions(src: &str, strategy: Strategy) -> Vec<String> {
+        let arena = Bump::new();
+        let ast = parser::parse(src).unwrap();
+        let (comp, env_vals) = translate(&arena, ast);
+        let run_arena = Bump::new();
+        let env = import_env(&run_arena, &env_vals);
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        let mut out = Vec::new();
+        let (_, timed_out) = {
+            let mut on_solution = |s: &str| out.push(s.to_string());
+            run_internal(&run_arena, comp, env, strategy, deadline, &mut on_solution)
+        };
+        assert!(!timed_out, "test program timed out");
+        out
+    }
+
+    /// B7: a solution whose answer still mentions an unresolved logic variable
+    /// must be reported and counted, not silently dropped. `inert.gwk` is
+    /// `exists x :: Nat. x.`, whose answer is a residual free variable.
+    #[test]
+    fn inert_reports_free_variable() {
+        let src = std::fs::read_to_string("examples/inert.gwk").unwrap();
+        let solns = solutions(&src, Strategy::Bfs);
+        assert_eq!(solns.len(), 1);
+        assert!(
+            solns[0].starts_with('_'),
+            "expected a free-variable placeholder, got {:?}",
+            solns[0]
+        );
+    }
+
+    /// B8: IDDFS must count distinct derivations that print identically once
+    /// each, exactly like the other complete strategies, rather than collapsing
+    /// them via a rendered-output set. Here both arms of the choice render `1`.
+    #[test]
+    fn iddfs_counts_indistinguishable_derivations() {
+        let src = "f :: Nat\nf = 1 <> 1.\n\nf.";
+        let bfs = solutions(src, Strategy::Bfs).len();
+        let fair = solutions(src, Strategy::Fair).len();
+        let iddfs = solutions(src, Strategy::Iddfs).len();
+        assert_eq!(bfs, 2);
+        assert_eq!(fair, 2);
+        assert_eq!(iddfs, bfs);
+        assert_eq!(iddfs, fair);
     }
 }
