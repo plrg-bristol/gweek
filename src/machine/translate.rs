@@ -515,8 +515,169 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
     }
 }
 
-fn translate_bexpr<'a>(_arena: &'a Bump, _bexpr: BExpr, _tenv: &TEnv) -> &'a MComputation<'a> {
-    todo!("boolean expressions not yet implemented")
+/// Returns a computation that produces the `Bool` value `b`
+/// (`Sum(Unit, Unit)`, `Inl` = true, `Inr` = false).
+fn return_bool<'a>(arena: &'a Bump, b: bool) -> &'a MComputation<'a> {
+    let unit = arena.alloc(MValue::Unit);
+    let val = if b { arena.alloc(MValue::Inl(unit)) } else { arena.alloc(MValue::Inr(unit)) };
+    arena.alloc(MComputation::Return(val))
+}
+
+/// Builds the closed, curried recursive equality function on `Nat`,
+/// returned as a thunk. Forcing it yields `λa. return (thunk (λb. a == b))`,
+/// where `a == b` evaluates to the `Bool` representation of their equality.
+fn nat_eq_thunk<'a>(arena: &'a Bump) -> &'a MValue<'a> {
+    let var = |i| -> &'a MValue<'a> { arena.alloc(MValue::Var(i)) };
+    let ifz = |num, zk, sk| -> &'a MComputation<'a> {
+        arena.alloc(MComputation::Ifz { num, zk, sk })
+    };
+
+    // Innermost comparison; environment is [b = 0, a = 1, self = 2].
+
+    // a = 0: equal iff b = 0.
+    let azero = ifz(var(0), return_bool(arena, true), return_bool(arena, false));
+
+    // a = succ a' (env [a' = 0, b = 1, a = 2, self = 3]):
+    //   b = 0   -> false
+    //   b = b'  -> force self applied to a' then b'
+    let recurse = {
+        // env [a' = 0, b = 1, a = 2, self = 3]; ifz on b binds b' giving
+        // env [b' = 0, a' = 1, b = 2, a = 3, self = 4].
+        let apply_a = arena.alloc(MComputation::App {
+            op: arena.alloc(MComputation::Force(var(4))),
+            arg: var(1), // a'
+        });
+        // First application returns a thunk bound at 0; b' shifts to 1.
+        let apply_b = arena.alloc(MComputation::App {
+            op: arena.alloc(MComputation::Force(var(0))),
+            arg: var(1), // b'
+        });
+        arena.alloc(MComputation::Bind { comp: apply_a, cont: apply_b })
+    };
+    let asucc = ifz(var(1), return_bool(arena, false), recurse);
+
+    let compare = ifz(var(1), azero, asucc);
+    let lam_b = arena.alloc(MComputation::Lambda { body: compare });
+    let ret_lam_b = arena.alloc(MComputation::Return(arena.alloc(MValue::Thunk(lam_b))));
+    let lam_a = arena.alloc(MComputation::Lambda { body: ret_lam_b });
+    let rec = arena.alloc(MComputation::Rec { body: lam_a });
+    arena.alloc(MValue::Thunk(rec))
+}
+
+/// Applies the curried `Nat` equality function (a thunk) to two argument
+/// computations, yielding a computation that returns their equality `Bool`.
+fn nat_eq_comp<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+    let lhs_comp = translate_expr(arena, lhs, tenv);
+    tenv.bind("_");
+    let rhs_comp = translate_expr(arena, rhs, tenv);
+    tenv.unbind();
+    // Environment at the application: [b = 0, a = 1].
+    let eq = nat_eq_thunk(arena);
+    let apply_a = arena.alloc(MComputation::App {
+        op: arena.alloc(MComputation::Force(eq)),
+        arg: arena.alloc(MValue::Var(1)),
+    });
+    // The first application returns a thunk, bound at 0; b shifts to 1.
+    let apply_b = arena.alloc(MComputation::App {
+        op: arena.alloc(MComputation::Force(arena.alloc(MValue::Var(0)))),
+        arg: arena.alloc(MValue::Var(1)),
+    });
+    let recurse = arena.alloc(MComputation::Bind { comp: apply_a, cont: apply_b });
+    let inner = arena.alloc(MComputation::Bind { comp: rhs_comp, cont: recurse });
+    arena.alloc(MComputation::Bind { comp: lhs_comp, cont: inner })
+}
+
+/// Negates a computation producing a `Bool` by swapping `Inl`/`Inr`.
+fn negate_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>) -> &'a MComputation<'a> {
+    let case = arena.alloc(MComputation::Case {
+        sum: arena.alloc(MValue::Var(0)),
+        inlk: return_bool(arena, false),
+        inrk: return_bool(arena, true),
+    });
+    arena.alloc(MComputation::Bind { comp, cont: case })
+}
+
+/// Constant-folds a `Bool`-valued expression when it is fully literal.
+fn const_bool(expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::Bool(b) => Some(*b),
+        Expr::Stmt(s) => match &**s {
+            Stmt::Expr(e) => const_bool(e),
+            _ => None,
+        },
+        Expr::BExpr(b) => match b {
+            BExpr::Eq(a, b) => Some(const_eq(a, b)?),
+            BExpr::NEq(a, b) => Some(!const_eq(a, b)?),
+            BExpr::And(a, b) => Some(const_bool(a)? && const_bool(b)?),
+            BExpr::Or(a, b) => Some(const_bool(a)? || const_bool(b)?),
+            BExpr::Not(e) => Some(!const_bool(e)?),
+        },
+        _ => None,
+    }
+}
+
+/// Constant-folds equality of two operands when both are fully literal,
+/// covering both `Nat` and `Bool` operands.
+fn const_eq(a: &Expr, b: &Expr) -> Option<bool> {
+    if let (Some(x), Some(y)) = (const_nat(a), const_nat(b)) {
+        return Some(x == y);
+    }
+    Some(const_bool(a)? == const_bool(b)?)
+}
+
+/// Constant-folds a `Nat`-valued expression when it is fully literal.
+fn const_nat(expr: &Expr) -> Option<u64> {
+    match expr {
+        Expr::Zero => Some(0),
+        Expr::Nat(n) => Some(*n as u64),
+        Expr::Succ(e) => Some(const_nat(e)? + 1),
+        Expr::Stmt(s) => match &**s {
+            Stmt::Expr(e) => const_nat(e),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn translate_bexpr<'a>(arena: &'a Bump, bexpr: BExpr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+    if let Some(b) = const_bool(&Expr::BExpr(bexpr.clone())) {
+        return return_bool(arena, b);
+    }
+    match bexpr {
+        BExpr::Eq(lhs, rhs) => nat_eq_comp(arena, *lhs, *rhs, tenv),
+        BExpr::NEq(lhs, rhs) => negate_comp(arena, nat_eq_comp(arena, *lhs, *rhs, tenv)),
+        BExpr::And(lhs, rhs) => translate_connective(arena, *lhs, *rhs, true, tenv),
+        BExpr::Or(lhs, rhs) => translate_connective(arena, *lhs, *rhs, false, tenv),
+        BExpr::Not(e) => {
+            let comp = translate_expr(arena, *e, tenv);
+            negate_comp(arena, comp)
+        }
+    }
+}
+
+/// Lowers `&&` (when `and`) or `||` by casing on the lowered left `Bool`.
+/// For `&&`: true (`Inl`) evaluates the right operand, false (`Inr`) is false.
+/// For `||`: true short-circuits to true, false evaluates the right operand.
+/// The left operand binds at index 0, then the `Case` payload binds at index 0,
+/// so the right operand is translated under two extra binders.
+fn translate_connective<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, and: bool, tenv: &mut TEnv) -> &'a MComputation<'a> {
+    let lhs_comp = translate_expr(arena, lhs, tenv);
+    tenv.bind("_");
+    tenv.bind("_");
+    let rhs_comp = translate_expr(arena, rhs, tenv);
+    tenv.unbind();
+    tenv.unbind();
+    let (inlk, inrk) = if and {
+        (rhs_comp, return_bool(arena, false))
+    } else {
+        (return_bool(arena, true), rhs_comp)
+    };
+    let case = arena.alloc(MComputation::Case {
+        sum: arena.alloc(MValue::Var(0)),
+        inlk,
+        inrk,
+    });
+    arena.alloc(MComputation::Bind { comp: lhs_comp, cont: case })
 }
 
 fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a MComputation<'a> {
