@@ -129,12 +129,10 @@ fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) 
 /// Record a solution; returns true if we should stop (--first mode).
 fn record_solution(m: &Machine, solns: &mut usize, on_solution: &mut dyn FnMut(&str)) -> bool {
     if let MComputation::Return(v) = m.cclos.0 {
-        if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
-            on_solution(&s);
-            *solns += 1;
-            if config().first_only {
-                return true;
-            }
+        on_solution(&output(v, m.cclos.1, &m.lenv, &m.senv));
+        *solns += 1;
+        if config().first_only {
+            return true;
         }
     }
     false
@@ -221,13 +219,12 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dea
             for m in results.into_iter().rev() {
                 if m.done {
                     if let MComputation::Return(v) = m.cclos.0 {
-                        if let Some(s) = output(m.arena, v, m.cclos.1, &m.lenv, &m.senv) {
-                            if seen.insert(s.clone()) {
-                                on_solution(&s);
-                                solns += 1;
-                                if config().first_only {
-                                    return (solns, false);
-                                }
+                        let s = output(v, m.cclos.1, &m.lenv, &m.senv);
+                        if seen.insert(s.clone()) {
+                            on_solution(&s);
+                            solns += 1;
+                            if config().first_only {
+                                return (solns, false);
                             }
                         }
                     }
@@ -304,6 +301,9 @@ fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dead
     (solns, false)
 }
 
-fn output<'a>(arena: &'a Bump, val: &'a MValue<'a>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Option<String> {
-    Some(VClosure::Clos { val, env }.close(arena, lenv, senv)?.to_string())
+fn output<'a>(val: &'a MValue<'a>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> String {
+    match VClosure::mk_clos(val, env).close(lenv, senv) {
+        Ok(closed) => closed.to_string(),
+        Err(_) => "<cyclic term: cannot print (occurs check disabled)>".to_string(),
+    }
 }
