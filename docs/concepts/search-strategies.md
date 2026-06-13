@@ -1,4 +1,14 @@
-# Search Strategies
+---
+title: Search strategies
+tags: [concept]
+---
+
+# Search strategies
+
+> These four strategies are implemented in [[eval]] (`eval.rs`) and selected by the CLI flags
+> documented in [[cli]]. They differ only in the *order* they explore the
+> [[nondeterminism|search tree]] — the tree itself, and therefore the solution set, is fixed.
+> Each repeatedly calls [[step|`run_to_branch`]] and schedules the resulting machine states.
 
 ## The search tree
 

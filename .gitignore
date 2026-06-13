@@ -4,3 +4,7 @@ web/pkg/
 
 # Third-party benchmark distributions (PAKCS/KiCS2); fetch separately.
 /benchmark/
+
+# Quartz wiki: the upstream clone and the generated site
+.quartz/
+/web/wiki/

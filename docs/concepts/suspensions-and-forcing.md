@@ -1,4 +1,19 @@
-# Performance Notes: Forcing and Constraint Ordering
+---
+title: Suspensions and forcing
+tags: [concept]
+---
+
+# Suspensions and forcing
+
+> **Background.** A `let x = e in body` does not run `e` eagerly. Unless `--strict` is set,
+> [[step|`Bind`]] (`step.rs:157-169`) freezes `e` as a **suspension** in the
+> [[senv|suspension environment]] and binds a `Susp` reference for `x`. The suspension is
+> *forced* — actually run — only when something inspects `x`'s value: a `case`/`Ifz`/`Match`
+> scrutinee, or a `=:=` operand, i.e. wherever [[vclosure|`close_head`]] meets a `Susp` and
+> returns `Err(SuspAt)`, prompting a reschedule (`step.rs:188-198`). If `x` is never inspected,
+> the suspension is only drained at the very end (`step.rs:88-105`). The two consequences below
+> follow directly from that rule, and matter for writing efficient search programs. See also
+> [[nondeterminism]] on why early pruning is decisive.
 
 Gweek suspends non-trivial computations in `let` bindings. The suspension is
 forced when the bound variable is used in a position that inspects its value

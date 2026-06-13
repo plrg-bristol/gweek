@@ -1,4 +1,17 @@
+---
+title: Deep review (audit)
+tags: [review]
+updated: 7972077
+---
+
 # Gweek — Code Review
+
+> **Status — historical snapshot.** This audit was produced before commit `7972077`. At least
+> one finding is now resolved: **B1** (the union-find slot soundness bug) was fixed in
+> `0f34f45` — logic-variable storage now canonicalizes through `Root` by construction, see
+> [[union-find]] and [[logic-variables]]. The other findings are referenced as "known issue"
+> callouts throughout the wiki; **verify each against current code before acting on it.** When
+> a finding is fixed, note it here and in the relevant page (a [[AGENTS|lint]] task).
 
 A full review of the `gweek` interpreter (~6,250 LOC of Rust in `src/`): a
 Call-By-Push-Value (CBPV) abstract machine for a functional-logic language,

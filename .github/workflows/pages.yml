@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so Quartz can derive page "modified" dates from git
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -38,6 +40,14 @@ jobs:
         run: |
           rm -f web/pkg/.gitignore
           rm -f web/pkg/package.json
+
+      # Build the docs/ wiki with Quartz into web/wiki/, so it deploys to the
+      # /wiki subpath of the Pages site alongside the WASM playground at the root.
+      - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v2
+
+      - name: Build wiki (Quartz)
+        run: just wiki-build
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
