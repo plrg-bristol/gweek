@@ -65,18 +65,23 @@ fn type_parser() -> impl Parser<char, Type, Error = Simple<char>> + Clone {
             ident().map(Type::Ident),
         ));
 
-        primary_type.clone().then(
-            choice((
-                sym("->").to("->"),
-                just('*').padded().ignored().to("*"),
-            ))
-            .then(ty)
-            .or_not()
-        ).map(|(lhs, rest)| {
-            match rest {
-                Some(("->", rhs)) => Type::Arrow(Box::new(lhs), Box::new(rhs)),
-                Some(("*", rhs)) => Type::Product(Box::new(lhs), Box::new(rhs)),
-                _ => lhs,
+        let product = primary_type.clone()
+            .separated_by(just('*').padded())
+            .at_least(1)
+            .map(|factors| {
+                let mut iter = factors.into_iter().rev();
+                let last = iter.next().unwrap();
+                iter.fold(last, |acc, factor| {
+                    Type::Product(Box::new(factor), Box::new(acc))
+                })
+            });
+
+        product.clone().then(
+            sym("->").ignore_then(ty).or_not()
+        ).map(|(lhs, rhs)| {
+            match rhs {
+                Some(rhs) => Type::Arrow(Box::new(lhs), Box::new(rhs)),
+                None => lhs,
             }
         })
     })
@@ -342,18 +347,18 @@ fn cases_parser(
     single_case.clone()
         .separated_by(just('|').padded())
         .at_least(1)
-        .map(|case_list| {
+        .try_map(|case_list, span| {
             let mut cases = Cases::new();
             for (pattern, body) in case_list {
                 match pattern.strip_parentheses() {
-                    Expr::Zero => {
+                    Expr::Zero | Expr::Nat(0) => {
                         cases.set_type_or_check(CasesType::Nat);
                         cases.set_nat_zero(body);
                     },
                     Expr::Succ(e) => {
                         let var = match *e {
                             Expr::Ident(s) => s,
-                            _ => panic!("expected identifier in succ case"),
+                            _ => return Err(Simple::custom(span, "expected identifier in succ case")),
                         };
                         cases.set_type_or_check(CasesType::Nat);
                         cases.set_nat_succ(var, body);
@@ -365,25 +370,26 @@ fn cases_parser(
                     Expr::Cons(e1, e2) => {
                         let x = match *e1 {
                             Expr::Ident(s) => s,
-                            _ => panic!("expected identifier in cons case"),
+                            _ => return Err(Simple::custom(span, "expected identifier in cons case")),
                         };
                         let xs = match *e2 {
                             Expr::Ident(s) => s,
-                            _ => panic!("expected identifier in cons case"),
+                            _ => return Err(Simple::custom(span, "expected identifier in cons case")),
                         };
                         cases.set_type_or_check(CasesType::List);
                         cases.set_list_cons(x, xs, body);
                     },
-                    _ => panic!("bad case pattern"),
+                    _ => return Err(Simple::custom(span, "unsupported case pattern")),
                 }
             }
-            cases
+            Ok(cases)
         })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::cases::{CasesNat, CasesNatSucc};
 
     #[test]
     fn test1() {
@@ -777,5 +783,58 @@ id x = x.
                 ))))))
             ))))]
         )
+    }
+
+    #[test]
+    fn test21() {
+        let src = "f :: Nat * Nat -> Nat";
+
+        let ast = parse(src).unwrap();
+
+        assert_eq!(
+            ast,
+            vec![Decl::FuncType {
+                name: "f".to_string(),
+                r#type: Type::Arrow(
+                    Box::new(Type::Product(
+                        Box::new(Type::Ident("Nat".to_string())),
+                        Box::new(Type::Ident("Nat".to_string()))
+                    )),
+                    Box::new(Type::Ident("Nat".to_string()))
+                )
+            }]
+        )
+    }
+
+    #[test]
+    fn test22() {
+        let src = "case n of 0 -> n | S m -> m.";
+
+        let ast = parse(src).unwrap();
+
+        assert_eq!(
+            ast,
+            vec![Decl::Stmt(Stmt::Case {
+                expr: Expr::Ident("n".to_string()),
+                cases: Cases {
+                    r#type: Some(CasesType::Nat),
+                    nat_case: Some(CasesNat {
+                        zk: Some(Box::new(Stmt::Expr(Expr::Ident("n".to_string())))),
+                        sk: Some(CasesNatSucc {
+                            var: "m".to_string(),
+                            body: Box::new(Stmt::Expr(Expr::Ident("m".to_string())))
+                        })
+                    }),
+                    list_case: None
+                }
+            })]
+        )
+    }
+
+    #[test]
+    fn test23() {
+        let src = "case p of (x, y) -> x.";
+
+        assert!(parse(src).is_err());
     }
 }
