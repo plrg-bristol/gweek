@@ -163,8 +163,44 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 mod tests {
     use bumpalo::Bump;
     use gweek::machine::{self, translate::translate, run, Strategy};
-    use gweek::parser;
+    use gweek::{parser, type_check};
     use std::fs;
+
+    // Full pipeline (parse -> type-check -> translate -> evaluate) returning the
+    // collected output, for asserting the value a program produces.
+    fn collect_source(src: &str) -> String {
+        let arena = Bump::new();
+        let ast = parser::parse(src).expect("should parse");
+        type_check::type_check(&ast).expect("should type-check");
+        let (comp, env) = translate(&arena, ast);
+        machine::eval_collect(comp, &env)
+    }
+
+    // B2: `if`/`then`/`else` and `==` on Nat lower and evaluate correctly.
+    #[test]
+    fn if_then_else_and_nat_eq() {
+        assert!(collect_source("if (2 == 2) then 7 else 9.\n").contains("> 7"));
+        assert!(collect_source("if (1 == 2) then 7 else 9.\n").contains("> 9"));
+    }
+
+    // B10: a pair function argument is destructured and projected.
+    #[test]
+    fn pair_argument_projection() {
+        assert!(collect_source("f :: Nat * Nat -> Nat\nf (x,y) = y.\n\nf (3,4).\n").contains("> 4"));
+        assert!(collect_source("g :: Nat * Nat -> Nat\ng (x,y) = x.\n\ng (3,4).\n").contains("> 3"));
+    }
+
+    // B3: mutually recursive top-level functions translate and evaluate.
+    #[test]
+    fn mutual_recursion() {
+        let prog = |n: u32| format!(
+            "isEven :: Nat -> Bool\nisEven n = case n of Z -> true | S m -> isOdd m.\n\n\
+             isOdd :: Nat -> Bool\nisOdd n = case n of Z -> false | S m -> isEven m.\n\n\
+             isEven {n}.\n"
+        );
+        assert!(collect_source(&prog(4)).contains("> true"));
+        assert!(collect_source(&prog(3)).contains("> false"));
+    }
 
     fn run_example(path: &str, strategy: Strategy) -> usize {
         run_example_inner(path, strategy, false)
