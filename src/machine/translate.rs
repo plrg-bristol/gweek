@@ -63,6 +63,14 @@ names and definitions.
 pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
     let ast = reorder_decls(ast);
 
+    let sigs: HashMap<String, Type> = ast
+        .iter()
+        .filter_map(|d| match d {
+            Decl::FuncType { name, r#type } => Some((name.clone(), r#type.clone())),
+            _ => None,
+        })
+        .collect();
+
     let mut env = Vec::new();
     let mut tenv = TEnv::new();
     let mut main = None;
@@ -72,7 +80,8 @@ pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, 
             Decl::FuncType { .. } => (),
             Decl::Func { name, args, body } => {
                 let nullary = args.is_empty();
-                let result = translate_func(arena, &name, args, body, &mut tenv);
+                let arg_types = arg_types(sigs.get(&name), args.len());
+                let result = translate_func(arena, &name, args, &arg_types, body, &mut tenv);
                 if nullary {
                     tenv.bind_nullary(&name);
                 } else {
@@ -87,6 +96,23 @@ pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, 
     }
 
     (main.expect("empty program"), env)
+}
+
+/// Peels the first `n` argument types off a function signature.
+/// Missing types (untyped functions) are reported as `None`.
+fn arg_types(sig: Option<&Type>, n: usize) -> Vec<Option<Type>> {
+    let mut ty = sig;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        match ty {
+            Some(Type::Arrow(a, b)) => {
+                out.push(Some((**a).clone()));
+                ty = Some(b);
+            }
+            _ => out.push(None),
+        }
+    }
+    out
 }
 
 // --- Declaration reordering (topological sort) ---
@@ -278,40 +304,145 @@ fn walk_bexpr(bexpr: &BExpr, names: &HashSet<String>, refs: &mut HashSet<String>
 
 // --- Translation ---
 
-fn translate_func<'a>(arena: &'a Bump, name: &str, args: Vec<Arg>, body: Stmt, tenv: &mut TEnv) -> &'a MValue<'a> {
+fn translate_func<'a>(
+    arena: &'a Bump,
+    name: &str,
+    args: Vec<Arg>,
+    arg_types: &[Option<Type>],
+    body: Stmt,
+    tenv: &mut TEnv,
+) -> &'a MValue<'a> {
     tenv.bind(name);
+    let comp = if args.is_empty() {
+        translate_stmt(arena, body, tenv)
+    } else {
+        build_args(arena, &args, arg_types, &body, tenv)
+    };
+    tenv.unbind();
+    let rec = arena.alloc(MComputation::Rec { body: comp });
+    arena.alloc(MValue::Thunk(rec))
+}
 
-    let mut vars: Vec<String> = args
-        .iter()
-        .map(|arg| match arg {
-            Arg::Ident(var) => var.clone(),
-            _ => todo!(),
-        })
-        .collect();
-
-    for v in &vars {
-        tenv.bind(v);
+/// Builds the curried lambda chain for the remaining `args`, binding each
+/// argument pattern and emitting the function `body` once all are consumed.
+/// Returns the body of the lambda for the first remaining argument.
+fn build_args<'a>(
+    arena: &'a Bump,
+    args: &[Arg],
+    arg_types: &[Option<Type>],
+    body: &Stmt,
+    tenv: &mut TEnv,
+) -> &'a MComputation<'a> {
+    match args {
+        [] => translate_stmt(arena, body.clone(), tenv),
+        [arg, rest @ ..] => {
+            let rest_types = &arg_types[1..];
+            let lam_body = match arg {
+                Arg::Ident(var) => {
+                    tenv.bind(var);
+                    let inner = curry(arena, rest, rest_types, body, tenv);
+                    tenv.unbind();
+                    inner
+                }
+                Arg::Pair(..) => {
+                    let ty = arg_types[0]
+                        .as_ref()
+                        .expect("pair argument needs a declared product type");
+                    tenv.bind("_");
+                    let body_comp = bind_pattern(arena, arg, ty, 0, tenv, &mut |tenv| {
+                        curry(arena, rest, rest_types, body, tenv)
+                    });
+                    tenv.unbind();
+                    body_comp
+                }
+            };
+            arena.alloc(MComputation::Lambda { body: lam_body })
+        }
     }
-    let mbody = translate_stmt(arena, body, tenv);
-    for _ in &vars {
+}
+
+/// Wraps the lambda chain for `rest` so that, when more arguments remain, the
+/// inner chain is returned as a thunk (CBPV currying).
+fn curry<'a>(
+    arena: &'a Bump,
+    rest: &[Arg],
+    rest_types: &[Option<Type>],
+    body: &Stmt,
+    tenv: &mut TEnv,
+) -> &'a MComputation<'a> {
+    if rest.is_empty() {
+        build_args(arena, rest, rest_types, body, tenv)
+    } else {
+        let inner = build_args(arena, rest, rest_types, body, tenv);
+        let thunk = arena.alloc(MValue::Thunk(inner));
+        arena.alloc(MComputation::Return(thunk))
+    }
+}
+
+/// Collects the leaf variable names of a pattern together with their value
+/// types, in left-to-right order, validating the pattern against the type.
+fn collect_leaves(pattern: &Arg, ty: &Type, out: &mut Vec<(String, ValueType)>) {
+    match pattern {
+        Arg::Ident(name) => out.push((name.clone(), translate_vtype(ty.clone()))),
+        Arg::Pair(a, b) => match ty {
+            Type::Product(ta, tb) => {
+                collect_leaves(a, ta, out);
+                collect_leaves(b, tb, out);
+            }
+            _ => panic!("pair pattern against non-product type {ty}"),
+        },
+    }
+}
+
+/// Rebuilds the value matching `pattern`, addressing the leaf logic variables
+/// by their de Bruijn index. With `m` leaves bound in left-to-right order, the
+/// `j`-th leaf sits at index `(m - 1) - j`.
+fn rebuild_pattern<'a>(arena: &'a Bump, pattern: &Arg, m: usize, next: &mut usize) -> &'a MValue<'a> {
+    match pattern {
+        Arg::Ident(_) => {
+            let idx = (m - 1) - *next;
+            *next += 1;
+            arena.alloc(MValue::Var(idx))
+        }
+        Arg::Pair(a, b) => {
+            let av = rebuild_pattern(arena, a, m, next);
+            let bv = rebuild_pattern(arena, b, m, next);
+            arena.alloc(MValue::Pair(av, bv))
+        }
+    }
+}
+
+/// Destructures the pair value at de Bruijn index `pair_idx` against `pattern`.
+/// Introduces one fresh logic variable per leaf, unifies the reconstructed
+/// pattern with the pair, then runs the continuation `k` with the leaves bound.
+fn bind_pattern<'a>(
+    arena: &'a Bump,
+    pattern: &Arg,
+    ty: &Type,
+    pair_idx: usize,
+    tenv: &mut TEnv,
+    k: &mut dyn FnMut(&mut TEnv) -> &'a MComputation<'a>,
+) -> &'a MComputation<'a> {
+    let mut leaves = Vec::new();
+    collect_leaves(pattern, ty, &mut leaves);
+    let m = leaves.len();
+
+    for (name, _) in &leaves {
+        tenv.bind(name);
+    }
+    let body = k(tenv);
+    for _ in &leaves {
         tenv.unbind();
     }
-    tenv.unbind();
 
-    if vars.is_empty() {
-        let rec = arena.alloc(MComputation::Rec { body: mbody });
-        arena.alloc(MValue::Thunk(rec))
-    } else {
-        let mut c: &MComputation = arena.alloc(MComputation::Lambda { body: mbody });
-        while vars.len() > 1 {
-            let thunk = arena.alloc(MValue::Thunk(c));
-            let ret = arena.alloc(MComputation::Return(thunk));
-            c = arena.alloc(MComputation::Lambda { body: ret });
-            vars.pop();
-        }
-        let rec = arena.alloc(MComputation::Rec { body: c });
-        arena.alloc(MValue::Thunk(rec))
+    let mut next = 0;
+    let lhs = rebuild_pattern(arena, pattern, m, &mut next);
+    let rhs = arena.alloc(MValue::Var(pair_idx + m));
+    let mut comp: &MComputation = arena.alloc(MComputation::Equate { lhs, rhs, body });
+    for (_, vty) in leaves.into_iter().rev() {
+        comp = arena.alloc(MComputation::Exists { ptype: vty, body: comp });
     }
+    comp
 }
 
 fn translate_vtype(ptype: Type) -> ValueType {
@@ -473,7 +604,16 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
                 let thunk = arena.alloc(MValue::Thunk(lam));
                 arena.alloc(MComputation::Return(thunk))
             }
-            Arg::Pair(..) => todo!(),
+            // Destructuring a pair needs the component types to annotate the
+            // fresh logic variables (the machine has no product eliminator, so
+            // projection goes through Exists/Equate). A lambda carries no type
+            // annotation, and the type checker rejects every lambda use (lambdas
+            // synthesize no type), so this path is unreachable for well-typed
+            // programs. We refuse to fabricate types here.
+            Arg::Pair(..) => panic!(
+                "cannot translate a pair-pattern lambda argument: no type \
+                 annotation is available to type the destructured components"
+            ),
         },
         Expr::App(op, arg) => {
             let comp_op = translate_expr(arena, *op, tenv);
