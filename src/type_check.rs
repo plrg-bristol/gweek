@@ -31,6 +31,21 @@ fn err(msg: impl Into<String>) -> TypeError {
 struct Ctx {
     vars: Vec<(String, Type)>,
     funcs: HashMap<String, Type>,
+    // Substitution for unification metavariables, indexed by metavar id.
+    // A metavar is represented as Type::Ident("?<id>"), a name the lexer can
+    // never produce, so it cannot clash with a user-written type variable.
+    subst: Vec<Option<Type>>,
+}
+
+// A signature type variable is a lowercase-initial Ident (e.g. `a`), as opposed
+// to a concrete type (`Nat`, `Bool`) which is uppercase-initial.
+fn is_type_var(s: &str) -> bool {
+    s.chars().next().is_some_and(char::is_lowercase)
+}
+
+// Parse the metavar id out of a "?<id>" name, if this is a metavar Ident.
+fn as_meta(s: &str) -> Option<usize> {
+    s.strip_prefix('?').and_then(|n| n.parse().ok())
 }
 
 impl Ctx {
@@ -38,20 +53,57 @@ impl Ctx {
         Ctx {
             vars: Vec::new(),
             funcs: HashMap::new(),
+            subst: Vec::new(),
         }
     }
 
-    fn lookup(&self, name: &str) -> TResult {
-        // Local variables shadow, search from the end
+    fn fresh_meta(&mut self) -> Type {
+        let id = self.subst.len();
+        self.subst.push(None);
+        Type::Ident(format!("?{id}"))
+    }
+
+    // Instantiate a (possibly polymorphic) signature: replace each distinct
+    // signature type variable with a fresh metavar, consistently within this
+    // one instantiation, so e.g. `a -> a` becomes `?0 -> ?0`.
+    fn instantiate(&mut self, ty: &Type) -> Type {
+        let mut mapping = HashMap::new();
+        self.instantiate_with(ty, &mut mapping)
+    }
+
+    fn instantiate_with(&mut self, ty: &Type, mapping: &mut HashMap<String, Type>) -> Type {
+        match ty {
+            Type::Ident(s) if is_type_var(s) => mapping
+                .entry(s.clone())
+                .or_insert_with(|| self.fresh_meta())
+                .clone(),
+            Type::Ident(_) | Type::Any => ty.clone(),
+            Type::List(t) => Type::List(Box::new(self.instantiate_with(t, mapping))),
+            Type::Product(a, b) => Type::Product(
+                Box::new(self.instantiate_with(a, mapping)),
+                Box::new(self.instantiate_with(b, mapping)),
+            ),
+            Type::Arrow(a, b) => Type::Arrow(
+                Box::new(self.instantiate_with(a, mapping)),
+                Box::new(self.instantiate_with(b, mapping)),
+            ),
+        }
+    }
+
+    fn lookup(&mut self, name: &str) -> TResult {
+        // Local variables shadow, search from the end. Local bindings are
+        // monomorphic, so they are returned as-is.
         for (n, ty) in self.vars.iter().rev() {
             if n == name {
                 return Ok(ty.clone());
             }
         }
-        self.funcs
-            .get(name)
-            .cloned()
-            .ok_or_else(|| err(format!("unbound variable '{name}'")))
+        // Top-level functions are the only generalized bindings: instantiate
+        // their signature with fresh metavars at every use site.
+        match self.funcs.get(name).cloned() {
+            Some(ty) => Ok(self.instantiate(&ty)),
+            None => Err(err(format!("unbound variable '{name}'"))),
+        }
     }
 
     fn bind(&mut self, name: &str, ty: Type) {
@@ -90,22 +142,76 @@ impl Ctx {
             }
         }
     }
-}
 
-fn unify(expected: &Type, actual: &Type) -> TResult<()> {
-    match (expected, actual) {
-        (Type::Any, _) | (_, Type::Any) => Ok(()),
-        (Type::Ident(a), Type::Ident(b)) if a == b => Ok(()),
-        (Type::List(a), Type::List(b)) => unify(a, b),
-        (Type::Product(a1, b1), Type::Product(a2, b2)) => {
-            unify(a1, a2)?;
-            unify(b1, b2)
+    // Follow the substitution to the head of `ty`: if it is a bound metavar,
+    // chase the chain; otherwise return `ty` unchanged.
+    fn resolve(&self, ty: &Type) -> Type {
+        if let Type::Ident(s) = ty {
+            if let Some(id) = as_meta(s) {
+                if let Some(bound) = &self.subst[id] {
+                    return self.resolve(bound);
+                }
+            }
         }
-        (Type::Arrow(a1, b1), Type::Arrow(a2, b2)) => {
-            unify(a1, a2)?;
-            unify(b1, b2)
+        ty.clone()
+    }
+
+    // Does metavar `id` occur in `ty` (following the substitution)?
+    fn occurs(&self, id: usize, ty: &Type) -> bool {
+        match ty {
+            Type::Ident(s) => match as_meta(s) {
+                Some(other) => {
+                    other == id
+                        || self.subst[other].as_ref().is_some_and(|t| self.occurs(id, t))
+                }
+                None => false,
+            },
+            Type::List(t) => self.occurs(id, t),
+            Type::Product(a, b) | Type::Arrow(a, b) => {
+                self.occurs(id, a) || self.occurs(id, b)
+            }
+            Type::Any => false,
         }
-        _ => Err(err(format!("type mismatch: expected {expected}, got {actual}"))),
+    }
+
+    // Bind metavar `id` to `ty` (already resolved at the head), with an occurs
+    // check to reject infinite types.
+    fn bind_meta(&mut self, id: usize, ty: &Type) -> TResult<()> {
+        if let Type::Ident(s) = ty {
+            if as_meta(s) == Some(id) {
+                return Ok(());
+            }
+        }
+        if self.occurs(id, ty) {
+            return Err(err(format!("cannot construct infinite type: ?{id} occurs in {ty}")));
+        }
+        self.subst[id] = Some(ty.clone());
+        Ok(())
+    }
+
+    fn unify(&mut self, expected: &Type, actual: &Type) -> TResult<()> {
+        let e = self.resolve(expected);
+        let a = self.resolve(actual);
+        match (&e, &a) {
+            (Type::Any, _) | (_, Type::Any) => Ok(()),
+            (Type::Ident(es), Type::Ident(a_)) if es == a_ => Ok(()),
+            (Type::Ident(es), _) if as_meta(es).is_some() => {
+                self.bind_meta(as_meta(es).unwrap(), &a)
+            }
+            (_, Type::Ident(a_)) if as_meta(a_).is_some() => {
+                self.bind_meta(as_meta(a_).unwrap(), &e)
+            }
+            (Type::List(l1), Type::List(l2)) => self.unify(l1, l2),
+            (Type::Product(a1, b1), Type::Product(a2, b2)) => {
+                self.unify(a1, a2)?;
+                self.unify(b1, b2)
+            }
+            (Type::Arrow(a1, b1), Type::Arrow(a2, b2)) => {
+                self.unify(a1, a2)?;
+                self.unify(b1, b2)
+            }
+            _ => Err(err(format!("type mismatch: expected {e}, got {a}"))),
+        }
     }
 }
 
@@ -176,7 +282,7 @@ fn check_func(ctx: &mut Ctx, name: &str, args: &[Arg], body: &Stmt, ty: &Type) -
     }
 
     let body_type = synth_stmt(ctx, body)?;
-    unify(&ret_type, &body_type).map_err(|e| {
+    ctx.unify(&ret_type, &body_type).map_err(|e| {
         err(format!("in function '{name}': {e}"))
     })?;
 
@@ -213,7 +319,7 @@ fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
         Stmt::Equate { lhs, rhs, body } => {
             let lt = synth_expr(ctx, lhs)?;
             let rt = synth_expr(ctx, rhs)?;
-            unify(&lt, &rt).map_err(|e| err(format!("in equate: {e}")))?;
+            ctx.unify(&lt, &rt).map_err(|e| err(format!("in equate: {e}")))?;
             synth_stmt(ctx, body)
         }
 
@@ -224,7 +330,7 @@ fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
             for e in exprs {
                 let t = synth_expr(ctx, e)?;
                 if let Some(prev) = &ty {
-                    unify(prev, &t).map_err(|e| err(format!("in choice: {e}")))?;
+                    ctx.unify(prev, &t).map_err(|e| err(format!("in choice: {e}")))?;
                 } else {
                     ty = Some(t);
                 }
@@ -236,11 +342,11 @@ fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
 
         Stmt::If { cond, then, r#else } => {
             let ct = synth_stmt(ctx, cond)?;
-            unify(&Type::Ident("Bool".to_string()), &ct)
+            ctx.unify(&Type::Ident("Bool".to_string()), &ct)
                 .map_err(|e| err(format!("if condition: {e}")))?;
             let tt = synth_stmt(ctx, then)?;
             let et = synth_stmt(ctx, r#else)?;
-            unify(&tt, &et).map_err(|e| err(format!("if branches: {e}")))?;
+            ctx.unify(&tt, &et).map_err(|e| err(format!("if branches: {e}")))?;
             Ok(tt)
         }
     }
@@ -251,7 +357,7 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
 
     match cases.r#type.as_ref() {
         Some(CasesType::Nat) => {
-            unify(&Type::Ident("Nat".to_string()), &scrut_type)
+            ctx.unify(&Type::Ident("Nat".to_string()), &scrut_type)
                 .map_err(|e| err(format!("case scrutinee: {e}")))?;
 
             let nat_case = cases.nat_case.as_ref()
@@ -269,7 +375,7 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
                 let t = synth_stmt(ctx, &sk.body)?;
                 ctx.unbind();
                 if let Some(prev) = &result_type {
-                    unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
+                    ctx.unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
                 } else {
                     result_type = Some(t);
                 }
@@ -303,7 +409,7 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
                 ctx.unbind();
                 ctx.unbind();
                 if let Some(prev) = &result_type {
-                    unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
+                    ctx.unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
                 } else {
                     result_type = Some(t);
                 }
@@ -324,7 +430,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
 
         Expr::Succ(e) => {
             let t = synth_expr(ctx, e)?;
-            unify(&Type::Ident("Nat".to_string()), &t)?;
+            ctx.unify(&Type::Ident("Nat".to_string()), &t)?;
             Ok(Type::Ident("Nat".to_string()))
         }
 
@@ -338,7 +444,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             let ht = synth_expr(ctx, head)?;
             let tt = synth_expr(ctx, tail)?;
             let expected_list = Type::List(Box::new(ht.clone()));
-            unify(&expected_list, &tt).map_err(|e| err(format!("in cons: {e}")))?;
+            ctx.unify(&expected_list, &tt).map_err(|e| err(format!("in cons: {e}")))?;
             Ok(expected_list)
         }
 
@@ -349,7 +455,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             let first_type = synth_expr(ctx, &elems[0])?;
             for e in &elems[1..] {
                 let t = synth_expr(ctx, e)?;
-                unify(&first_type, &t).map_err(|e| err(format!("in list literal: {e}")))?;
+                ctx.unify(&first_type, &t).map_err(|e| err(format!("in list literal: {e}")))?;
             }
             Ok(Type::List(Box::new(first_type)))
         }
@@ -362,15 +468,13 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
 
         Expr::App(func, arg) => {
             let ft = synth_expr(ctx, func)?;
-            match ft {
+            match ctx.resolve(&ft) {
                 Type::Arrow(param, ret) => {
-                    let at = synth_expr(ctx, arg)?;
-                    unify(&param, &at).map_err(|e| {
-                        err(format!("in application: {e}"))
-                    })?;
+                    check_expr(ctx, arg, &param)
+                        .map_err(|e| err(format!("in application: {e}")))?;
                     Ok(*ret)
                 }
-                _ => Err(err(format!("applying non-function type {ft}"))),
+                ft => Err(err(format!("applying non-function type {ft}"))),
             }
         }
 
@@ -390,15 +494,31 @@ fn check_expr(ctx: &mut Ctx, expr: &Expr, expected: &Type) -> TResult<()> {
 
         (Expr::Lambda(arg, body), Type::Arrow(param, ret)) => {
             ctx.bind_arg(arg, param)?;
-            let ret_type = resolve_return_type(ret)?;
-            let body_type = synth_stmt(ctx, body)?;
+            let result = check_stmt(ctx, body, ret).map_err(|e| err(format!("in lambda body: {e}")));
             ctx.unbind_arg(arg);
-            unify(&ret_type, &body_type).map_err(|e| err(format!("in lambda body: {e}")))
+            result
         }
+
+        // Parentheses wrap an expression in `Expr::Stmt`; peel it so a
+        // parenthesised lambda is still checked against the expected type.
+        (Expr::Stmt(stmt), _) => check_stmt(ctx, stmt, expected),
 
         _ => {
             let actual = synth_expr(ctx, expr)?;
-            unify(expected, &actual)
+            ctx.unify(expected, &actual)
+        }
+    }
+}
+
+// Check a statement against an expected type, propagating the expectation to a
+// trailing expression (so a parenthesised or curried lambda is checked, not
+// synthesised).
+fn check_stmt(ctx: &mut Ctx, stmt: &Stmt, expected: &Type) -> TResult<()> {
+    match stmt {
+        Stmt::Expr(e) => check_expr(ctx, e, expected),
+        _ => {
+            let actual = synth_stmt(ctx, stmt)?;
+            ctx.unify(expected, &actual)
         }
     }
 }
@@ -408,19 +528,19 @@ fn synth_bexpr(ctx: &mut Ctx, bexpr: &BExpr) -> TResult {
         BExpr::Eq(a, b) | BExpr::NEq(a, b) => {
             let at = synth_expr(ctx, a)?;
             let bt = synth_expr(ctx, b)?;
-            unify(&at, &bt).map_err(|e| err(format!("in comparison: {e}")))?;
+            ctx.unify(&at, &bt).map_err(|e| err(format!("in comparison: {e}")))?;
             Ok(Type::Ident("Bool".to_string()))
         }
         BExpr::And(a, b) | BExpr::Or(a, b) => {
             let at = synth_expr(ctx, a)?;
-            unify(&Type::Ident("Bool".to_string()), &at)?;
+            ctx.unify(&Type::Ident("Bool".to_string()), &at)?;
             let bt = synth_expr(ctx, b)?;
-            unify(&Type::Ident("Bool".to_string()), &bt)?;
+            ctx.unify(&Type::Ident("Bool".to_string()), &bt)?;
             Ok(Type::Ident("Bool".to_string()))
         }
         BExpr::Not(e) => {
             let t = synth_expr(ctx, e)?;
-            unify(&Type::Ident("Bool".to_string()), &t)?;
+            ctx.unify(&Type::Ident("Bool".to_string()), &t)?;
             Ok(Type::Ident("Bool".to_string()))
         }
     }
@@ -430,7 +550,7 @@ fn resolve_type(ty: &Type) -> TResult {
     match ty {
         Type::Any => Ok(Type::Any),
         Type::Ident(s) => match s.as_str() {
-            "Nat" | "Int" | "Bool" => Ok(ty.clone()),
+            "Nat" | "Bool" => Ok(ty.clone()),
             _ => Err(err(format!("unknown type '{s}'"))),
         },
         Type::List(t) => {
@@ -470,5 +590,51 @@ impl fmt::Display for Type {
             }
             Type::Any => write!(f, "_"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse;
+
+    fn check(src: &str) -> Result<(), Vec<TypeError>> {
+        let ast = parse(src).expect("source should parse");
+        type_check(&ast)
+    }
+
+    // B4: a polymorphic signature can be instantiated at a concrete type.
+    #[test]
+    fn poly_id_applied_at_nat() {
+        assert!(check("id :: a -> a\nid x = x.\n\nid 5.\n").is_ok());
+    }
+
+    #[test]
+    fn poly_id_applied_at_list() {
+        assert!(check("id :: a -> a\nid x = x.\n\nid [1,2,3].\n").is_ok());
+    }
+
+    // B4: distinct rigid type variables must stay distinct (this is real
+    // instantiation, not treating type variables as wildcards).
+    #[test]
+    fn rigid_type_vars_are_not_wildcards() {
+        assert!(check("bad :: a -> b\nbad x = x.\n\nbad 5.\n").is_err());
+    }
+
+    // B5: a lambda argument is checked against the known parameter type.
+    #[test]
+    fn lambda_argument_is_checked() {
+        assert!(check("app :: (Nat -> Nat) -> Nat\napp f = f 1.\n\napp (\\x. S x).\n").is_ok());
+    }
+
+    #[test]
+    fn ill_typed_lambda_argument_rejected() {
+        assert!(check("app :: (Nat -> Nat) -> Nat\napp f = f 1.\n\napp (\\x. [x]).\n").is_err());
+    }
+
+    // B11: `Int` is not part of the type alphabet (was accepted, then panicked).
+    #[test]
+    fn int_is_a_type_error() {
+        assert!(check("exists n :: Int. n.\n").is_err());
     }
 }
