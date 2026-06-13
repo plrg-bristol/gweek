@@ -12,7 +12,7 @@ use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
 use super::senv::SuspEnv;
-use super::step::{Machine, Stack};
+use super::step::{Machine, RunResult, Stack};
 use super::vclosure::VClosure;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,7 +151,11 @@ fn eval_bfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadl
             if iters & 1023 == 0 && Instant::now() >= deadline {
                 return (solns, true);
             }
-            for m in m.run_to_branch() {
+            let results = match m.run_to_branch(deadline) {
+                RunResult::Yield(ms) => ms,
+                RunResult::TimedOut => return (solns, true),
+            };
+            for m in results {
                 if m.done {
                     if record_solution(&m, &mut solns, on_solution) {
                         return (solns, false);
@@ -175,7 +179,11 @@ fn eval_dfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadl
         if iters & 1023 == 0 && Instant::now() >= deadline {
             return (solns, true);
         }
-        for m in m.run_to_branch().into_iter().rev() {
+        let results = match m.run_to_branch(deadline) {
+            RunResult::Yield(ms) => ms,
+            RunResult::TimedOut => return (solns, true),
+        };
+        for m in results.into_iter().rev() {
             if m.done {
                 if record_solution(&m, &mut solns, on_solution) {
                     return (solns, false);
@@ -205,7 +213,10 @@ fn eval_iddfs<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dea
                 cutoff = true;
                 continue;
             }
-            let results = m.run_to_branch();
+            let results = match m.run_to_branch(deadline) {
+                RunResult::Yield(ms) => ms,
+                RunResult::TimedOut => return (solns, true),
+            };
             let is_branch = results.len() > 1;
             for m in results.into_iter().rev() {
                 if m.done {
@@ -253,7 +264,10 @@ fn eval_fair<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, dead
                 break;
             }
             steps += 1;
-            let results = m.run_to_branch();
+            let results = match m.run_to_branch(deadline) {
+                RunResult::Yield(ms) => ms,
+                RunResult::TimedOut => return (solns, true),
+            };
             if results.len() > 1 && queue.len() < MAX_THREADS {
                 // Spread branch alternatives across the queue for fairness.
                 // First alternative continues in the current thread (DFS);

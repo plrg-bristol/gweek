@@ -1,6 +1,11 @@
 use bumpalo::Bump;
 use smallvec::{smallvec, SmallVec};
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
 use super::config::config;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
@@ -10,6 +15,14 @@ use super::value_type::ValueType;
 use super::{CClosure, Env, VClosure};
 
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
+
+/// Outcome of driving a machine to its next branch point.
+pub enum RunResult<'a> {
+    /// Reached a branch point or completion; the machines to schedule next.
+    Yield(StepResult<'a>),
+    /// The deadline elapsed mid-computation (e.g. a divergent deterministic loop).
+    TimedOut,
+}
 
 enum Step<'a> {
     Continue(Machine<'a>),
@@ -70,13 +83,21 @@ pub struct Machine<'a> {
 impl<'a> Machine<'a> {
     /// Run deterministic steps in a tight loop, only returning to the
     /// scheduler at branch points (Choice, logic-var splits) or completion.
-    pub fn run_to_branch(mut self) -> StepResult<'a> {
+    /// The deadline is polled every `DEADLINE_POLL_INTERVAL` steps so that a
+    /// divergent non-branching computation still honours `--timeout`.
+    pub fn run_to_branch(mut self, deadline: Instant) -> RunResult<'a> {
+        const DEADLINE_POLL_INTERVAL: u32 = 1024;
+        let mut steps: u32 = 0;
         loop {
+            steps += 1;
+            if steps & (DEADLINE_POLL_INTERVAL - 1) == 0 && Instant::now() >= deadline {
+                return RunResult::TimedOut;
+            }
             match self.step() {
                 Step::Continue(m) => self = m,
-                Step::Done(m) => return smallvec![m],
-                Step::Branch(ms) => return ms,
-                Step::Fail => return smallvec![],
+                Step::Done(m) => return RunResult::Yield(smallvec![m]),
+                Step::Branch(ms) => return RunResult::Yield(ms),
+                Step::Fail => return RunResult::Yield(smallvec![]),
             }
         }
     }
