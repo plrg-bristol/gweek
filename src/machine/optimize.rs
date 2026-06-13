@@ -108,83 +108,114 @@ mod stats {
     }
 }
 
+// --- Generic binder-aware traversal ---
+// map_val/map_comp rebuild the term, rewriting each Var leaf via `f`, which is
+// given the number of binders crossed from the traversal root to that leaf.
+// The per-binder depth table (which binders bind, and by how much) lives here once.
+
+fn map_val<'a>(
+    arena: &'a Bump,
+    val: &'a MValue<'a>,
+    binders: usize,
+    f: &dyn Fn(usize, &'a MValue<'a>) -> &'a MValue<'a>,
+) -> &'a MValue<'a> {
+    match val {
+        MValue::Var(_) => f(binders, val),
+        MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => val,
+        MValue::Succ(v) => arena.alloc(MValue::Succ(map_val(arena, v, binders, f))),
+        MValue::Pair(a, b) => arena.alloc(MValue::Pair(
+            map_val(arena, a, binders, f),
+            map_val(arena, b, binders, f),
+        )),
+        MValue::Inl(v) => arena.alloc(MValue::Inl(map_val(arena, v, binders, f))),
+        MValue::Inr(v) => arena.alloc(MValue::Inr(map_val(arena, v, binders, f))),
+        MValue::Cons(h, t) => arena.alloc(MValue::Cons(
+            map_val(arena, h, binders, f),
+            map_val(arena, t, binders, f),
+        )),
+        MValue::Thunk(c) => arena.alloc(MValue::Thunk(map_comp(arena, c, binders, f))),
+    }
+}
+
+fn map_comp<'a>(
+    arena: &'a Bump,
+    comp: &'a MComputation<'a>,
+    binders: usize,
+    f: &dyn Fn(usize, &'a MValue<'a>) -> &'a MValue<'a>,
+) -> &'a MComputation<'a> {
+    match comp {
+        MComputation::Return(v) => arena.alloc(MComputation::Return(map_val(arena, v, binders, f))),
+        MComputation::Bind { comp: c, cont } => arena.alloc(MComputation::Bind {
+            comp: map_comp(arena, c, binders, f),
+            cont: map_comp(arena, cont, binders + 1, f),
+        }),
+        MComputation::Force(v) => arena.alloc(MComputation::Force(map_val(arena, v, binders, f))),
+        MComputation::Lambda { body } => arena.alloc(MComputation::Lambda {
+            body: map_comp(arena, body, binders + 1, f),
+        }),
+        MComputation::App { op, arg } => arena.alloc(MComputation::App {
+            op: map_comp(arena, op, binders, f),
+            arg: map_val(arena, arg, binders, f),
+        }),
+        MComputation::Choice(cs) => {
+            let mapped: Vec<&'a MComputation<'a>> = cs.iter().map(|c| map_comp(arena, c, binders, f)).collect();
+            arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&mapped)))
+        }
+        MComputation::Exists { ptype, body } => arena.alloc(MComputation::Exists {
+            ptype: ptype.clone(),
+            body: map_comp(arena, body, binders + 1, f),
+        }),
+        MComputation::Equate { lhs, rhs, body } => arena.alloc(MComputation::Equate {
+            lhs: map_val(arena, lhs, binders, f),
+            rhs: map_val(arena, rhs, binders, f),
+            body: map_comp(arena, body, binders, f),
+        }),
+        MComputation::Ifz { num, zk, sk } => arena.alloc(MComputation::Ifz {
+            num: map_val(arena, num, binders, f),
+            zk: map_comp(arena, zk, binders, f),
+            sk: map_comp(arena, sk, binders + 1, f),
+        }),
+        MComputation::Match { list, nilk, consk } => arena.alloc(MComputation::Match {
+            list: map_val(arena, list, binders, f),
+            nilk: map_comp(arena, nilk, binders, f),
+            consk: map_comp(arena, consk, binders + 2, f),
+        }),
+        MComputation::Case { sum, inlk, inrk } => arena.alloc(MComputation::Case {
+            sum: map_val(arena, sum, binders, f),
+            inlk: map_comp(arena, inlk, binders + 1, f),
+            inrk: map_comp(arena, inrk, binders + 1, f),
+        }),
+        MComputation::Rec { body } => arena.alloc(MComputation::Rec {
+            body: map_comp(arena, body, binders + 1, f),
+        }),
+    }
+}
+
 // --- De Bruijn shifting ---
 
 fn shift_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, delta: isize, cutoff: usize) -> &'a MValue<'a> {
-    match val {
-        MValue::Var(i) => {
-            if *i >= cutoff {
-                arena.alloc(MValue::Var((*i as isize + delta) as usize))
-            } else {
-                val
-            }
+    map_val(arena, val, cutoff, &move |binders, v| {
+        let MValue::Var(i) = v else { unreachable!() };
+        if *i >= binders {
+            arena.alloc(MValue::Var((*i as isize + delta) as usize))
+        } else {
+            v
         }
-        MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => val,
-        MValue::Succ(v) => arena.alloc(MValue::Succ(shift_val(arena, v, delta, cutoff))),
-        MValue::Pair(a, b) => arena.alloc(MValue::Pair(
-            shift_val(arena, a, delta, cutoff),
-            shift_val(arena, b, delta, cutoff),
-        )),
-        MValue::Inl(v) => arena.alloc(MValue::Inl(shift_val(arena, v, delta, cutoff))),
-        MValue::Inr(v) => arena.alloc(MValue::Inr(shift_val(arena, v, delta, cutoff))),
-        MValue::Cons(h, t) => arena.alloc(MValue::Cons(
-            shift_val(arena, h, delta, cutoff),
-            shift_val(arena, t, delta, cutoff),
-        )),
-        MValue::Thunk(c) => arena.alloc(MValue::Thunk(shift_comp(arena, c, delta, cutoff))),
-    }
+    })
 }
 
 fn shift_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, delta: isize, cutoff: usize) -> &'a MComputation<'a> {
     if delta == 0 {
         return comp;
     }
-    match comp {
-        MComputation::Return(v) => arena.alloc(MComputation::Return(shift_val(arena, v, delta, cutoff))),
-        MComputation::Bind { comp: c, cont } => arena.alloc(MComputation::Bind {
-            comp: shift_comp(arena, c, delta, cutoff),
-            cont: shift_comp(arena, cont, delta, cutoff + 1),
-        }),
-        MComputation::Force(v) => arena.alloc(MComputation::Force(shift_val(arena, v, delta, cutoff))),
-        MComputation::Lambda { body } => arena.alloc(MComputation::Lambda {
-            body: shift_comp(arena, body, delta, cutoff + 1),
-        }),
-        MComputation::App { op, arg } => arena.alloc(MComputation::App {
-            op: shift_comp(arena, op, delta, cutoff),
-            arg: shift_val(arena, arg, delta, cutoff),
-        }),
-        MComputation::Choice(cs) => {
-            let shifted: Vec<&'a MComputation<'a>> = cs.iter().map(|c| shift_comp(arena, c, delta, cutoff)).collect();
-            arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&shifted)))
+    map_comp(arena, comp, cutoff, &move |binders, v| {
+        let MValue::Var(i) = v else { unreachable!() };
+        if *i >= binders {
+            arena.alloc(MValue::Var((*i as isize + delta) as usize))
+        } else {
+            v
         }
-        MComputation::Exists { ptype, body } => arena.alloc(MComputation::Exists {
-            ptype: ptype.clone(),
-            body: shift_comp(arena, body, delta, cutoff + 1),
-        }),
-        MComputation::Equate { lhs, rhs, body } => arena.alloc(MComputation::Equate {
-            lhs: shift_val(arena, lhs, delta, cutoff),
-            rhs: shift_val(arena, rhs, delta, cutoff),
-            body: shift_comp(arena, body, delta, cutoff),
-        }),
-        MComputation::Ifz { num, zk, sk } => arena.alloc(MComputation::Ifz {
-            num: shift_val(arena, num, delta, cutoff),
-            zk: shift_comp(arena, zk, delta, cutoff),
-            sk: shift_comp(arena, sk, delta, cutoff + 1),
-        }),
-        MComputation::Match { list, nilk, consk } => arena.alloc(MComputation::Match {
-            list: shift_val(arena, list, delta, cutoff),
-            nilk: shift_comp(arena, nilk, delta, cutoff),
-            consk: shift_comp(arena, consk, delta, cutoff + 2),
-        }),
-        MComputation::Case { sum, inlk, inrk } => arena.alloc(MComputation::Case {
-            sum: shift_val(arena, sum, delta, cutoff),
-            inlk: shift_comp(arena, inlk, delta, cutoff + 1),
-            inrk: shift_comp(arena, inrk, delta, cutoff + 1),
-        }),
-        MComputation::Rec { body } => arena.alloc(MComputation::Rec {
-            body: shift_comp(arena, body, delta, cutoff + 1),
-        }),
-    }
+    })
 }
 
 // --- De Bruijn substitution ---
@@ -192,79 +223,29 @@ fn shift_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, delta: isize, cut
 // and decrement all Var(i) where i > depth.
 
 fn subst_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, repl: &'a MValue<'a>, depth: usize) -> &'a MValue<'a> {
-    match val {
-        MValue::Var(i) => {
-            if *i == depth {
-                shift_val(arena, repl, depth as isize, 0)
-            } else if *i > depth {
-                arena.alloc(MValue::Var(i - 1))
-            } else {
-                val
-            }
+    map_val(arena, val, depth, &move |binders, v| {
+        let MValue::Var(i) = v else { unreachable!() };
+        if *i == binders {
+            shift_val(arena, repl, binders as isize, 0)
+        } else if *i > binders {
+            arena.alloc(MValue::Var(i - 1))
+        } else {
+            v
         }
-        MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => val,
-        MValue::Succ(v) => arena.alloc(MValue::Succ(subst_val(arena, v, repl, depth))),
-        MValue::Pair(a, b) => arena.alloc(MValue::Pair(
-            subst_val(arena, a, repl, depth),
-            subst_val(arena, b, repl, depth),
-        )),
-        MValue::Inl(v) => arena.alloc(MValue::Inl(subst_val(arena, v, repl, depth))),
-        MValue::Inr(v) => arena.alloc(MValue::Inr(subst_val(arena, v, repl, depth))),
-        MValue::Cons(h, t) => arena.alloc(MValue::Cons(
-            subst_val(arena, h, repl, depth),
-            subst_val(arena, t, repl, depth),
-        )),
-        MValue::Thunk(c) => arena.alloc(MValue::Thunk(subst_comp(arena, c, repl, depth))),
-    }
+    })
 }
 
 fn subst_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, repl: &'a MValue<'a>, depth: usize) -> &'a MComputation<'a> {
-    match comp {
-        MComputation::Return(v) => arena.alloc(MComputation::Return(subst_val(arena, v, repl, depth))),
-        MComputation::Bind { comp: c, cont } => arena.alloc(MComputation::Bind {
-            comp: subst_comp(arena, c, repl, depth),
-            cont: subst_comp(arena, cont, repl, depth + 1),
-        }),
-        MComputation::Force(v) => arena.alloc(MComputation::Force(subst_val(arena, v, repl, depth))),
-        MComputation::Lambda { body } => arena.alloc(MComputation::Lambda {
-            body: subst_comp(arena, body, repl, depth + 1),
-        }),
-        MComputation::App { op, arg } => arena.alloc(MComputation::App {
-            op: subst_comp(arena, op, repl, depth),
-            arg: subst_val(arena, arg, repl, depth),
-        }),
-        MComputation::Choice(cs) => {
-            let substituted: Vec<&'a MComputation<'a>> = cs.iter().map(|c| subst_comp(arena, c, repl, depth)).collect();
-            arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&substituted)))
+    map_comp(arena, comp, depth, &move |binders, v| {
+        let MValue::Var(i) = v else { unreachable!() };
+        if *i == binders {
+            shift_val(arena, repl, binders as isize, 0)
+        } else if *i > binders {
+            arena.alloc(MValue::Var(i - 1))
+        } else {
+            v
         }
-        MComputation::Exists { ptype, body } => arena.alloc(MComputation::Exists {
-            ptype: ptype.clone(),
-            body: subst_comp(arena, body, repl, depth + 1),
-        }),
-        MComputation::Equate { lhs, rhs, body } => arena.alloc(MComputation::Equate {
-            lhs: subst_val(arena, lhs, repl, depth),
-            rhs: subst_val(arena, rhs, repl, depth),
-            body: subst_comp(arena, body, repl, depth),
-        }),
-        MComputation::Ifz { num, zk, sk } => arena.alloc(MComputation::Ifz {
-            num: subst_val(arena, num, repl, depth),
-            zk: subst_comp(arena, zk, repl, depth),
-            sk: subst_comp(arena, sk, repl, depth + 1),
-        }),
-        MComputation::Match { list, nilk, consk } => arena.alloc(MComputation::Match {
-            list: subst_val(arena, list, repl, depth),
-            nilk: subst_comp(arena, nilk, repl, depth),
-            consk: subst_comp(arena, consk, repl, depth + 2),
-        }),
-        MComputation::Case { sum, inlk, inrk } => arena.alloc(MComputation::Case {
-            sum: subst_val(arena, sum, repl, depth),
-            inlk: subst_comp(arena, inlk, repl, depth + 1),
-            inrk: subst_comp(arena, inrk, repl, depth + 1),
-        }),
-        MComputation::Rec { body } => arena.alloc(MComputation::Rec {
-            body: subst_comp(arena, body, repl, depth + 1),
-        }),
-    }
+    })
 }
 
 // --- Helpers ---
@@ -326,74 +307,17 @@ fn has_free_var_comp(comp: &MComputation, target: usize) -> bool {
 }
 
 /// Swap two adjacent binders at `depth` and `depth+1`.
-fn swap_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, depth: usize) -> &'a MValue<'a> {
-    match val {
-        MValue::Var(i) => {
-            if *i == depth {
-                arena.alloc(MValue::Var(depth + 1))
-            } else if *i == depth + 1 {
-                arena.alloc(MValue::Var(depth))
-            } else {
-                val
-            }
-        }
-        MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => val,
-        MValue::Succ(v) => arena.alloc(MValue::Succ(swap_val(arena, v, depth))),
-        MValue::Pair(a, b) => arena.alloc(MValue::Pair(swap_val(arena, a, depth), swap_val(arena, b, depth))),
-        MValue::Inl(v) => arena.alloc(MValue::Inl(swap_val(arena, v, depth))),
-        MValue::Inr(v) => arena.alloc(MValue::Inr(swap_val(arena, v, depth))),
-        MValue::Cons(h, t) => arena.alloc(MValue::Cons(swap_val(arena, h, depth), swap_val(arena, t, depth))),
-        MValue::Thunk(c) => arena.alloc(MValue::Thunk(swap_comp(arena, c, depth))),
-    }
-}
-
 fn swap_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, depth: usize) -> &'a MComputation<'a> {
-    match comp {
-        MComputation::Return(v) => arena.alloc(MComputation::Return(swap_val(arena, v, depth))),
-        MComputation::Bind { comp: c, cont } => arena.alloc(MComputation::Bind {
-            comp: swap_comp(arena, c, depth),
-            cont: swap_comp(arena, cont, depth + 1),
-        }),
-        MComputation::Force(v) => arena.alloc(MComputation::Force(swap_val(arena, v, depth))),
-        MComputation::Lambda { body } => arena.alloc(MComputation::Lambda {
-            body: swap_comp(arena, body, depth + 1),
-        }),
-        MComputation::App { op, arg } => arena.alloc(MComputation::App {
-            op: swap_comp(arena, op, depth),
-            arg: swap_val(arena, arg, depth),
-        }),
-        MComputation::Choice(cs) => {
-            let swapped: Vec<&'a MComputation<'a>> = cs.iter().map(|c| swap_comp(arena, c, depth)).collect();
-            arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&swapped)))
+    map_comp(arena, comp, depth, &move |binders, v| {
+        let MValue::Var(i) = v else { unreachable!() };
+        if *i == binders {
+            arena.alloc(MValue::Var(binders + 1))
+        } else if *i == binders + 1 {
+            arena.alloc(MValue::Var(binders))
+        } else {
+            v
         }
-        MComputation::Exists { ptype, body } => arena.alloc(MComputation::Exists {
-            ptype: ptype.clone(),
-            body: swap_comp(arena, body, depth + 1),
-        }),
-        MComputation::Equate { lhs, rhs, body } => arena.alloc(MComputation::Equate {
-            lhs: swap_val(arena, lhs, depth),
-            rhs: swap_val(arena, rhs, depth),
-            body: swap_comp(arena, body, depth),
-        }),
-        MComputation::Ifz { num, zk, sk } => arena.alloc(MComputation::Ifz {
-            num: swap_val(arena, num, depth),
-            zk: swap_comp(arena, zk, depth),
-            sk: swap_comp(arena, sk, depth + 1),
-        }),
-        MComputation::Match { list, nilk, consk } => arena.alloc(MComputation::Match {
-            list: swap_val(arena, list, depth),
-            nilk: swap_comp(arena, nilk, depth),
-            consk: swap_comp(arena, consk, depth + 2),
-        }),
-        MComputation::Case { sum, inlk, inrk } => arena.alloc(MComputation::Case {
-            sum: swap_val(arena, sum, depth),
-            inlk: swap_comp(arena, inlk, depth + 1),
-            inrk: swap_comp(arena, inrk, depth + 1),
-        }),
-        MComputation::Rec { body } => arena.alloc(MComputation::Rec {
-            body: swap_comp(arena, body, depth + 1),
-        }),
-    }
+    })
 }
 
 /// Conservative totality check: is this computation guaranteed to return?
