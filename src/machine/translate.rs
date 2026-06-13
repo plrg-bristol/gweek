@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use bumpalo::Bump;
 
@@ -11,11 +11,15 @@ struct TEnv {
     env: Vec<String>,
     /// Names of nullary functions (thunks that need forcing at use sites).
     nullary: HashSet<String>,
+    /// Members of mutually-recursive groups: name -> (bundle slot name,
+    /// selector index). Such a name is not an environment slot of its own;
+    /// it is obtained by applying the group's selector function to its index.
+    members: HashMap<String, (String, usize)>,
 }
 
 impl TEnv {
     fn new() -> TEnv {
-        TEnv { env: vec![], nullary: HashSet::new() }
+        TEnv { env: vec![], nullary: HashSet::new(), members: HashMap::new() }
     }
 
     /*
@@ -61,8 +65,6 @@ program and second is the environment of function
 names and definitions.
 */
 pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
-    let ast = reorder_decls(ast);
-
     let sigs: HashMap<String, Type> = ast
         .iter()
         .filter_map(|d| match d {
@@ -71,31 +73,44 @@ pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, 
         })
         .collect();
 
+    let (groups, stmts) = order_functions(ast);
+
     let mut env = Vec::new();
     let mut tenv = TEnv::new();
     let mut main = None;
 
-    for decl in ast {
-        match decl {
-            Decl::FuncType { .. } => (),
-            Decl::Func { name, args, body } => {
-                let nullary = args.is_empty();
-                let arg_types = arg_types(sigs.get(&name), args.len());
-                let result = translate_func(arena, &name, args, &arg_types, body, &mut tenv);
-                if nullary {
-                    tenv.bind_nullary(&name);
-                } else {
-                    tenv.bind(&name);
-                }
-                env.push(result);
+    for group in groups {
+        if group.len() == 1 {
+            let Func { name, args, body } = group.into_iter().next().unwrap();
+            let nullary = args.is_empty();
+            let arg_types = arg_types(sigs.get(&name), args.len());
+            let result = translate_func(arena, &name, args, &arg_types, body, &mut tenv);
+            if nullary {
+                tenv.bind_nullary(&name);
+            } else {
+                tenv.bind(&name);
             }
-            Decl::Stmt(stmt) => {
-                main = Some(translate_stmt(arena, stmt, &mut tenv));
-            }
+            env.push(result);
+        } else {
+            let result = translate_group(arena, group, &sigs, &mut tenv);
+            env.push(result);
+        }
+    }
+
+    for decl in stmts {
+        if let Decl::Stmt(stmt) = decl {
+            main = Some(translate_stmt(arena, stmt, &mut tenv));
         }
     }
 
     (main.expect("empty program"), env)
+}
+
+/// A top-level function definition, paired with its (already collected) name.
+struct Func {
+    name: String,
+    args: Vec<Arg>,
+    body: Stmt,
 }
 
 /// Peels the first `n` argument types off a function signature.
@@ -115,103 +130,123 @@ fn arg_types(sig: Option<&Type>, n: usize) -> Vec<Option<Type>> {
     out
 }
 
-// --- Declaration reordering (topological sort) ---
+// --- Dependency analysis and SCC ordering ---
 
-fn reorder_decls(ast: Vec<Decl>) -> Vec<Decl> {
-    // Collect only the function names from the AST
-    let func_names: HashSet<String> = ast
-        .iter()
-        .filter_map(|d| match d {
-            Decl::Func { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-
-    // Group declarations: each function with its optional preceding type signature
-    let mut func_decls: Vec<(String, Vec<Decl>)> = Vec::new();
-    let mut stms: Vec<Decl> = Vec::new();
+/// Splits the program into mutually-recursive function groups (the strongly
+/// connected components of the call graph) in dependency-first topological
+/// order, followed by the trailing statements (with their type signatures).
+/// Each group is the set of functions that must be defined together; a group
+/// of size > 1 is genuinely mutually recursive.
+fn order_functions(ast: Vec<Decl>) -> (Vec<Vec<Func>>, Vec<Decl>) {
+    let mut funcs: Vec<Func> = Vec::new();
+    let mut stmts: Vec<Decl> = Vec::new();
     let mut pending_type: Option<Decl> = None;
 
     for decl in ast {
-        match &decl {
+        match decl {
             Decl::FuncType { .. } => pending_type = Some(decl),
-            Decl::Func { name, .. } => {
-                let mut group = Vec::new();
-                if let Some(t) = pending_type.take() {
-                    group.push(t);
-                }
-                let nm = name.clone();
-                group.push(decl);
-                func_decls.push((nm, group));
+            Decl::Func { name, args, body } => {
+                pending_type = None;
+                funcs.push(Func { name, args, body });
             }
             Decl::Stmt(_) => {
                 if let Some(t) = pending_type.take() {
-                    stms.push(t);
+                    stmts.push(t);
                 }
-                stms.push(decl);
+                stmts.push(decl);
             }
         }
     }
 
-    let name_to_idx: HashMap<String, usize> = func_decls
-        .iter()
-        .enumerate()
-        .map(|(i, (name, _))| (name.clone(), i))
+    let func_names: HashSet<String> = funcs.iter().map(|f| f.name.clone()).collect();
+    let name_to_idx: HashMap<String, usize> =
+        funcs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
+
+    // Edge i -> j when function i references function j (i depends on j).
+    let n = funcs.len();
+    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, f) in funcs.iter().enumerate() {
+        for r in collect_refs_stmt(&f.body, &func_names) {
+            if let Some(&j) = name_to_idx.get(&r) {
+                if j != i {
+                    deps[i].push(j);
+                }
+            }
+        }
+    }
+
+    // Tarjan's SCC algorithm. Components are produced in reverse topological
+    // order of the condensation (a component is finished after every component
+    // it depends on), so the result is already dependency-first.
+    let sccs = tarjan_scc(&deps);
+
+    let mut slots: Vec<Option<Func>> = funcs.into_iter().map(Some).collect();
+    let groups: Vec<Vec<Func>> = sccs
+        .into_iter()
+        .map(|comp| comp.into_iter().map(|i| slots[i].take().unwrap()).collect())
         .collect();
 
-    // Build dependency graph
-    let n = func_decls.len();
-    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut in_deg: Vec<usize> = vec![0; n];
+    (groups, stmts)
+}
 
-    for (i, (name, group)) in func_decls.iter().enumerate() {
-        let body = group
-            .iter()
-            .find_map(|d| match d {
-                Decl::Func { body, .. } => Some(body),
-                _ => None,
-            })
-            .unwrap();
-        let refs = collect_refs_stmt(body, &func_names);
-        for r in &refs {
-            if r != name {
-                if let Some(&j) = name_to_idx.get(r) {
-                    successors[j].push(i);
-                    in_deg[i] += 1;
+/// Tarjan's strongly-connected-components algorithm. Returns the SCCs in
+/// reverse topological order of the condensation; within each SCC, nodes are
+/// in source order.
+fn tarjan_scc(deps: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let n = deps.len();
+    let mut index = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+    let mut sccs: Vec<Vec<usize>> = Vec::new();
+
+    // Iterative DFS to avoid stack overflow on large programs.
+    // Frame: (node, position in deps[node] to resume from).
+    for start in 0..n {
+        if index[start] != usize::MAX {
+            continue;
+        }
+        let mut work: Vec<(usize, usize)> = vec![(start, 0)];
+        while let Some(&(v, pi)) = work.last() {
+            if pi == 0 {
+                index[v] = next_index;
+                low[v] = next_index;
+                next_index += 1;
+                stack.push(v);
+                on_stack[v] = true;
+            }
+            if pi < deps[v].len() {
+                let w = deps[v][pi];
+                work.last_mut().unwrap().1 += 1;
+                if index[w] == usize::MAX {
+                    work.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+            } else {
+                if low[v] == index[v] {
+                    let mut comp = Vec::new();
+                    loop {
+                        let w = stack.pop().unwrap();
+                        on_stack[w] = false;
+                        comp.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    comp.reverse();
+                    sccs.push(comp);
+                }
+                work.pop();
+                if let Some(&(parent, _)) = work.last() {
+                    low[parent] = low[parent].min(low[v]);
                 }
             }
         }
     }
 
-    // Kahn's algorithm
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_deg[i] == 0).collect();
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    while let Some(j) = queue.pop_front() {
-        order.push(j);
-        for &i in &successors[j] {
-            in_deg[i] -= 1;
-            if in_deg[i] == 0 {
-                queue.push_back(i);
-            }
-        }
-    }
-
-    if order.len() < n {
-        // Cycle detected — fall back to original order
-        order = (0..n).collect();
-    }
-
-    // Rebuild in sorted order
-    let mut func_groups: Vec<Option<Vec<Decl>>> =
-        func_decls.into_iter().map(|(_, g)| Some(g)).collect();
-    let mut result: Vec<Decl> = Vec::new();
-    for idx in order {
-        if let Some(group) = func_groups[idx].take() {
-            result.extend(group);
-        }
-    }
-    result.extend(stms);
-    result
+    sccs
 }
 
 // --- AST walkers for dependency collection ---
@@ -320,6 +355,77 @@ fn translate_func<'a>(
     };
     tenv.unbind();
     let rec = arena.alloc(MComputation::Rec { body: comp });
+    arena.alloc(MValue::Thunk(rec))
+}
+
+/// Lowers a mutually-recursive group of functions to a single fixpoint.
+///
+/// The machine's `Rec` binds one self-reference, so a per-function `Rec`
+/// cannot tie a mutual knot. Instead the whole group becomes one bundle:
+///
+///   bundle = thunk (rec self. λsel. ifz sel { thunk f0 } { thunk f1 } ...)
+///
+/// Forcing the bundle and applying it to selector `i` returns the thunk of
+/// member `i`. Every reference to a group member -- inside a sibling, inside
+/// the member itself, or from an outside caller -- goes through this selector
+/// (see the `Expr::Ident` lowering), so the recursion is genuinely mutual:
+/// each body reaches its siblings through the shared `self`.
+///
+/// Inside the selector lambda the environment is `[sel, self, ..outer..]`; the
+/// `ifz` chain binds one predecessor per step, so in branch `i` the bundle
+/// (`self`) sits at de Bruijn index `i + 1`. Each member body is translated
+/// with `tenv` set up to match exactly that layout.
+fn translate_group<'a>(
+    arena: &'a Bump,
+    group: Vec<Func>,
+    sigs: &HashMap<String, Type>,
+    tenv: &mut TEnv,
+) -> &'a MValue<'a> {
+    let bundle = format!("$group${}", group[0].name);
+
+    for (i, f) in group.iter().enumerate() {
+        tenv.members.insert(f.name.clone(), (bundle.clone(), i));
+    }
+
+    let mut thunks: Vec<&MValue> = Vec::with_capacity(group.len());
+    for (i, f) in group.iter().enumerate() {
+        // Model the captured environment of branch `i`: the bundle (`self`)
+        // sits below `sel` and the `i` predecessors bound by the `ifz` chain.
+        tenv.bind(&bundle);
+        for _ in 0..=i {
+            tenv.bind("_");
+        }
+        let arg_types = arg_types(sigs.get(&f.name), f.args.len());
+        let comp = if f.args.is_empty() {
+            translate_stmt(arena, f.body.clone(), tenv)
+        } else {
+            build_args(arena, &f.args, &arg_types, &f.body, tenv)
+        };
+        for _ in 0..=i {
+            tenv.unbind();
+        }
+        tenv.unbind();
+        thunks.push(arena.alloc(MValue::Thunk(comp)));
+    }
+
+    // Dispatch: ifz sel { return thunk0 } { _. ifz pred { return thunk1 } ... }.
+    // The scrutinee is always the most recently bound variable (sel, then each
+    // predecessor), i.e. de Bruijn index 0.
+    let mut dispatch: &MComputation = arena.alloc(MComputation::Return(thunks[group.len() - 1]));
+    for thunk in thunks[..group.len() - 1].iter().rev() {
+        let zk = arena.alloc(MComputation::Return(thunk));
+        dispatch = arena.alloc(MComputation::Ifz {
+            num: arena.alloc(MValue::Var(0)),
+            zk,
+            sk: dispatch,
+        });
+    }
+
+    let lam = arena.alloc(MComputation::Lambda { body: dispatch });
+    let rec = arena.alloc(MComputation::Rec { body: lam });
+
+    tenv.bind(&bundle);
+
     arena.alloc(MValue::Thunk(rec))
 }
 
@@ -630,14 +736,23 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
         Expr::BExpr(bexpr) => translate_bexpr(arena, bexpr, tenv),
         Expr::List(elems) => translate_list(arena, &elems, tenv),
         Expr::Ident(s) => {
-            let var = arena.alloc(MValue::Var(tenv.find(&s)));
+            // A member of a mutually-recursive group is obtained by applying
+            // the group's selector function to the member's index, which
+            // returns the member's thunk.
+            let comp = if let Some((bundle, sel)) = tenv.members.get(&s).cloned() {
+                let force = arena.alloc(MComputation::Force(arena.alloc(MValue::Var(tenv.find(&bundle)))));
+                let selector = arena.alloc(MValue::Nat(sel as u64));
+                arena.alloc(MComputation::App { op: force, arg: selector })
+            } else {
+                let var = arena.alloc(MValue::Var(tenv.find(&s)));
+                arena.alloc(MComputation::Return(var))
+            };
             if tenv.is_nullary(&s) {
-                let ret = arena.alloc(MComputation::Return(var));
                 let var0 = arena.alloc(MValue::Var(0));
                 let force = arena.alloc(MComputation::Force(var0));
-                arena.alloc(MComputation::Bind { comp: ret, cont: force })
+                arena.alloc(MComputation::Bind { comp, cont: force })
             } else {
-                arena.alloc(MComputation::Return(var))
+                comp
             }
         }
         Expr::Nat(n) => translate_nat(arena, n),
