@@ -137,6 +137,7 @@ impl<'a> MComputation<'a> {
         arena.alloc(MValue::Thunk(self))
     }
 
+    #[cfg(feature = "opt-stats")]
     pub fn count_nodes(&self) -> usize {
         match self {
             MComputation::Return(v) => 1 + v.count_nodes(),
@@ -164,6 +165,7 @@ impl<'a> MComputation<'a> {
 }
 
 impl<'a> MValue<'a> {
+    #[cfg(feature = "opt-stats")]
     pub fn count_nodes(&self) -> usize {
         match self {
             MValue::Var(_) | MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => 1,

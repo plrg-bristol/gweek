@@ -1,3 +1,6 @@
 /target
 .claude/
 web/pkg/
+
+# Third-party benchmark distributions (PAKCS/KiCS2); fetch separately.
+/benchmark/
