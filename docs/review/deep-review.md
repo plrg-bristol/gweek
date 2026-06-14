@@ -1,21 +1,28 @@
 ---
 title: Deep review (audit)
 tags: [review]
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # Gweek — Code Review
 
 > **Status — mostly implemented (historical record).** This audit drove a round of fixes
-> landed by commit `d83302b`. **Essentially every finding has since been applied:** all
-> correctness bugs **B1–B13**, the architecture items **A1** (one generic optimizer traversal),
-> **A2/P5** (Config threaded, thread-local deleted), **A4** (user-reachable conditions routed to
-> typed errors), **A5** (`Ident` split into `LVar`/`SuspId`), and the cleanups **C2–C7**. The
-> wiki's component pages describe that post-fix code (`commit: d83302b`); cross-links here read
-> as "was §X, fixed". **Still open:** the performance redesigns **P2** (copy-on-write
-> backtracking → trail/undo log) and **P3** (unbounded arena growth), and **A3** (the still-live
-> `MValue::Zero` variant). The sections below are kept verbatim as the historical analysis —
-> read them as "what was true at the time", and confirm against current code before acting.
+> landed by commit `d83302b`, with two follow-ups since: `bd17a3f` (the §C6 shared-`Clock`
+> follow-up — the deadline poller now lives in `step.rs` and serves both `run_to_branch` and the
+> schedulers) and `6ec7c97` (clippy hygiene, in the spirit of §C3). **Essentially every finding
+> has since been applied:** all correctness bugs **B1–B13**, the architecture items **A1** (one
+> generic optimizer traversal), **A2/P5** (Config threaded, thread-local deleted), **A4**
+> (user-reachable conditions routed to typed errors — the remaining `panic!`s are documented
+> machine invariants the [[type-checker]] upholds), **A5** (`Ident` split into `LVar`/`SuspId`),
+> the cleanups **C2–C7**, and the perf freebie **P1** (`[profile.release]` `lto`/`codegen-units`
+> tuning, now in `Cargo.toml`). The wiki's component pages describe that post-fix code
+> (`commit: 6ec7c97`); cross-links here read as "was §X, fixed". **Still open:** the performance
+> redesigns **P2** (copy-on-write backtracking → trail/undo log) and **P3** (unbounded arena
+> growth), the dead **A3** (`MValue::Zero` variant), and **C1** (the `step.rs` `Machine{…}`
+> rebuild boilerplate, deliberately left inline). One framing fix from re-verification: there is
+> no `Int` type in the current code (**B11**'s panic path is now an unknown-type-identifier error
+> in `translate_vtype`). The sections below are kept verbatim as the historical analysis — read
+> them as "what was true at the time", and confirm against current code before acting.
 
 A full review of the `gweek` interpreter (~6,250 LOC of Rust in `src/`): a
 Call-By-Push-Value (CBPV) abstract machine for a functional-logic language,

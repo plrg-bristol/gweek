@@ -76,7 +76,7 @@ shallow solutions first.
 DFS on finite programs. Counting is exact: each round only tallies
 solutions in the newly-reached depth frontier `[limit/2, limit)`, so a
 solution is counted once even though earlier depths are re-derived —
-no cross-round deduplication ([[eval]], `eval.rs:245`; was
+no cross-round deduplication ([[eval]], `eval.rs:226`; was
 [[deep-review]] §B8).
 
 **Best for:** When you want completeness guarantees with low memory,
@@ -95,7 +95,11 @@ within its quota). No re-exploration, no deduplication needed.
 **Cons:** Very long-running single branches get interrupted and
 resumed, adding a small overhead from queue management. The fixed
 quota (10,000 steps) is a tuning parameter — too small wastes time on
-context switching, too large delays fairness.
+context switching, too large delays fairness. A second cap,
+`MAX_THREADS = 10,000`, bounds the live thread count: once the queue is
+that long, new branch alternatives are no longer spun off into fresh
+threads but explored DFS-style within the current one, trading a little
+fairness for a memory ceiling.
 
 **Best for:** Mixed programs that combine finite choice with logic
 variable splitting. Gets DFS speed where it counts and BFS fairness

@@ -6,14 +6,15 @@ tags: [concept]
 # Suspensions and forcing
 
 > **Background.** A `let x = e in body` does not run `e` eagerly. Unless `--strict` is set,
-> [[step|`Bind`]] (`step.rs:179`) freezes `e` as a **suspension** in the
-> [[senv|suspension environment]] and binds a `Susp` reference for `x`. The suspension is
-> *forced* — actually run — only when something inspects `x`'s value: a `case`/`Ifz`/`Match`
-> scrutinee, or a `=:=` operand, i.e. wherever [[vclosure|`close_head`]] meets a `Susp` and
-> returns `Err(SuspAt)`, prompting a [[step|`reschedule`]] (`step.rs:87-105`). If `x` is never
-> inspected, the suspension is only drained at the very end (when `Return` meets the empty
-> stack). The two consequences below follow directly from that rule, and matter for writing
-> efficient search programs. See also [[nondeterminism]] on why early pruning is decisive.
+> [[step|`Bind`]] (`step.rs:201-237`, non-strict branch at `:224-236`) freezes `e` as a
+> **suspension** in the [[senv|suspension environment]] (`senv.fresh`) and binds a `Susp`
+> reference for `x` (`env.extend_susp`). The suspension is *forced* — actually run — only when
+> something inspects `x`'s value: a `case`/`Ifz`/`Match` scrutinee, or a `=:=` operand, i.e.
+> wherever [[vclosure|`close_head`]] meets a `Susp` and returns `Err(SuspAt)`, prompting a
+> [[step|`reschedule`]] (`step.rs:87-105`). If `x` is never inspected, the suspension is only
+> drained at the very end (when `Return` meets the empty stack, `step.rs:155-172`). The two
+> consequences below follow directly from that rule, and matter for writing efficient search
+> programs. See also [[nondeterminism]] on why early pruning is decisive.
 
 Gweek suspends non-trivial computations in `let` bindings. The suspension is
 forced when the bound variable is used in a position that inspects its value

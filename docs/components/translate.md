@@ -2,7 +2,7 @@
 title: translate.rs — surface AST → CBPV
 tags: [component, machine]
 source: src/machine/translate.rs
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # `translate.rs`
@@ -62,8 +62,9 @@ programs.
 
 > **Remaining panics.** `translate` still `panic!`s on a few conditions the [[type-checker]]
 > now rejects upstream — unbound variable (`:36`), pair pattern against a non-product (`:498`),
-> and `translate_vtype` on `Int`/unresolved types (`:556-566`, the §B11 path). These are
-> unreachable for well-typed programs; routing them to typed errors is the tail of
-> [[deep-review]] §A4. `translate`'s signature still returns the tuple directly, not a `Result`.
+> and `translate_vtype` on an unknown type identifier or the unresolved `Type::Any`
+> (`:556-566`, the §B11 path). These are unreachable for well-typed programs; routing them to
+> typed errors is the tail of [[deep-review]] §A4. `translate`'s signature still returns the
+> tuple directly, not a `Result`.
 
 Related: [[cbpv]], [[de-bruijn]], [[mterms]], [[type-checker]], [[optimizer]], [[step]].

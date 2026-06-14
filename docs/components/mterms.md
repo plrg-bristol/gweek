@@ -2,7 +2,7 @@
 title: mterms.rs — the CBPV term language
 tags: [component, machine]
 source: src/machine/mterms.rs
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # `mterms.rs`

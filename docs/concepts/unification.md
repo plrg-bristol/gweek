@@ -10,8 +10,8 @@ binding [[logic-variables|logic variables]], or fails the branch if they cannot 
 equal. The concept page covers the *idea*; the line-by-line algorithm is in [[unify]].
 
 The constraint is surface `Stmt::Equate`, lowered to `MComputation::Equate { lhs, rhs, body }`
-and stepped at `step.rs:323`, which calls `unify(cfg, arena, lhs, rhs, …)` and continues into
-`body` on success.
+and stepped at `step.rs:345`, which calls `unify(cfg, arena, lhs, rhs, …)` (`step.rs:347`) and
+continues into `body` on success.
 
 ## The algorithm in one breath
 
@@ -42,7 +42,7 @@ two: `Nat(n)` vs `Succ(v)` peels one successor by pushing `Nat(n-1)` against `v`
 
 Binding `x` to a term that *contains* `x` would create an infinite term (`x = S x`). The
 occurs check (`occurs_lvar`, `vclosure.rs:118`) walks the candidate value looking for the
-variable, and unification refuses the bind if found (`unify.rs:37-40,44-48`), returning
+variable, and unification refuses the bind if found (`unify.rs:37-40,45-48`), returning
 `Err(Occurs)`. It is on by default and is **not** a hot path — leave it on ([[deep-review]]
 steering notes). `--no-occurs-check` disables it; a resulting cyclic term no longer overflows
 the stack on output — [[vclosure|`close`]] bounds its depth and reports a cyclic-term error

@@ -2,13 +2,13 @@
 title: unify.rs — unification
 tags: [component, machine]
 source: src/machine/unify.rs
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # `unify.rs`
 
 Implements [[unification]] — the algorithm behind the `=:=` constraint. Called from
-[[step|the `Equate` step]] (`step.rs:323`). For the conceptual picture see [[unification]];
+[[step|the `Equate` step]] (`step.rs:347`). For the conceptual picture see [[unification]];
 this page is the code.
 
 ## Signature and error channel

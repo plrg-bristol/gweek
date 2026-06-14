@@ -51,3 +51,33 @@ The in-flight refactor merged into `main` (21 commits) implemented **essentially
   pages carry no `source:` pin by design.
 - **Still open** (documented, not fixed): [[deep-review]] §P2 (COW backtracking), §P3 (arena
   growth), §A3 (`MValue::Zero`). Verified `just wiki-build` still succeeds under bun.
+
+## [2026-06-14] sync | re-pin to 6ec7c97 (Clock follow-up + clippy hygiene)
+
+Two code commits landed after the last sync (`d83302b`): `bd17a3f` moved the deadline-polling
+`Clock` out of [[eval]] into [[step]] (now `pub(super)`, used by both `run_to_branch` and the
+four schedulers — the §C6 follow-up), and `6ec7c97` cleared the clippy backlog (deref removals,
+nested-`if` → `&&`, a `Default` for `Cases`, and two new `Expr::strip_parentheses` regression
+tests). Re-read every changed module and re-verified **every `file:line` anchor** across all
+component, concept, architecture and reference pages — most had drifted purely from line shifts
+(`step.rs` +≈19 from the new `Clock` struct, `eval.rs` −≈19, `unify.rs` −≈4).
+
+- **Clock move** rewritten on [[step]], [[eval]], [[search-strategies]], [[pipeline]]: the
+  poller is now one `Clock` type in `step.rs`, not a local `DEADLINE_POLL_INTERVAL` per loop.
+- **De-stubbed** into full pages: [[optimizer]], [[parser]], [[type-checker]], [[grammar]],
+  [[lvar]], [[union-find]], [[senv]], [[env]], [[vclosure]], and [[config]]; [[value-type]] kept
+  concise (39-line module). [[index]] reorganised — the "stubs — expand on demand" bucket is
+  gone; components now group as machine-core / frontend & types / runtime support / entry points.
+- **Re-verified [[deep-review]].** Newly confirmed fixed since the last sync: **P1**
+  (`[profile.release]` `lto`/`codegen-units` tuning is in `Cargo.toml`). Corrected a phantom —
+  there is **no `Int` type** in the code; **B11**'s panic path is an unknown-type-identifier
+  error in `translate_vtype` ([[translate]]). Still open: **P2** (COW backtracking), **P3**
+  (arena growth), **A3** (`MValue::Zero`), and **C1** (the `step.rs` `Machine{…}` rebuild
+  boilerplate, deliberately left inline — 29 sites remain). **P2** callouts kept on
+  [[lvar]]/[[union-find]]/[[logic-variables]].
+- Bumped every component/reference page's `commit:` to `6ec7c97`; pure-concept pages carry no
+  pin. Fixed the LOC figure in [[index]] (~5,500 → ~6,400; `src/` is 6,397 lines).
+
+Six architecture/reference pages were committed separately (`496bc1c`); the remaining pages plus
+these meta updates land together. The in-flight uncommitted `parse.rs` clippy edit (a point-free
+`.map(PostOp::Cons)`) is trivial and shifts no anchors.

@@ -8,7 +8,7 @@ tags: [concept]
 A logic variable is an unknown that the machine may bind later, by [[unification]] or by a
 [[nondeterminism|case split]]. They are introduced by `exists x :: T. body` — surface
 `Stmt::Exists`, lowered to `MComputation::Exists { ptype, body }` ([[mterms]]) and stepped at
-`step.rs:309`:
+`step.rs:331-342`:
 
 ```rust
 MComputation::Exists { ptype, body } => {
@@ -51,8 +51,15 @@ The critical invariant: a class has one canonical representative (its `Root`), a
 reads and writes go through that root**. This used to be a soundness bug — `lookup` read at
 the root but `set_vclos` wrote at the raw ident ([[deep-review]] §B1). It is now correct *by
 construction*: [[union-find]] only exposes data behind a `Root` token that only `find` can
-mint (`union_find.rs:11`), fixed in commit `0f34f45`. A write simply cannot land in a
+mint (`union_find.rs:10-11`), fixed in commit `0f34f45`. A write simply cannot land in a
 non-root slot.
+
+> **Performance (still open, [[deep-review]] §P2).** The logic store is held copy-on-write
+> behind an `Rc<UnionFind>` (`lvar.rs:10`), as is the [[senv|suspension store]]
+> (`senv.rs:9`). Cloning a branch is cheap, but the first mutation on a clone shared with a
+> sibling calls `Rc::make_mut`, which deep-copies the *entire* store — so a search of depth N
+> that binds at each level is O(N²) in store size. A trail/undo-log redesign would fix it but
+> is **not** yet applied.
 
 ## How an unbound variable becomes a value
 
@@ -60,10 +67,10 @@ Two paths bind a logic variable:
 
 1. **Unification** ([[unify]]) — `x =:= [1,2]` binds `x` directly via `set_vclos`.
 2. **Case split** — when an eliminator scrutinises an unbound variable of an algebraic type,
-   the machine guesses each constructor. E.g. `Ifz` on an unbound `Nat` (`step.rs:378-420`)
+   the machine guesses each constructor. E.g. `Ifz` on an unbound `Nat` (`step.rs:400-442`)
    forks into a branch where the variable is `0` and one where it is `S(fresh)`, the `fresh`
-   itself a new logic variable. `Match` does `[]` vs `(h:t)` (`step.rs:454`), `Case` does
-   `inl`/`inr` (`step.rs:534`). The guessed type comes from the variable's stored
+   itself a new logic variable. `Match` does `[]` vs `(h:t)` (`step.rs:448`), `Case` does
+   `inl`/`inr` (`step.rs:527`). The guessed type comes from the variable's stored
    `ValueType` ([[type-system]], read via `lenv.get_type`).
 
 ## Residual variables in answers

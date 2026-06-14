@@ -35,7 +35,7 @@ headline operation is **sync-to-code**, not "ingest a source." The enemy is drif
 title: Human-readable title
 tags: [component, machine]          # see taxonomy below
 source: src/machine/step.rs         # the code this page tracks (omit for pure-concept pages)
-commit: d83302b                     # short commit hash the page was last verified against
+commit: 6ec7c97                     # short commit hash the page was last verified against
 ---
 ```
 
@@ -81,8 +81,9 @@ to [[index]] under the right category. Append to [[log]].
 **Lint** (health check). Look for: pages whose `commit:` is behind their `source`'s last
 commit; `file:line` anchors that no longer point where the prose claims; orphan pages with
 no inbound links; concepts mentioned but lacking a page; contradictions between pages;
-[[deep-review]] findings that have since been fixed (as of `d83302b`, **most have** — see the
-banner on [[deep-review]]; only §P2, §P3, §A3 remain open).
+[[deep-review]] findings that have since been fixed (as of `6ec7c97`, **almost all have** — see
+the banner on [[deep-review]]; only the perf redesigns §P2, §P3 and the dead §A3 `MValue::Zero`
+remain open, plus §C1's `step.rs` `Machine{…}` boilerplate, intentionally left inline).
 
 ## Known-issues convention
 

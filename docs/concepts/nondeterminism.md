@@ -12,7 +12,7 @@ resulting tree is the set of solutions. Two things branch:
 ## 1. Explicit choice: `a <> b`
 
 Surface `Stmt::Choice`, lowered to `MComputation::Choice(&[..])` ([[mterms]]). The step
-(`step.rs:268`) turns a choice of *n* alternatives into *n* machine states, each continuing
+(`step.rs:290`) turns a choice of *n* alternatives into *n* machine states, each continuing
 with one alternative and a **clone** of the logic and suspension environments so the branches
 don't interfere. Two degenerate cases:
 
@@ -28,9 +28,9 @@ constructor**, one per branch:
 
 | Eliminator | Branches | Code |
 |---|---|---|
-| `Ifz` (Nat) | `x = 0` ‖ `x = S(fresh)` | `step.rs:378-420` |
-| `Match` (List) | `x = []` ‖ `x = (fresh:fresh)` | `step.rs:454-499` |
-| `Case` (Sum) | `x = inl(fresh)` ‖ `x = inr(fresh)` | `step.rs:534-582` |
+| `Ifz` (Nat) | `x = 0` ‖ `x = S(fresh)` | `step.rs:400-443` |
+| `Match` (List) | `x = []` ‖ `x = (fresh:fresh)` | `step.rs:476-521` |
+| `Case` (Sum) | `x = inl(fresh)` ‖ `x = inr(fresh)` | `step.rs:556-604` |
 
 Each branch binds the variable to the guessed shape (with fresh sub-variables) in a cloned
 `lenv` and continues. This is the engine of generative search: `exists xs :: [Nat]. … case xs …`
@@ -44,7 +44,7 @@ will enumerate lists of every length.
 ## How branches are scheduled
 
 `step` reports a branch as `Step::Branch(SmallVec<[Machine; 2]>)` (`step.rs:30`). The
-[[step|`run_to_branch`]] loop (`step.rs:112`) runs deterministic steps tight and only hands
+[[step|`run_to_branch`]] loop (`step.rs:136`) runs deterministic steps tight and only hands
 control back to the scheduler at a branch or at completion (otherwise it returns `TimedOut`
 once the deadline passes). The [[eval|scheduler]] then decides the order branches are explored
 — depth-first, breadth-first, or fair — see [[search-strategies]]. The same tree, explored in
@@ -53,7 +53,7 @@ behaviour.
 
 ## Pruning
 
-A branch dies when a [[unification|unification]] fails (`step.rs:323`, the `Equate` arm returns
+A branch dies when a [[unification|unification]] fails (`step.rs:345`, the `Equate` arm returns
 `Step::Fail`) or an explicit `fail` / empty choice is reached. The interpreter offers
 `absurd`-style helpers in programs to prune deliberately; the practical art of pruning *early*
 (forcing constraints before generating more candidates) is covered in

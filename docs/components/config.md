@@ -1,11 +1,11 @@
 ---
 title: config.rs — runtime configuration
-tags: [component, stub]
+tags: [component]
 source: src/machine/config.rs
 commit: 6ec7c97
 ---
 
-# `config.rs` *(stub — expand on demand)*
+# `config.rs`
 
 `Config` (`config.rs:3-11`) holds the run-time knobs: `strategy`
 ([[search-strategies|`Strategy`]]), `optimize`, `timeout_secs`, `occurs_check`, `strict`,

@@ -1,11 +1,11 @@
 ---
 title: main.rs & lib.rs — entry points
-tags: [component, stub]
+tags: [component]
 source: src/main.rs
-commit: d83302b
+commit: 6ec7c97
 ---
 
-# `main.rs` & `lib.rs` *(stub — expand on demand)*
+# `main.rs` & `lib.rs`
 
 The two ways to run gweek. Both run the same [[pipeline]].
 

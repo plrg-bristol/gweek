@@ -7,7 +7,7 @@ tags: [meta]
 
 **gweek** is a functional-logic programming language. Its interpreter is a
 [Call-By-Push-Value](https://en.wikipedia.org/wiki/Call-by-push-value) abstract
-machine (~5,500 lines of Rust) supporting existential search over first-order data
+machine (~6,400 lines of Rust) supporting existential search over first-order data
 (naturals, lists, pairs, sums), finitary non-determinism, and unification.
 
 ```
@@ -53,17 +53,31 @@ The machine core:
 - [[eval]] — `src/machine/eval.rs` · the search schedulers
 - [[unify]] — `src/machine/unify.rs` · the unification algorithm
 - [[translate]] — `src/machine/translate.rs` · surface AST → CBPV
+- [[optimizer]] — `src/machine/optimize.rs` · the equational CBPV optimizer
 
-Supporting modules (stubs — expand on demand):
+Frontend & types:
 
-- [[parser]] · [[type-checker]] · [[optimizer]]
-- [[lvar]] · [[union-find]] · [[senv]] · [[env]] · [[vclosure]] · [[value-type]] · [[config]]
-- [[main-and-lib]] — CLI entry and WASM bindings
+- [[parser]] — `src/parser/` · chumsky combinators → surface AST
+- [[type-checker]] — `src/type_check.rs` · bidirectional checker with HM-style instantiation
+
+Runtime support:
+
+- [[lvar]] — `src/machine/lvar.rs` · logic-variable environment
+- [[union-find]] — `src/machine/union_find.rs` · variable aliasing
+- [[senv]] — `src/machine/senv.rs` · the suspension store
+- [[env]] — `src/machine/env.rs` · the de Bruijn value environment
+- [[vclosure]] — `src/machine/vclosure.rs` · value closures, forcing, and `close`
+- [[value-type]] — `src/machine/value_type.rs` · the runtime type lattice
+- [[config]] — `src/machine/config.rs` · runtime knobs (the in-memory CLI flags)
+
+Entry points:
+
+- [[main-and-lib]] — `src/main.rs`, `src/lib.rs` · CLI entry and WASM bindings
 
 ## Reference
 
 - [[cli]] — command-line flags
-- [[grammar]] — surface syntax (stub)
+- [[grammar]] — surface syntax
 - [[examples]] — the programs in `examples/`
 
 ## Review
