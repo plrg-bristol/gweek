@@ -104,17 +104,39 @@ fn reschedule<'a>(
     })
 }
 
+/// Polls a deadline cheaply from a hot loop: an actual `Instant::now()` is read
+/// only once every `POLL_INTERVAL` ticks, so `--timeout` is honoured without
+/// timing every iteration. Shared by `run_to_branch` (the inner step loop) and
+/// the scheduler loops in `eval`.
+pub(super) struct Clock {
+    iters: u32,
+    deadline: Instant,
+}
+
+impl Clock {
+    const POLL_INTERVAL: u32 = 1024;
+
+    pub(super) fn new(deadline: Instant) -> Self {
+        Clock { iters: 0, deadline }
+    }
+
+    /// Advance one tick; returns `true` once the deadline has passed, checked
+    /// only every `POLL_INTERVAL` ticks.
+    pub(super) fn expired(&mut self) -> bool {
+        self.iters = self.iters.wrapping_add(1);
+        self.iters & (Self::POLL_INTERVAL - 1) == 0 && Instant::now() >= self.deadline
+    }
+}
+
 impl<'a> Machine<'a> {
     /// Run deterministic steps in a tight loop, only returning to the
     /// scheduler at branch points (Choice, logic-var splits) or completion.
-    /// The deadline is polled every `DEADLINE_POLL_INTERVAL` steps so that a
-    /// divergent non-branching computation still honours `--timeout`.
+    /// The deadline is polled periodically so that a divergent non-branching
+    /// computation still honours `--timeout`.
     pub fn run_to_branch(mut self, cfg: &Config, deadline: Instant) -> RunResult<'a> {
-        const DEADLINE_POLL_INTERVAL: u32 = 1024;
-        let mut steps: u32 = 0;
+        let mut clock = Clock::new(deadline);
         loop {
-            steps += 1;
-            if steps & (DEADLINE_POLL_INTERVAL - 1) == 0 && Instant::now() >= deadline {
+            if clock.expired() {
                 return RunResult::TimedOut;
             }
             match self.step(cfg) {

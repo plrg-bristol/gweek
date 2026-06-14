@@ -12,7 +12,7 @@ use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
 use super::senv::SuspEnv;
-use super::step::{Machine, RunResult, Stack};
+use super::step::{Clock, Machine, RunResult, Stack};
 use super::vclosure::VClosure;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,25 +26,6 @@ pub enum Strategy {
 /// Absolute deadline for a run, computed once from the configured timeout.
 fn deadline_from(cfg: &Config) -> Instant {
     Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs)
-}
-
-/// Polls the run deadline cheaply from a scheduler loop: an actual
-/// `Instant::now()` is read only every 1024 ticks, so the timeout is honoured
-/// between `run_to_branch` calls without timing every branch.
-struct Clock {
-    iters: u32,
-    deadline: Instant,
-}
-
-impl Clock {
-    fn new(deadline: Instant) -> Self {
-        Clock { iters: 0, deadline }
-    }
-
-    fn expired(&mut self) -> bool {
-        self.iters = self.iters.wrapping_add(1);
-        self.iters & 1023 == 0 && Instant::now() >= self.deadline
-    }
 }
 
 /// Run with output, using config for strategy/timeout. Creates its own runtime arena.
