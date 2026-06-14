@@ -12,17 +12,34 @@ use gweek::type_check;
 const USAGE: &str = "\
 Usage: gweek [OPTIONS] <source_file>
 
+Runs an existential search over a gweek program and prints each solution.
+Pass /dev/stdin as the source file to read a program from stdin (e.g. a heredoc).
+
 Options:
-  --bfs              Breadth-first search (default)
-  --dfs              Depth-first search (fast, but incomplete on infinite branches)
-  --iddfs            Iterative deepening DFS (complete, re-explores)
-  --fair             Fair round-robin DFS (complete, no re-exploration)
-  -o                 Enable peephole optimizer
-  --timeout <N>      Timeout in seconds (default: 60)
-  --no-occurs-check  Skip occurs check in unification (unsound but faster)
-  --strict           Strict bind: evaluate RHS before binding (no suspensions)
-  --first            Stop after finding the first solution
-  --help             Show this help message";
+  --bfs              Breadth-first search (default). Complete, but memory-heavy.
+  --dfs              Depth-first search. Lean, but incomplete on infinite branches.
+  --iddfs            Iterative deepening DFS. Complete, low memory; re-explores.
+  --fair             Fair round-robin DFS. Complete, lean, no re-exploration. (recommended)
+  --first            Stop after finding the first solution.
+  --timeout <N>      Wall-clock timeout in seconds (default: 60).
+  -o                 Enable peephole optimizer.
+  --strict           Strict bind: evaluate RHS before binding (no suspensions).
+  --no-occurs-check  Skip occurs check in unification (unsound but faster).
+  --help             Show this help message.
+
+Output:
+  > <value>          one line per solution, in source syntax.
+  >>> N solutions    search ran to completion: these are ALL solutions.
+  >>> timed out ...  inconclusive: stopped at the deadline, more may exist.
+Parse/type errors print to stderr and exit 1. A completed run and a timeout
+both exit 0, so read the final >>> line to tell them apart.
+
+Example:
+  gweek --fair --first --timeout 5 /dev/stdin <<'EOF'
+  add :: Nat -> Nat -> Nat
+  add n m = case m of Z -> n | S z -> S (add n z).
+  exists a :: Nat. exists b :: Nat. add a b =:= 5. (a, b).
+  EOF";
 
 fn main() {
     let mut strategy = Strategy::Bfs;
