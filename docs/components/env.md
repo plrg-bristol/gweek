@@ -2,7 +2,7 @@
 title: env.rs — de Bruijn value environment
 tags: [component, stub]
 source: src/machine/env.rs
-updated: 7972077
+commit: d83302b
 ---
 
 # `env.rs` *(stub — expand on demand)*
@@ -13,8 +13,8 @@ Because `Env` is just a pointer to its head cell, it is `Copy` and O(1) to clone
 what makes cloning a [[step|machine]] at a [[nondeterminism|branch]] cheap.
 
 **API:** `empty(arena)` (`:23`); `lookup(i)` (`:27`) walks `i` cells down; `extend_val`
-(`:44`), `extend_lvar` (`:52`), `extend_susp` (`:56`) push a value / [[lvar|logic-var]] /
-[[senv|suspension]] closure at the head.
+(`:44`), `extend_lvar(ident: LVar)` (`:52`), `extend_susp(ident: SuspId)` (`:56`) push a value
+/ [[lvar|logic-var]] / [[senv|suspension]] closure at the head.
 
 **Subtlety.** `extend_val` **dealiases**: if the pushed value is itself a `Var`, it follows
 the variable chain through the given env instead of adding another indirection layer (`:44-50`).

@@ -2,27 +2,36 @@
 title: type_check.rs — the type checker
 tags: [component, stub]
 source: src/type_check.rs
-updated: 7972077
+commit: d83302b
 ---
 
 # `type_check.rs` *(stub — expand on demand)*
 
-A two-pass bidirectional type checker. `type_check(&ast) -> Result<(), Vec<TypeError>>`
-(`type_check.rs:129`) collects function signatures first (`:134-138`), then checks each body
-and bare statement (`:141-158`). The conceptual treatment, including the system's gaps, is in
-[[type-system]].
+A two-pass bidirectional type checker with Hindley–Milner-style instantiation.
+`type_check(&ast) -> Result<(), Vec<TypeError>>` (`type_check.rs:254`) collects function
+signatures first (`:259-263`), then checks each body and bare statement (`:266-282`). The
+conceptual treatment is in [[type-system]].
 
 **Key pieces:**
 
-- `Ctx` (`:31`) — locals stack `vars` + global `funcs` map; `bind`/`unbind`/`bind_arg`.
-- `unify(expected, actual)` (`:95`) — structural equality; `Type::Any` matches anything.
-- `peel_arrows(ty, n)` (`:113`) — split a function type into *n* args + return.
-- `synth_stmt` (`:193`) / `synth_expr` (`:319`) — synthesis; `check_expr` (`:387`) — checking
-  (currently dead, [[deep-review]] §B5); `synth_case` (`:249`); `synth_bexpr` (`:406`);
-  `resolve_type` (`:429`).
+- `TypeError` (`:15`) and `TResult<T> = Result<T, TypeError>` (`:25`) — the typed error channel.
+- `Ctx` (`:31`) — locals `vars`, global `funcs`, and `subst` (the metavariable substitution).
+- `unify(expected, actual)` (`:211`) — Robinson unification over metavariables, with an occurs
+  check (`:204-209`).
+- `instantiate` (`:83`) / `fresh_meta` (`:74`) — give each *use* of a polymorphic signature
+  fresh metavariables (`?0`, `?1`, …).
+- `synth_stmt` / `synth_expr` — synthesis; `check_expr` (`:510`) / `check_stmt` (`:542`) —
+  checking; `resolve_type` (`:580`).
 
-> **Known issues.** No real polymorphism (string-equal type vars, §B4); `check_expr`/
-> `resolve_return_type` are dead, so lambda arguments are rejected (§B5); `Int` and boolean
-> expressions pass here but panic in [[translate|translation]] (§B11, §B2).
+**Findings now resolved** ([[deep-review]]):
+
+- **B4** — real polymorphism: `instantiate` (`:83`) maps each signature type variable to a
+  fresh metavariable per use, so `id :: a -> a` applies at concrete types. Not string equality.
+- **B5** — `check_expr` is now called from `App`'s argument position (`:492`), so a lambda
+  passed as an argument is checked against the known parameter type (tests `:651-657`).
+- **B11** — `resolve_type` rejects `Int` as unknown (`:585`); it no longer slips through to
+  panic in [[translate|translation]].
+- **C3** — the blanket `unused = "allow"` is gone and the formerly-dead checking functions are
+  live.
 
 Related: [[type-system]], [[pipeline]], [[parser]], [[translate]], [[value-type]].

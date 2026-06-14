@@ -2,7 +2,7 @@
 title: Examples
 tags: [reference]
 source: examples/
-updated: 7972077
+commit: d83302b
 ---
 
 # Examples
@@ -44,8 +44,8 @@ These are the showcase programs: generate candidates non-deterministically and p
 | File | What it does |
 |---|---|
 | `fair.gwk` | Exercises fair search ([[search-strategies]]). |
-| `loop.gwk` | A divergent computation — useful for testing [[search-strategies|completeness]] and `--timeout` ([[deep-review]] §B9). |
-| `inert.gwk` | `exists x :: Nat. x.` — a residual free variable ([[logic-variables|residual answers]], [[deep-review]] §B7). |
+| `loop.gwk` | A divergent computation — `--timeout` now halts it even though it never branches ([[deep-review]] §B9, fixed). |
+| `inert.gwk` | `exists x :: Nat. x.` — now reports a residual free variable `_<id>` ([[logic-variables|residual answers]], [[deep-review]] §B7, fixed; pinned by an [[eval|eval test]]). |
 | `poke.gwk`, `spooky.gwk`, `test.gwk` | Assorted probes. |
 | `fibonacci_search.bll` | Fibonacci via search (`.bll` syntax). |
 

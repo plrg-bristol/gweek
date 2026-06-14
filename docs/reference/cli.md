@@ -2,7 +2,7 @@
 title: CLI reference
 tags: [reference]
 source: src/main.rs
-updated: 7972077
+commit: d83302b
 ---
 
 # CLI reference
@@ -11,8 +11,8 @@ updated: 7972077
 gweek [OPTIONS] <source_file>
 ```
 
-Flags are parsed in `main.rs:28-72` and stored in a [[config|`Config`]]. The corresponding
-WASM parameters are in [[main-and-lib|`lib.rs`]].
+Flags are parsed in `main.rs:27-72` and used to construct a [[config|`Config`]]. The
+corresponding WASM parameters are in [[main-and-lib|`lib.rs`]].
 
 ## Search strategy
 
@@ -22,7 +22,7 @@ Pick at most one; default is `--bfs`. The trade-offs are explained in [[search-s
 |---|---|---|
 | `--bfs` | Breadth-first | Default. Complete and fair, memory-heavy. |
 | `--dfs` | Depth-first | Fast and lean, incomplete on infinite branches. |
-| `--iddfs` | Iterative deepening | Complete, low memory; re-explores and dedups (see §B8). |
+| `--iddfs` | Iterative deepening | Complete, low memory; re-explores, with exact per-frontier counting (§B8). |
 | `--fair` | Fair round-robin DFS | Complete, DFS-speed, no re-exploration. **Recommended default.** |
 
 ## Other flags
@@ -30,10 +30,10 @@ Pick at most one; default is `--bfs`. The trade-offs are explained in [[search-s
 | Flag | Effect | Code |
 |---|---|---|
 | `-o` | Enable the peephole [[optimizer]] | `main.rs` → [[pipeline]] step 4 |
-| `--timeout <N>` | Wall-clock timeout in seconds (default 60) | checked in [[eval]] (caveat: §B9) |
-| `--first` | Stop after the first solution | [[eval|`record_solution`]] / `config.first_only` |
-| `--strict` | Evaluate `let` RHS before binding (no [[suspensions-and-forcing|suspensions]]) | [[step|`Bind`]] `step.rs:146` |
-| `--no-occurs-check` | Skip the [[unification#occurs-check|occurs check]] (faster, unsound) | `unify.rs:36,44` (caveat: §B13) |
+| `--timeout <N>` | Wall-clock timeout in seconds (default 60) | checked inside [[step|`run_to_branch`]] too, so divergent loops honour it (§B9 fixed) |
+| `--first` | Stop after the first solution | [[eval|`record_solution`]] / `cfg.first_only` |
+| `--strict` | Evaluate `let` RHS before binding (no [[suspensions-and-forcing|suspensions]]) | [[step|`Bind`]] `step.rs:179` |
+| `--no-occurs-check` | Skip the [[unification#occurs-check|occurs check]] (faster, unsound) | `unify.rs:37,44`; a resulting cyclic term is reported, not crashed (§B13 fixed) |
 | `--help` / `-h` | Usage | |
 
 ## Example

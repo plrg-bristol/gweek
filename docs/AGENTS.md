@@ -35,12 +35,12 @@ headline operation is **sync-to-code**, not "ingest a source." The enemy is drif
 title: Human-readable title
 tags: [component, machine]          # see taxonomy below
 source: src/machine/step.rs         # the code this page tracks (omit for pure-concept pages)
-updated: 7972077                     # short commit hash the page was last verified against
+commit: d83302b                     # short commit hash the page was last verified against
 ---
 ```
 
-`source` + `updated` are what make drift detectable: if `git log -1 --format=%h -- <source>`
-is newer than `updated`, the page is suspect. Pure-concept pages (e.g. [[cbpv]]) omit `source`.
+`source` + `commit` are what make drift detectable: if `git log -1 --format=%h -- <source>`
+is newer than `commit`, the page is suspect. Pure-concept pages (e.g. [[cbpv]]) omit `source`.
 
 **Wikilinks.** Link liberally with `[[basename]]` or `[[basename|display text]]`.
 Basenames are unique across the wiki, so `[[step]]`, `[[unify]]`, `[[cbpv]]` all resolve.
@@ -74,23 +74,23 @@ to [[index]] under the right category. Append to [[log]].
 1. `git diff <range> -- <file>` to see what moved.
 2. Re-read the changed regions.
 3. Update every page whose `source:` points at that file — fix prose, fix `file:line`
-   anchors, bump `updated:` to the new hash.
+   anchors, bump `commit:` to the new hash.
 4. Check pages that *link to* the changed page for stale claims.
 5. Append a `sync` entry to [[log]] naming the commit and the pages touched.
 
-**Lint** (health check). Look for: pages whose `updated:` is behind their `source`'s last
+**Lint** (health check). Look for: pages whose `commit:` is behind their `source`'s last
 commit; `file:line` anchors that no longer point where the prose claims; orphan pages with
 no inbound links; concepts mentioned but lacking a page; contradictions between pages;
-[[deep-review]] findings that have since been fixed (e.g. **B1** was fixed in `0f34f45` —
-the union-find now canonicalizes through `Root` by construction, see [[union-find]]).
+[[deep-review]] findings that have since been fixed (as of `d83302b`, **most have** — see the
+banner on [[deep-review]]; only §P2, §P3, §A3 remain open).
 
 ## Known-issues convention
 
 Pages describe current behaviour. Where a [[deep-review]] finding still reproduces against
 current code, add a short callout linking the finding, e.g.:
 
-> **Known issue.** Boolean expressions type-check but `translate_bexpr` is `todo!()`
-> (`translate.rs:518`). See [[deep-review]] §B2.
+> **Known issue.** Backtracking state is copy-on-write `Rc<UnionFind>`, so the first write on a
+> shared clone deep-copies the whole store → O(N²) on deep search. See [[deep-review]] §P2.
 
 Before adding such a callout, **verify the finding against current code** — the review is a
-historical snapshot and some findings (B1) are already fixed.
+historical snapshot and most of its findings are already fixed.

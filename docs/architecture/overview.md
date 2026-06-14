@@ -1,7 +1,7 @@
 ---
 title: Overview
 tags: [architecture]
-updated: 7972077
+commit: d83302b
 ---
 
 # Overview
@@ -39,10 +39,10 @@ See [[pipeline]] for the stage-by-stage walk-through with `file:line` anchors.
 
 Evaluation is **not** a recursive `eval` function. Instead the program is compiled to a
 [[cbpv|Call-By-Push-Value]] term and run on an explicit-state machine ([[step]]). A
-machine state ([[step|`Machine`]], `step.rs:60`) bundles:
+machine state ([[step|`Machine`]], `step.rs:74`) bundles:
 
 - a **computation closure** `cclos` — the term being run, paired with its [[env|environment]];
-- a **stack** of continuation frames (`step.rs:34`);
+- a **stack** of continuation frames (`step.rs:35`);
 - a **logic environment** [[lvar|`lenv`]] — bindings of logic variables;
 - a **suspension environment** [[senv|`senv`]] — delayed `let` computations.
 
@@ -53,7 +53,7 @@ decides the order. A recursive evaluator could not be paused, copied, and resume
 ## The two big representation choices
 
 1. **Everything is arena-allocated.** Terms, environments, and stacks live in a single
-   `bumpalo::Bump` for the whole run (`eval.rs:29`). Allocation is a pointer bump; closures
+   `bumpalo::Bump` for the whole run (allocated per entry point in `eval.rs`). Allocation is a pointer bump; closures
    are thin pointers, so cloning a machine at a branch point is cheap. The trade-off is that
    the arena is never reclaimed mid-run — see [[deep-review]] §P3.
 
@@ -77,7 +77,10 @@ decides the order. A recursive evaluator could not be paused, copied, and resume
 
 ## What gweek deliberately is not
 
-A research interpreter, not a production one. It favours a clear operational story over
-speed and surfaces many internal-invariant violations as `panic!` rather than typed errors
-([[deep-review]] §A4). The performance characteristics (copy-on-write backtracking,
-unbounded arena growth) are documented, not hidden — see [[deep-review]] §P2–P3.
+A research interpreter, not a production one. It favours a clear operational story over speed.
+User-reachable errors now flow through typed channels (`TypeError`, `UnifyError`), and the
+correctness/cleanliness findings of the [[deep-review]] have largely been implemented
+([[type-system]], [[translate]], [[eval]]); the `panic!`s that remain are true machine
+invariants ([[deep-review]] §A4, tail). The **performance** characteristics it documents are
+still open: copy-on-write backtracking state ([[deep-review]] §P2) and unbounded arena growth
+(§P3) are not yet redesigned.

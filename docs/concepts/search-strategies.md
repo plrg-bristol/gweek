@@ -72,9 +72,12 @@ has been explored.
 **Pros:** Complete (like BFS) with DFS-like memory usage. Finds
 shallow solutions first.
 
-**Cons:** Re-explores the tree at each iteration. Solutions are
-deduplicated via a hash set, which adds memory and comparison
-overhead. In practice about 1.5x slower than DFS on finite programs.
+**Cons:** Re-explores the tree at each iteration, so it is slower than
+DFS on finite programs. Counting is exact: each round only tallies
+solutions in the newly-reached depth frontier `[limit/2, limit)`, so a
+solution is counted once even though earlier depths are re-derived —
+no cross-round deduplication ([[eval]], `eval.rs:245`; was
+[[deep-review]] §B8).
 
 **Best for:** When you want completeness guarantees with low memory,
 and can tolerate re-exploration overhead.

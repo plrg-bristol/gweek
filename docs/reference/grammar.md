@@ -2,13 +2,13 @@
 title: Grammar
 tags: [reference, stub]
 source: src/parser/parse.rs
-updated: 7972077
+commit: d83302b
 ---
 
 # Grammar *(stub — expand on demand)*
 
 The surface syntax accepted by the [[parser]]. This page is a placeholder; the authoritative
-grammar is the chumsky combinator definitions in `parse.rs` (`:100-382`). A full reference
+grammar is the chumsky combinator definitions in `parse.rs` (`:105-387`). A full reference
 would lay out the BNF for declarations, statements, expressions, types, and case patterns,
 with the operator precedence table.
 
@@ -35,11 +35,14 @@ expr        ::= "S" expr | "\" arg "." stmt    -- successor, lambda
 atom        ::= Z | nat | "[]" | "[" expr,* "]" | "(" expr "," expr ")"
               | "true" | "false" | ident | "(" stmt ")"
 
-type        ::= type "->" type | type "*" type | "[" type "]" | ident
+type        ::= product ("->" type)?            -- arrow, right-assoc, loosest
+product     ::= atom ("*" atom)*                -- product, binds tighter than arrow
+atom        ::= "[" type "]" | ident | "(" type ")"
 ```
 
-> The sketch elides exact precedence. Known parser issues: `*`/`->` share precedence
-> ([[deep-review]] §B6); numeric and tuple `case` patterns panic (§B12, §B10). The AST node
-> types these productions build are listed in [[parser]].
+> The sketch elides some precedence detail; the type layering (`*` tighter than `->`) is now
+> correct (`A * B -> C` parses as `(A*B) -> C` — was [[deep-review]] §B6). Numeric and tuple
+> `case` patterns are now clean parse **errors**, not panics (§B12, §B10). The AST node types
+> these productions build are listed in [[parser]].
 
 Related: [[parser]], [[type-system]], [[pipeline]].

@@ -2,7 +2,7 @@
 title: value_type.rs — runtime types
 tags: [component, stub]
 source: src/machine/value_type.rs
-updated: 7972077
+commit: d83302b
 ---
 
 # `value_type.rs` *(stub — expand on demand)*

@@ -2,7 +2,7 @@
 title: mterms.rs — the CBPV term language
 tags: [component, machine]
 source: src/machine/mterms.rs
-updated: 7972077
+commit: d83302b
 ---
 
 # `mterms.rs`
@@ -29,10 +29,10 @@ pub enum MValue<'a> {
 
 - **Dual naturals.** A natural is either `Nat(u64)` (compact) or `Zero`/`Succ` (symbolic).
   Both exist because an unbound [[logic-variables|logic variable]] of type `Nat` is
-  [[nondeterminism|split]] into `0` and `S(fresh)`, which needs a symbolic successor. Every
-  *runtime* site actually produces `Nat`; the `Zero` variant is effectively dead and
-  [[deep-review]] §A3 proposes removing it. [[unification|Unification]] and `Ifz` carry the
-  arms that reconcile the two forms.
+  [[nondeterminism|split]] into `0` and `S(fresh)`, which needs a symbolic successor.
+  [[unification|Unification]] and `Ifz` carry the arms that reconcile the two forms.
+  ([[deep-review]] §A3 argued the `Zero` variant could be retired; that cleanup has **not**
+  been applied — `Zero` is still live in display, `Ifz`, and the unify arms.)
 - **`Thunk`** is the value/computation bridge ([[cbpv]]): `comp.thunk(arena)` wraps a
   computation as a value (`mterms.rs:136`).
 - **`Display`** renders for solution output: symbolic naturals fold to a number via `to_nat`
@@ -54,7 +54,10 @@ How each variant *steps* is the subject of [[step]]. How surface syntax *becomes
 ## Helpers
 
 - `thunk(&self, arena)` (`:136`) — allocate `Thunk(self)`.
-- `count_nodes` on both types (`:140`, `:167`) — term-size metric used under the
-  `opt-stats` feature ([[deep-review]] §C4 notes it is not feature-gated).
+- `count_nodes` on both types (`:140`, `:167`) — term-size metric, now correctly gated behind
+  `#[cfg(feature = "opt-stats")]` ([[deep-review]] §C4, fixed).
+
+> The machine's `LVar`/`SuspId` identifier newtypes live in `mod.rs` (`:21`, `:23`), alongside
+> the `CClosure` alias (`:26`); see [[deep-review]] §A5.
 
 Related: [[cbpv]], [[step]], [[translate]], [[value-type]], [[de-bruijn]].

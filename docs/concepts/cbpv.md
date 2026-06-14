@@ -26,9 +26,8 @@ Values and computations are bridged by a dual pair:
 | computation → value | `Thunk(c)` (`mterms.rs:23`) | freeze a computation into a value you can pass around |
 | value → computation | `Force(v)` (`mterms.rs:110`) | run a thunked computation |
 
-So a gweek function is a **thunk of a `Lambda`** (`translate.rs:301-314`): calling it means
-`Force`-ing the thunk and then `App`-lying arguments. This is visible in how application is
-lowered — `translate.rs:478-489` emits `Force(var) ; App`.
+So a gweek function is a **thunk of a `Lambda`** ([[translate|`translate_func`]],
+`translate.rs:342`): calling it means `Force`-ing the thunk and then `App`-lying arguments.
 
 ## Sequencing is explicit: `Return` / `Bind`
 
@@ -39,19 +38,18 @@ value uses `Return(v)` (`mterms.rs:105`); to use that value you must `Bind` it:
 Bind { comp, cont }     -- run comp; bind its returned value at index 0 of cont's env
 ```
 
-`Bind` (`step.rs:134`) is the workhorse: the surface language's nested data constructors all
+`Bind` (`step.rs:179`) is the workhorse: the surface language's nested data constructors all
 compile to chains of `Bind … Return` so that each sub-result is named before it is used
-(see e.g. `Cons` lowering, `translate.rs:455-466`). It is also where **laziness** enters: a
-non-`Return` `comp` is *suspended* rather than run, unless `--strict` is set
-([[suspensions-and-forcing]], `step.rs:146-169`).
+([[translate]]). It is also where **laziness** enters: a non-`Return` `comp` is *suspended*
+rather than run, unless `--strict` is set ([[suspensions-and-forcing]]).
 
 ## Eliminators
 
 The three eliminators take a *value* and a continuation per shape:
 
-- `Ifz { num, zk, sk }` — naturals (`step.rs:315`)
-- `Match { list, nilk, consk }` — lists (`step.rs:411`)
-- `Case { sum, inlk, inrk }` — sums (`step.rs:500`)
+- `Ifz { num, zk, sk }` — naturals (`step.rs:340`)
+- `Match { list, nilk, consk }` — lists (`step.rs:426`)
+- `Case { sum, inlk, inrk }` — sums (`step.rs:505`)
 
 Each first [[vclosure|head-closes]] its scrutinee. When the scrutinee turns out to be an
 unresolved [[logic-variables|logic variable]], the eliminator does not get stuck — it
