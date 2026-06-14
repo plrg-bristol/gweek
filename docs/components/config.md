@@ -2,7 +2,7 @@
 title: config.rs — runtime configuration
 tags: [component, stub]
 source: src/machine/config.rs
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # `config.rs` *(stub — expand on demand)*

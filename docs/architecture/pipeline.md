@@ -1,7 +1,7 @@
 ---
 title: The pipeline
 tags: [architecture]
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # The pipeline
@@ -51,9 +51,14 @@ verified to preserve the solution multiset on every terminating example ([[deep-
 
 The chosen [[search-strategies|strategy]] (`--bfs` default, `--dfs`, `--iddfs`, `--fair`)
 drives the abstract machine ([[eval]], [[step]]). Each strategy repeatedly runs a machine to
-its next branch point (`step.rs:112`, `run_to_branch`), collects the resulting machine states,
-records any that are `Done` as [[unify|solutions]], and schedules the rest. Output is produced
-by [[vclosure|closing]] the final value to a `Closed` answer term (`eval.rs:321`).
+its next branch point (`step.rs:136`, `run_to_branch`), collects the resulting machine states,
+records any that are solutions via `record_solution` (`eval.rs:133`), and schedules the rest.
+Output is produced by [[vclosure|closing]] the final value to a `Closed` answer term
+(`output`/`close`, `eval.rs:303`). The `--timeout` deadline is polled through one shared
+`Clock` type (`step.rs:111`): both `run_to_branch` and the four scheduler loops in `eval`
+construct a `Clock::new(deadline)` and tick it, so `Instant::now()` is read only once every
+`POLL_INTERVAL` (1024) ticks rather than on every step. `Clock` lives in `step.rs` (moved
+there so the single hot-loop idiom is not duplicated between the step loop and the schedulers).
 
 ```
    parse ──▶ type_check ──▶ translate ──▶ [optimize] ──▶ eval

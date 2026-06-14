@@ -2,7 +2,7 @@
 title: Examples
 tags: [reference]
 source: examples/
-commit: d83302b
+commit: 6ec7c97
 ---
 
 # Examples
@@ -26,7 +26,7 @@ These are the showcase programs: generate candidates non-deterministically and p
 | `pythagorean.gwk` | Pythagorean triples via search. |
 | `subset_sum.gwk` | Subset summing to a target. |
 | `map_color.gwk` | Graph/map colouring. |
-| `square1.gwk`, `square2.gwk` | Square-arrangement constraints. |
+| `square1.gwk`, `square2.gwk` | Integer square root by search: `exists n :: Nat. mult n n =:= 16. n` (the two differ only in how `add` recurses). |
 
 ## List operations
 
@@ -36,7 +36,7 @@ These are the showcase programs: generate candidates non-deterministically and p
 | `sort.gwk` | Sorting as search. |
 | `find_list.gwk` | Search over lists (test pins 462 solutions). |
 | `head.gwk`, `last.gwk`, `no-last.gwk` | Head/last element relations. |
-| `split.gwk` | Splitting a list. |
+| `split.gwk` | Splits a natural into two addends: `exists x y. add x y =:= 100. (x, y)`. |
 | `id.gwk` | Identity. |
 
 ## Non-determinism, laziness & edge cases
@@ -44,12 +44,15 @@ These are the showcase programs: generate candidates non-deterministically and p
 | File | What it does |
 |---|---|
 | `fair.gwk` | Exercises fair search ([[search-strategies]]). |
-| `loop.gwk` | A divergent computation — `--timeout` now halts it even though it never branches ([[deep-review]] §B9, fixed). |
+| `loop.gwk` | `exists x :: Nat. x =:= (S x). x.` — a self-referential constraint that diverges; `--timeout` now halts it even though it never branches ([[deep-review]] §B9, fixed). |
 | `inert.gwk` | `exists x :: Nat. x.` — now reports a residual free variable `_<id>` ([[logic-variables|residual answers]], [[deep-review]] §B7, fixed; pinned by an [[eval|eval test]]). |
 | `poke.gwk`, `spooky.gwk`, `test.gwk` | Assorted probes. |
 | `fibonacci_search.bll` | Fibonacci via search (`.bll` syntax). |
 
-> This catalogue is name-level; most files carry no header comment. Expanding each into a
-> short worked entry (input → expected solutions → strategy notes) is good follow-up work.
+> The descriptions are read from the programs themselves; the files carry no header comments.
+> The three entries with pinned solution counts (`perm` → 720, `find_list` → 462, `nqueens` →
+> 92) are asserted by the integration tests in `main.rs` (`main.rs:240-284`). Turning the
+> remaining entries into full worked records (input → expected solutions → strategy notes) is
+> good follow-up work.
 
 Related: [[cli]], [[suspensions-and-forcing]], [[nondeterminism]], [[search-strategies]].

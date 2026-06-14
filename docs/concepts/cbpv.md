@@ -11,8 +11,10 @@ and that split is what makes evaluation order — and therefore the search — e
 
 The two categories are defined in [[mterms]] (`mterms.rs`):
 
-- **Values** (`MValue`, `mterms.rs:12`) are inert data: `Unit`, `Nat`, `Succ`, `Pair`,
-  `Inl`/`Inr`, `Nil`/`Cons`, de Bruijn `Var`, and `Thunk` (a frozen computation).
+- **Values** (`MValue`, `mterms.rs:12`) are inert data: `Unit`, `Nat`, `Zero`/`Succ`, `Pair`,
+  `Inl`/`Inr`, `Nil`/`Cons`, de Bruijn `Var`, and `Thunk` (a frozen computation). Naturals
+  have two representations — a packed `Nat(u64)` literal and the unary `Zero`/`Succ` spine that
+  pattern-matching and unification build incrementally; both render via `to_nat` (`mterms.rs:55`).
 - **Computations** (`MComputation`, `mterms.rs:87`) are things that run: `Return`, `Bind`,
   `Force`, `Lambda`, `App`, `Choice`, `Exists`, `Equate`, `Rec`, and the eliminators
   `Ifz` / `Match` / `Case`.
@@ -38,7 +40,7 @@ value uses `Return(v)` (`mterms.rs:105`); to use that value you must `Bind` it:
 Bind { comp, cont }     -- run comp; bind its returned value at index 0 of cont's env
 ```
 
-`Bind` (`step.rs:179`) is the workhorse: the surface language's nested data constructors all
+`Bind` (`step.rs:201`) is the workhorse: the surface language's nested data constructors all
 compile to chains of `Bind … Return` so that each sub-result is named before it is used
 ([[translate]]). It is also where **laziness** enters: a non-`Return` `comp` is *suspended*
 rather than run, unless `--strict` is set ([[suspensions-and-forcing]]).
@@ -47,9 +49,9 @@ rather than run, unless `--strict` is set ([[suspensions-and-forcing]]).
 
 The three eliminators take a *value* and a continuation per shape:
 
-- `Ifz { num, zk, sk }` — naturals (`step.rs:340`)
-- `Match { list, nilk, consk }` — lists (`step.rs:426`)
-- `Case { sum, inlk, inrk }` — sums (`step.rs:505`)
+- `Ifz { num, zk, sk }` — naturals (`step.rs:362`)
+- `Match { list, nilk, consk }` — lists (`step.rs:448`)
+- `Case { sum, inlk, inrk }` — sums (`step.rs:527`)
 
 Each first [[vclosure|head-closes]] its scrutinee. When the scrutinee turns out to be an
 unresolved [[logic-variables|logic variable]], the eliminator does not get stuck — it
