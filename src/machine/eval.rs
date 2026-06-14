@@ -28,6 +28,25 @@ fn deadline_from(cfg: &Config) -> Instant {
     Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs)
 }
 
+/// Polls the run deadline cheaply from a scheduler loop: an actual
+/// `Instant::now()` is read only every 1024 ticks, so the timeout is honoured
+/// between `run_to_branch` calls without timing every branch.
+struct Clock {
+    iters: u32,
+    deadline: Instant,
+}
+
+impl Clock {
+    fn new(deadline: Instant) -> Self {
+        Clock { iters: 0, deadline }
+    }
+
+    fn expired(&mut self) -> bool {
+        self.iters = self.iters.wrapping_add(1);
+        self.iters & 1023 == 0 && Instant::now() >= self.deadline
+    }
+}
+
 /// Run with output, using config for strategy/timeout. Creates its own runtime arena.
 pub fn eval<'a>(cfg: &Config, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) {
     let arena = Bump::new();
@@ -145,11 +164,10 @@ fn eval_bfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: 
     let mut machines = vec![fresh_machine(arena, comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
-    let mut iters = 0u32;
+    let mut clock = Clock::new(deadline);
     while !machines.is_empty() {
         for m in machines.drain(..) {
-            iters += 1;
-            if iters & 1023 == 0 && Instant::now() >= deadline {
+            if clock.expired() {
                 return (solns, true);
             }
             let results = match m.run_to_branch(cfg, deadline) {
@@ -174,10 +192,9 @@ fn eval_bfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: 
 fn eval_dfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     let mut stack = vec![fresh_machine(arena, comp, env)];
     let mut solns = 0;
-    let mut iters = 0u32;
+    let mut clock = Clock::new(deadline);
     while let Some(m) = stack.pop() {
-        iters += 1;
-        if iters & 1023 == 0 && Instant::now() >= deadline {
+        if clock.expired() {
             return (solns, true);
         }
         let results = match m.run_to_branch(cfg, deadline) {
@@ -200,13 +217,12 @@ fn eval_dfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: 
 fn eval_iddfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
-    let mut iters = 0u32;
+    let mut clock = Clock::new(deadline);
     loop {
         let mut stack = vec![(fresh_machine(arena, comp, env), 0)];
         let mut cutoff = false;
         while let Some((m, depth)) = stack.pop() {
-            iters += 1;
-            if iters & 1023 == 0 && Instant::now() >= deadline {
+            if clock.expired() {
                 return (solns, true);
             }
             if depth >= depth_limit {
@@ -250,12 +266,11 @@ fn eval_fair<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env:
     let mut queue: VecDeque<Vec<Machine<'a>>> = VecDeque::new();
     queue.push_back(vec![fresh_machine(arena, comp, env)]);
     let mut solns = 0;
-    let mut iters = 0u32;
+    let mut clock = Clock::new(deadline);
     while let Some(mut local) = queue.pop_front() {
         let mut steps = 0;
         while let Some(m) = local.pop() {
-            iters += 1;
-            if iters & 1023 == 0 && Instant::now() >= deadline {
+            if clock.expired() {
                 return (solns, true);
             }
             if steps >= QUOTA {

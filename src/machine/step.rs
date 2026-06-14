@@ -80,6 +80,30 @@ pub struct Machine<'a> {
     pub done: bool,
 }
 
+/// Suspend the current computation `comp` on the suspension `a.ident` and resume
+/// at the suspension's closure. Shared by the Force/Equate/Ifz/Match/Case arms,
+/// which reschedule identically when `close_head` blocks on an unevaluated
+/// suspension.
+fn reschedule<'a>(
+    arena: &'a Bump,
+    lenv: LogicEnv<'a>,
+    senv: SuspEnv<'a>,
+    stack: Stack<'a>,
+    comp: &'a MComputation<'a>,
+    env: Env<'a>,
+    a: SuspAt<'a>,
+) -> Step<'a> {
+    let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
+    Step::Continue(Machine {
+        arena,
+        cclos: a.cclos,
+        stack: new_stack,
+        lenv,
+        senv,
+        done: false,
+    })
+}
+
 impl<'a> Machine<'a> {
     /// Run deterministic steps in a tight loop, only returning to the
     /// scheduler at branch points (Choice, logic-var splits) or completion.
@@ -206,17 +230,7 @@ impl<'a> Machine<'a> {
                     },
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
-                    Err(a) => {
-                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
-                        Step::Continue(Machine {
-                            arena,
-                            cclos: a.cclos,
-                            stack: new_stack,
-                            lenv,
-                            senv,
-                            done: false,
-                        })
-                    }
+                    Err(a) => reschedule(arena, lenv, senv, stack, comp, env, a),
                 }
             }
 
@@ -318,17 +332,7 @@ impl<'a> Machine<'a> {
                         done: false,
                     }),
                     // Suspension needs to be evaluated!
-                    Err(UnifyError::Susp(a)) => {
-                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
-                        Step::Continue(Machine {
-                            arena,
-                            cclos: a.cclos,
-                            stack: new_stack,
-                            lenv,
-                            senv,
-                            done: false,
-                        })
-                    }
+                    Err(UnifyError::Susp(a)) => reschedule(arena, lenv, senv, stack, comp, env, a),
                     Err(_) => Step::Fail,
                 }
             }
@@ -336,17 +340,7 @@ impl<'a> Machine<'a> {
             MComputation::Ifz { num, zk, sk } => {
                 let vclos = VClosure::mk_clos(num, env);
                 match vclos.close_head(&lenv, &senv) {
-                    Err(a) => {
-                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
-                        Step::Continue(Machine {
-                            arena,
-                            cclos: a.cclos,
-                            stack: new_stack,
-                            lenv,
-                            senv,
-                            done: false,
-                        })
-                    }
+                    Err(a) => reschedule(arena, lenv, senv, stack, comp, env, a),
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Zero | MValue::Nat(0) => Step::Continue(Machine {
                             arena,
@@ -432,17 +426,7 @@ impl<'a> Machine<'a> {
             MComputation::Match { list, nilk, consk } => {
                 let vclos = VClosure::mk_clos(list, env);
                 match vclos.close_head(&lenv, &senv) {
-                    Err(a) => {
-                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
-                        Step::Continue(Machine {
-                            arena,
-                            cclos: a.cclos,
-                            stack: new_stack,
-                            lenv,
-                            senv,
-                            done: false,
-                        })
-                    }
+                    Err(a) => reschedule(arena, lenv, senv, stack, comp, env, a),
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Nil => Step::Continue(Machine {
                             arena,
@@ -521,17 +505,7 @@ impl<'a> Machine<'a> {
             MComputation::Case { sum, inlk, inrk } => {
                 let vclos = VClosure::mk_clos(sum, env);
                 match vclos.close_head(&lenv, &senv) {
-                    Err(a) => {
-                        let new_stack = stack.push(arena, StkFrame::Set(a.ident, comp), env);
-                        Step::Continue(Machine {
-                            arena,
-                            cclos: a.cclos,
-                            stack: new_stack,
-                            lenv,
-                            senv,
-                            done: false,
-                        })
-                    }
+                    Err(a) => reschedule(arena, lenv, senv, stack, comp, env, a),
                     Ok(VClosure::Clos { val, env: cenv }) => match val {
                         MValue::Inl(v) => {
                             let new_env = env.extend_val(arena, v, cenv);
