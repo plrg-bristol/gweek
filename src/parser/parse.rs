@@ -252,7 +252,7 @@ fn expression(
             choice((
                 just(':').padded()
                     .ignore_then(expr)
-                    .map(|rhs| PostOp::Cons(rhs)),
+                    .map(PostOp::Cons),
                 bexpr_op.then(primary.clone())
                     .map(|(op, rhs)| PostOp::BExpr(op, rhs)),
                 primary.repeated().at_least(1)
