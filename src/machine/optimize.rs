@@ -219,21 +219,8 @@ fn shift_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, delta: isize, cut
 }
 
 // --- De Bruijn substitution ---
-// subst_val/subst_comp replace Var(depth) with shift(repl, depth, 0),
-// and decrement all Var(i) where i > depth.
-
-fn subst_val<'a>(arena: &'a Bump, val: &'a MValue<'a>, repl: &'a MValue<'a>, depth: usize) -> &'a MValue<'a> {
-    map_val(arena, val, depth, &move |binders, v| {
-        let MValue::Var(i) = v else { unreachable!() };
-        if *i == binders {
-            shift_val(arena, repl, binders as isize, 0)
-        } else if *i > binders {
-            arena.alloc(MValue::Var(i - 1))
-        } else {
-            v
-        }
-    })
-}
+// subst_comp replaces Var(depth) with shift(repl, depth, 0),
+// and decrements all Var(i) where i > depth.
 
 fn subst_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, repl: &'a MValue<'a>, depth: usize) -> &'a MComputation<'a> {
     map_comp(arena, comp, depth, &move |binders, v| {

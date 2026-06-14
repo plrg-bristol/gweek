@@ -25,6 +25,3 @@ console_error_panic_hook = "0.1"
 [profile.release]
 lto = true
 codegen-units = 1
-
-[lints.rust]
-unused = "allow"

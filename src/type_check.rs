@@ -497,7 +497,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             }
         }
 
-        Expr::Lambda(arg, body) => {
+        Expr::Lambda(..) => {
             Err(err("cannot infer type of lambda; needs a type annotation"))
         }
 
@@ -599,12 +599,6 @@ fn resolve_type(ty: &Type) -> TResult {
             Ok(Type::Arrow(Box::new(a), Box::new(b)))
         }
     }
-}
-
-// For lambda checking: the return type of a function type
-// A -> B means the lambda body should produce B
-fn resolve_return_type(ty: &Type) -> TResult {
-    Ok(ty.clone())
 }
 
 impl fmt::Display for Type {

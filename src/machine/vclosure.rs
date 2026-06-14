@@ -1,7 +1,5 @@
 use std::fmt::{self, Display};
 
-use bumpalo::Bump;
-
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::MValue;
