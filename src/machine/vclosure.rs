@@ -7,13 +7,13 @@ use super::lvar::LogicEnv;
 use super::mterms::MValue;
 use super::senv::{SuspAt, SuspEnv};
 use super::value_type::ValueType;
-use super::Ident;
+use super::{LVar, SuspId};
 
 #[derive(Clone, Copy, Debug)]
 pub enum VClosure<'a> {
     Clos { val: &'a MValue<'a>, env: Env<'a> },
-    LogicVar { ident: Ident },
-    Susp { ident: Ident },
+    LogicVar { ident: LVar },
+    Susp { ident: SuspId },
 }
 
 /// A fully-resolved answer term, ready for printing.
@@ -24,7 +24,7 @@ pub enum VClosure<'a> {
 /// still reported rather than silently dropped.
 #[derive(Clone, Debug)]
 pub enum Closed {
-    Free(Ident),
+    Free(LVar),
     Unit,
     Nat(u64),
     Succ(Box<Closed>),
@@ -49,7 +49,7 @@ const MAX_CLOSE_DEPTH: usize = 1 << 16;
 impl Display for Closed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Closed::Free(id) => write!(f, "_{}", id),
+            Closed::Free(id) => write!(f, "_{}", id.0),
             Closed::Unit => write!(f, "()"),
             Closed::Nat(n) => write!(f, "{}", n),
             Closed::Succ(_) => match self.to_nat() {
@@ -121,7 +121,7 @@ impl<'a> VClosure<'a> {
         &self,
         lenv: &LogicEnv<'a>,
         senv: &SuspEnv<'a>,
-        ident: Ident,
+        ident: LVar,
     ) -> Result<bool, SuspAt<'a>> {
         match self.close_head(lenv, senv)? {
             VClosure::Clos { val, env } => match val {

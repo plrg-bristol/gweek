@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 
 use super::mterms::MValue;
-use super::{Ident, VClosure};
+use super::{LVar, SuspId, VClosure};
 
 enum EnvInner<'a> {
     Nil,
@@ -49,11 +49,11 @@ impl<'a> Env<'a> {
         Env(arena.alloc(EnvInner::Cons(vclos, *self)))
     }
 
-    pub fn extend_lvar(&self, arena: &'a Bump, ident: Ident) -> Env<'a> {
+    pub fn extend_lvar(&self, arena: &'a Bump, ident: LVar) -> Env<'a> {
         Env(arena.alloc(EnvInner::Cons(VClosure::LogicVar { ident }, *self)))
     }
 
-    pub fn extend_susp(&self, arena: &'a Bump, ident: Ident) -> Env<'a> {
+    pub fn extend_susp(&self, arena: &'a Bump, ident: SuspId) -> Env<'a> {
         Env(arena.alloc(EnvInner::Cons(VClosure::Susp { ident }, *self)))
     }
 

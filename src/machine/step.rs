@@ -12,7 +12,7 @@ use super::mterms::{MComputation, MValue};
 use super::senv::{SuspAt, SuspEnv};
 use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
-use super::{CClosure, Env, VClosure};
+use super::{CClosure, Env, SuspId, VClosure};
 
 pub type StepResult<'a> = SmallVec<[Machine<'a>; 2]>;
 
@@ -35,7 +35,7 @@ enum Step<'a> {
 enum StkFrame<'a> {
     Value(&'a MValue<'a>),
     To(&'a MComputation<'a>),
-    Set(usize, &'a MComputation<'a>),
+    Set(SuspId, &'a MComputation<'a>),
 }
 
 #[derive(Clone, Copy, Debug)]

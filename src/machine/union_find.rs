@@ -1,13 +1,11 @@
 use std::cell::Cell;
 
-use super::Ident;
-
 /// The canonical index of a logic variable's equivalence class.
 ///
 /// A `Root` can only be produced by [`UnionFind::find`] (or the self-root
 /// established by [`UnionFind::register`]). Because its field is private to
 /// this module, per-variable storage keyed by `Root` cannot be indexed by a
-/// raw [`Ident`] — that is a compile error. This makes the read/write
+/// raw `usize` — that is a compile error. This makes the read/write
 /// canonicalization invariant inexpressible to violate from outside.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Root(usize);
@@ -27,7 +25,7 @@ impl Node {
     }
 }
 
-/// A union-find over [`Ident`]s that also owns the per-variable data `T`,
+/// A union-find over `usize` keys that also owns the per-variable data `T`,
 /// stored once per node and only ever addressed through a [`Root`].
 ///
 /// Fusing the union-find with its associated storage removes the desync
@@ -48,7 +46,7 @@ impl<T> UnionFind<T> {
         }
     }
 
-    pub fn find(&self, ident: Ident) -> Root {
+    pub fn find(&self, ident: usize) -> Root {
         // Find root
         let mut j = ident;
         while let Some(p) = self.nodes[j].parent.get() {
@@ -64,9 +62,9 @@ impl<T> UnionFind<T> {
         Root(root)
     }
 
-    /// Register a fresh node carrying `datum`, returning its [`Ident`].
+    /// Register a fresh node carrying `datum`, returning its index.
     /// The node is its own root.
-    pub fn register(&mut self, datum: T) -> Ident {
+    pub fn register(&mut self, datum: T) -> usize {
         let ident = self.nodes.len();
         self.nodes.push(Node::new());
         self.data.push(datum);
@@ -81,7 +79,7 @@ impl<T> UnionFind<T> {
         &mut self.data[root.0]
     }
 
-    pub fn union(&mut self, i: Ident, j: Ident) {
+    pub fn union(&mut self, i: usize, j: usize) {
         let a = self.find(i).0;
         let b = self.find(j).0;
         if a == b {

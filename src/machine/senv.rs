@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use super::env::Env;
 use super::mterms::MValue;
-use super::{CClosure, Ident, VClosure};
+use super::{CClosure, SuspId, VClosure};
 
 #[derive(Clone)]
 pub struct SuspEnv<'a> {
@@ -12,7 +12,7 @@ pub struct SuspEnv<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct SuspAt<'a> {
-    pub ident: Ident,
+    pub ident: SuspId,
     pub cclos: CClosure<'a>,
 }
 
@@ -34,15 +34,15 @@ impl<'a> SuspEnv<'a> {
         }
     }
 
-    pub fn fresh(&mut self, cclos: CClosure<'a>) -> Ident {
+    pub fn fresh(&mut self, cclos: CClosure<'a>) -> SuspId {
         let entries = Rc::make_mut(&mut self.entries);
         let next = entries.len();
         entries.push(Err(cclos));
-        next
+        SuspId(next)
     }
 
-    pub fn lookup(&self, ident: &Ident) -> Result<VClosure<'a>, SuspAt<'a>> {
-        match &self.entries[*ident] {
+    pub fn lookup(&self, ident: &SuspId) -> Result<VClosure<'a>, SuspAt<'a>> {
+        match &self.entries[ident.0] {
             Ok(vclos) => Ok(*vclos),
             Err(cclos) => Err(SuspAt {
                 ident: *ident,
@@ -51,8 +51,8 @@ impl<'a> SuspEnv<'a> {
         }
     }
 
-    pub fn set(&mut self, ident: &Ident, val: &'a MValue<'a>, env: Env<'a>) {
-        Rc::make_mut(&mut self.entries)[*ident] = Ok(VClosure::mk_clos(val, env));
+    pub fn set(&mut self, ident: &SuspId, val: &'a MValue<'a>, env: Env<'a>) {
+        Rc::make_mut(&mut self.entries)[ident.0] = Ok(VClosure::mk_clos(val, env));
     }
 
     pub fn next(&mut self) -> Option<SuspAt<'a>> {
@@ -61,7 +61,7 @@ impl<'a> SuspEnv<'a> {
                 Ok(_) => self.next_pending += 1,
                 Err(cclos) => {
                     return Some(SuspAt {
-                        ident: self.next_pending,
+                        ident: SuspId(self.next_pending),
                         cclos: *cclos,
                     })
                 }

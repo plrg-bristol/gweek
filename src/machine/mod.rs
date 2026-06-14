@@ -17,7 +17,10 @@ pub(crate) use vclosure::VClosure;
 pub use config::Config;
 pub use eval::{eval, eval_collect, eval_streaming, run, Strategy};
 
-pub type Ident = usize;
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct LVar(pub usize);
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct SuspId(pub usize);
 
 /// A computation closure: a computation paired with its environment.
 pub type CClosure<'a> = (&'a mterms::MComputation<'a>, env::Env<'a>);

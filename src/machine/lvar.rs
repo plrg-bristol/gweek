@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::machine::value_type::ValueType;
 
 use super::union_find::UnionFind;
-use super::{Ident, VClosure};
+use super::{LVar, VClosure};
 
 #[derive(Clone)]
 pub struct LogicEnv<'a> {
@@ -17,28 +17,28 @@ impl<'a> LogicEnv<'a> {
         }
     }
 
-    pub fn fresh(&mut self, ptype: ValueType) -> Ident {
-        Rc::make_mut(&mut self.store).register((ptype, None))
+    pub fn fresh(&mut self, ptype: ValueType) -> LVar {
+        LVar(Rc::make_mut(&mut self.store).register((ptype, None)))
     }
 
-    pub fn lookup(&self, ident: Ident) -> Option<VClosure<'a>> {
-        let root = self.store.find(ident);
+    pub fn lookup(&self, ident: LVar) -> Option<VClosure<'a>> {
+        let root = self.store.find(ident.0);
         self.store.get(root).1
     }
 
-    pub fn set_vclos(&mut self, ident: Ident, vclos: VClosure<'a>) {
+    pub fn set_vclos(&mut self, ident: LVar, vclos: VClosure<'a>) {
         let store = Rc::make_mut(&mut self.store);
-        let root = store.find(ident);
+        let root = store.find(ident.0);
         store.get_mut(root).1 = Some(vclos);
     }
 
-    pub fn get_type(&self, ident: Ident) -> ValueType {
-        let root = self.store.find(ident);
+    pub fn get_type(&self, ident: LVar) -> ValueType {
+        let root = self.store.find(ident.0);
         self.store.get(root).0.clone()
     }
 
-    pub fn identify(&mut self, ident1: Ident, ident2: Ident) {
-        Rc::make_mut(&mut self.store).union(ident1, ident2);
+    pub fn identify(&mut self, ident1: LVar, ident2: LVar) {
+        Rc::make_mut(&mut self.store).union(ident1.0, ident2.0);
     }
 }
 
