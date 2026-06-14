@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 
-use super::config::config;
+use super::config::Config;
 use super::env::Env;
 use super::lvar::LogicEnv;
 use super::mterms::MValue;
@@ -14,6 +14,7 @@ pub enum UnifyError<'a> {
 }
 
 pub fn unify<'a>(
+    cfg: &Config,
     arena: &'a Bump,
     lhs: &'a MValue<'a>,
     rhs: &'a MValue<'a>,
@@ -33,7 +34,7 @@ pub fn unify<'a>(
                 lenv.identify(*id1, *id2);
             }
             (VClosure::LogicVar { ident }, _) => {
-                if config().occurs_check {
+                if cfg.occurs_check {
                     if rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
                         return Err(UnifyError::Occurs);
                     }
@@ -41,7 +42,7 @@ pub fn unify<'a>(
                 lenv.set_vclos(*ident, rhs);
             }
             (_, VClosure::LogicVar { ident }) => {
-                if config().occurs_check {
+                if cfg.occurs_check {
                     if lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
                         return Err(UnifyError::Occurs);
                     }

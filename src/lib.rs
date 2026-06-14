@@ -7,6 +7,8 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 use machine::mterms::{MComputation, MValue};
+#[cfg(target_arch = "wasm32")]
+use machine::Config;
 
 #[cfg(target_arch = "wasm32")]
 fn run_with<F>(
@@ -20,7 +22,7 @@ fn run_with<F>(
     eval: F,
 ) -> String
 where
-    F: for<'a> FnOnce(&'a MComputation<'a>, &[&'a MValue<'a>]) -> String,
+    F: for<'a> FnOnce(&Config, &'a MComputation<'a>, &[&'a MValue<'a>]) -> String,
 {
     console_error_panic_hook::set_once();
 
@@ -31,14 +33,14 @@ where
         _ => machine::Strategy::Bfs,
     };
 
-    machine::config::init(machine::Config {
+    let cfg = Config {
         strategy,
         optimize,
         timeout_secs,
         occurs_check: !no_occurs_check,
         strict,
         first_only,
-    });
+    };
 
     let ast = match parser::parse(source) {
         Ok(ast) => ast,
@@ -63,7 +65,7 @@ where
         (main_comp, env)
     };
 
-    eval(main_comp, &env)
+    eval(&cfg, main_comp, &env)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -117,8 +119,8 @@ pub fn run_gweek(
         strict,
         first_only,
         timeout_secs,
-        |comp, env| {
-            machine::eval_streaming(comp, env, |line| {
+        |cfg, comp, env| {
+            machine::eval_streaming(cfg, comp, env, |line| {
                 let _ = on_line.call1(&JsValue::NULL, &JsValue::from_str(line));
             })
         },
@@ -144,6 +146,6 @@ pub fn run_gweek_batch(
         strict,
         first_only,
         timeout_secs,
-        |comp, env| machine::eval_collect(comp, env),
+        |cfg, comp, env| machine::eval_collect(cfg, comp, env),
     )
 }

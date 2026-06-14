@@ -76,14 +76,14 @@ fn main() {
         process::exit(1);
     });
 
-    machine::config::init(Config {
+    let cfg = Config {
         strategy,
         optimize,
         timeout_secs,
         occurs_check,
         strict,
         first_only,
-    });
+    };
 
     let src = fs::read_to_string(&file_path).unwrap_or_else(|e| {
         eprintln!("Error: could not read '{file_path}': {e}");
@@ -114,7 +114,7 @@ fn main() {
     } else {
         (main_comp, env)
     };
-    machine::eval(main_comp, &env);
+    machine::eval(&cfg, main_comp, &env);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
@@ -162,9 +162,21 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 #[cfg(test)]
 mod tests {
     use bumpalo::Bump;
-    use gweek::machine::{self, translate::translate, run, Strategy};
+    use gweek::machine::{self, translate::translate, run, Config, Strategy};
     use gweek::{parser, type_check};
     use std::fs;
+
+    /// Build a deterministic config for tests with the given strategy.
+    fn test_config(strategy: Strategy) -> Config {
+        Config {
+            strategy,
+            optimize: false,
+            timeout_secs: 60,
+            occurs_check: true,
+            strict: false,
+            first_only: false,
+        }
+    }
 
     // Full pipeline (parse -> type-check -> translate -> evaluate) returning the
     // collected output, for asserting the value a program produces.
@@ -173,7 +185,7 @@ mod tests {
         let ast = parser::parse(src).expect("should parse");
         type_check::type_check(&ast).expect("should type-check");
         let (comp, env) = translate(&arena, ast);
-        machine::eval_collect(comp, &env)
+        machine::eval_collect(&test_config(Strategy::Bfs), comp, &env)
     }
 
     // B2: `if`/`then`/`else` and `==` on Nat lower and evaluate correctly.
@@ -215,12 +227,13 @@ mod tests {
         let src = fs::read_to_string(path).unwrap();
         let ast = parser::parse(&src).unwrap();
         let (comp, env) = translate(&arena, ast);
+        let cfg = test_config(strategy);
         if opt {
             let comp = machine::optimize::optimize(&arena, comp);
             let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
-            run(comp, &env, strategy, false)
+            run(&cfg, comp, &env, false)
         } else {
-            run(comp, &env, strategy, false)
+            run(&cfg, comp, &env, false)
         }
     }
 

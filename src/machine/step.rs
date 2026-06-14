@@ -6,7 +6,7 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use super::config::config;
+use super::config::Config;
 use super::lvar::LogicEnv;
 use super::mterms::{MComputation, MValue};
 use super::senv::{SuspAt, SuspEnv};
@@ -85,7 +85,7 @@ impl<'a> Machine<'a> {
     /// scheduler at branch points (Choice, logic-var splits) or completion.
     /// The deadline is polled every `DEADLINE_POLL_INTERVAL` steps so that a
     /// divergent non-branching computation still honours `--timeout`.
-    pub fn run_to_branch(mut self, deadline: Instant) -> RunResult<'a> {
+    pub fn run_to_branch(mut self, cfg: &Config, deadline: Instant) -> RunResult<'a> {
         const DEADLINE_POLL_INTERVAL: u32 = 1024;
         let mut steps: u32 = 0;
         loop {
@@ -93,7 +93,7 @@ impl<'a> Machine<'a> {
             if steps & (DEADLINE_POLL_INTERVAL - 1) == 0 && Instant::now() >= deadline {
                 return RunResult::TimedOut;
             }
-            match self.step() {
+            match self.step(cfg) {
                 Step::Continue(m) => self = m,
                 Step::Done(m) => return RunResult::Yield(smallvec![m]),
                 Step::Branch(ms) => return RunResult::Yield(ms),
@@ -102,7 +102,7 @@ impl<'a> Machine<'a> {
         }
     }
 
-    fn step(self) -> Step<'a> {
+    fn step(self, cfg: &Config) -> Step<'a> {
         let Machine { arena, cclos: (comp, env), stack, lenv, senv, done: _ } = self;
 
         match comp {
@@ -164,7 +164,7 @@ impl<'a> Machine<'a> {
                         done: false,
                     })
                 }
-                _ if config().strict => {
+                _ if cfg.strict => {
                     let new_stack = stack.push(arena, StkFrame::To(cont), env);
                     Step::Continue(Machine {
                         arena,
@@ -308,7 +308,7 @@ impl<'a> Machine<'a> {
 
             MComputation::Equate { lhs, rhs, body } => {
                 let mut lenv = lenv;
-                match unify(arena, lhs, rhs, env, &mut lenv, &senv) {
+                match unify(cfg, arena, lhs, rhs, env, &mut lenv, &senv) {
                     Ok(()) => Step::Continue(Machine {
                         arena,
                         cclos: (body, env),
