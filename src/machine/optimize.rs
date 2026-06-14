@@ -493,11 +493,11 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     | MComputation::Equate { .. } => {
                         let shifted_cont = shift_comp(arena, cont, 1, 1);
                         let new_inner = arena.alloc(MComputation::Bind {
-                            comp: *inner_k,
+                            comp: inner_k,
                             cont: shifted_cont,
                         });
                         let new_outer = arena.alloc(MComputation::Bind {
-                            comp: *inner_c,
+                            comp: inner_c,
                             cont: new_inner,
                         });
                         return opt_comp_env(arena, new_outer, env);
@@ -506,11 +506,11 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     {
                         let shifted_cont = shift_comp(arena, cont, 1, 1);
                         let new_inner = arena.alloc(MComputation::Bind {
-                            comp: *inner_k,
+                            comp: inner_k,
                             cont: shifted_cont,
                         });
                         let new_outer = arena.alloc(MComputation::Bind {
-                            comp: *inner_c,
+                            comp: inner_c,
                             cont: new_inner,
                         });
                         return opt_comp_env(arena, new_outer, env);
@@ -525,8 +525,8 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                         .iter()
                         .map(|b| -> &'a MComputation<'a> {
                             arena.alloc(MComputation::Bind {
-                                comp: *b,
-                                cont: cont,
+                                comp: b,
+                                cont,
                             })
                         })
                         .collect();
@@ -538,7 +538,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
             if let MComputation::Exists { ptype, body } = c {
                 let shifted_cont = shift_comp(arena, cont, 1, 1);
                 let new_bind = arena.alloc(MComputation::Bind {
-                    comp: *body,
+                    comp: body,
                     cont: shifted_cont,
                 });
                 let new_exists = arena.alloc(MComputation::Exists {
@@ -550,12 +550,12 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
             // Pull-Equate
             if let MComputation::Equate { lhs, rhs, body } = c {
                 let new_bind = arena.alloc(MComputation::Bind {
-                    comp: *body,
-                    cont: cont,
+                    comp: body,
+                    cont,
                 });
                 let new_equate = arena.alloc(MComputation::Equate {
-                    lhs: *lhs,
-                    rhs: *rhs,
+                    lhs,
+                    rhs,
                     body: new_bind,
                 });
                 return opt_comp_env(arena, new_equate, env);
@@ -590,7 +590,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     arg: shift_val(arena, arg, 1, 0),
                 });
                 let new_bind = arena.alloc(MComputation::Bind {
-                    comp: *c,
+                    comp: c,
                     cont: new_app,
                 });
                 return opt_comp_env(arena, new_bind, env);
@@ -660,7 +660,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                 let new_equate = arena.alloc(MComputation::Equate {
                     lhs: shift_val(arena, lhs, 1, 0),
                     rhs: shift_val(arena, rhs, 1, 0),
-                    body: *ebody,
+                    body: ebody,
                 });
                 let new_exists = arena.alloc(MComputation::Exists {
                     ptype: ptype.clone(),
@@ -676,9 +676,9 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                         .iter()
                         .map(|b| -> &'a MComputation<'a> {
                             arena.alloc(MComputation::Equate {
-                                lhs: *lhs,
-                                rhs: *rhs,
-                                body: *b,
+                                lhs,
+                                rhs,
+                                body: b,
                             })
                         })
                         .collect();
@@ -691,7 +691,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     let new_equate = arena.alloc(MComputation::Equate {
                         lhs: v,
                         rhs: w,
-                        body: *body,
+                        body,
                     });
                     return opt_comp_env(arena, new_equate, env);
                 }
@@ -702,7 +702,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     let inner_equate = arena.alloc(MComputation::Equate {
                         lhs: w1,
                         rhs: w2,
-                        body: *body,
+                        body,
                     });
                     let outer_equate = arena.alloc(MComputation::Equate {
                         lhs: v1,
@@ -718,7 +718,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     let inner_equate = arena.alloc(MComputation::Equate {
                         lhs: v2,
                         rhs: w2,
-                        body: *body,
+                        body,
                     });
                     let outer_equate = arena.alloc(MComputation::Equate {
                         lhs: v1,
@@ -731,7 +731,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     let new_equate = arena.alloc(MComputation::Equate {
                         lhs: v,
                         rhs: w,
-                        body: *body,
+                        body,
                     });
                     return opt_comp_env(arena, new_equate, env);
                 }
@@ -758,7 +758,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     let new_branches: Vec<&'a MComputation<'a>> = branches
                         .iter()
                         .map(|b| -> &'a MComputation<'a> {
-                            arena.alloc(MComputation::Lambda { body: *b })
+                            arena.alloc(MComputation::Lambda { body: b })
                         })
                         .collect();
                     let choice = arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&new_branches)));
@@ -781,7 +781,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                 if !has_free_var_val(lhs, 0) && !has_free_var_val(rhs, 0) {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("lam-equate");
-                    let new_lam = arena.alloc(MComputation::Lambda { body: *ebody });
+                    let new_lam = arena.alloc(MComputation::Lambda { body: ebody });
                     let new_equate = arena.alloc(MComputation::Equate {
                         lhs: shift_val(arena, lhs, -1, 0),
                         rhs: shift_val(arena, rhs, -1, 0),

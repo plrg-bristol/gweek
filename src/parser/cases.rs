@@ -35,6 +35,12 @@ pub struct CasesListCons {
     pub body: Box<Stmt>
 }
 
+impl Default for Cases {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Cases {
     pub fn new() -> Self {
         Cases { r#type: None, nat_case: None, list_case: None }
@@ -53,8 +59,7 @@ impl Cases {
     }
 
     pub fn set_type_or_check(&mut self, r#type: CasesType) -> Result<(), &'static str> {
-        if self.r#type.is_some() {
-            let t = self.r#type.as_mut().unwrap();
+        if let Some(t) = &self.r#type {
             if *t != r#type { return Err("case mixes Nat and list patterns") }
         } else {
             self.r#type = Some(r#type);

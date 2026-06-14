@@ -223,10 +223,11 @@ fn eval_iddfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env
                     // round with a larger limit re-derives it, but the window
                     // selects exactly one, so distinct derivations that happen
                     // to print identically are no longer collapsed.
-                    if next_depth >= depth_limit / 2 && next_depth < depth_limit {
-                        if record_solution(cfg, &m, &mut solns, on_solution) {
-                            return (solns, false);
-                        }
+                    if next_depth >= depth_limit / 2
+                        && next_depth < depth_limit
+                        && record_solution(cfg, &m, &mut solns, on_solution)
+                    {
+                        return (solns, false);
                     }
                 } else {
                     stack.push((m, next_depth));

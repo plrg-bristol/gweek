@@ -34,18 +34,18 @@ pub fn unify<'a>(
                 lenv.identify(*id1, *id2);
             }
             (VClosure::LogicVar { ident }, _) => {
-                if cfg.occurs_check {
-                    if rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
-                        return Err(UnifyError::Occurs);
-                    }
+                if cfg.occurs_check
+                    && rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)?
+                {
+                    return Err(UnifyError::Occurs);
                 }
                 lenv.set_vclos(*ident, rhs);
             }
             (_, VClosure::LogicVar { ident }) => {
-                if cfg.occurs_check {
-                    if lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)? {
-                        return Err(UnifyError::Occurs);
-                    }
+                if cfg.occurs_check
+                    && lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)?
+                {
+                    return Err(UnifyError::Occurs);
                 }
                 lenv.set_vclos(*ident, lhs);
             }
