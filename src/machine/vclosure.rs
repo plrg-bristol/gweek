@@ -221,7 +221,7 @@ impl<'a> VClosure<'a> {
                                 if lenv.get_type(ident) == ValueType::Unit {
                                     out.push(Closed::Unit);
                                 } else {
-                                    out.push(Closed::Free(ident));
+                                    out.push(Closed::Free(lenv.root(ident)));
                                 }
                             }
                         },

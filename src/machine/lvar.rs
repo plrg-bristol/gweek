@@ -40,6 +40,13 @@ impl<'a> LogicEnv<'a> {
     pub fn identify(&mut self, ident1: LVar, ident2: LVar) {
         Rc::make_mut(&mut self.store).union(ident1.0, ident2.0);
     }
+
+    /// The canonical logic variable of `ident`'s equivalence class, so that
+    /// distinct-but-unified variables share one identity when a residual free
+    /// variable is displayed.
+    pub fn root(&self, ident: LVar) -> LVar {
+        LVar(self.store.canonical(ident.0))
+    }
 }
 
 #[cfg(test)]

@@ -62,6 +62,13 @@ impl<T> UnionFind<T> {
         Root(root)
     }
 
+    /// The canonical class index of `ident` as a raw `usize`, for read-only
+    /// uses (e.g. displaying a residual variable by a stable class id) that do
+    /// not address per-variable storage.
+    pub fn canonical(&self, ident: usize) -> usize {
+        self.find(ident).0
+    }
+
     /// Register a fresh node carrying `datum`, returning its index.
     /// The node is its own root.
     pub fn register(&mut self, datum: T) -> usize {
