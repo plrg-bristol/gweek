@@ -142,7 +142,9 @@ impl<'a> VClosure<'a> {
                 MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => Ok(false),
             },
             VClosure::LogicVar { ident: ident2 } => Ok(ident == ident2),
-            VClosure::Susp { .. } => todo!("occurs check on suspension"),
+            // `close_head` propagates a pending suspension via `?`, so it never
+            // returns one here; the occurs check only sees resolved values.
+            VClosure::Susp { .. } => unreachable!("occurs check on a suspension"),
         }
     }
 

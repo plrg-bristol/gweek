@@ -48,6 +48,20 @@ fn as_meta(s: &str) -> Option<usize> {
     s.strip_prefix('?').and_then(|n| n.parse().ok())
 }
 
+// A pair argument is destructured in translation through typed logic variables,
+// which needs a concrete value type for each component (no type variables,
+// functions, or wildcards). This mirrors what `translate::translate_type` can
+// lower, so the checker rejects the unsupported cases instead of letting them
+// panic in the translator.
+fn is_concrete_value_type(ty: &Type) -> bool {
+    match ty {
+        Type::Ident(s) => s == "Nat" || s == "Bool",
+        Type::List(t) => is_concrete_value_type(t),
+        Type::Product(a, b) => is_concrete_value_type(a) && is_concrete_value_type(b),
+        Type::Arrow(..) | Type::Any => false,
+    }
+}
+
 impl Ctx {
     fn new() -> Self {
         Ctx {
@@ -120,7 +134,12 @@ impl Ctx {
                 self.bind(name, ty.clone());
                 Ok(())
             }
-            (Arg::Pair(a, b), Type::Product(ta, tb)) => {
+            (Arg::Pair(a, b), ty @ Type::Product(ta, tb)) => {
+                if !is_concrete_value_type(ty) {
+                    return Err(err(format!(
+                        "pair-pattern arguments need concrete component types, got {ty}"
+                    )));
+                }
                 self.bind_arg(a, ta)?;
                 self.bind_arg(b, tb)?;
                 Ok(())
@@ -493,6 +512,13 @@ fn check_expr(ctx: &mut Ctx, expr: &Expr, expected: &Type) -> TResult<()> {
         (Expr::Nil, Type::List(_)) => Ok(()),
 
         (Expr::Lambda(arg, body), Type::Arrow(param, ret)) => {
+            // A lambda carries no type annotation, so translation cannot type
+            // the components of a destructured pair argument. Reject it here
+            // (named arguments and projection work); functions, which have a
+            // declared signature, do support pair arguments.
+            if matches!(arg, Arg::Pair(..)) {
+                return Err(err("pair-pattern lambda arguments are not supported; bind a name and project"));
+            }
             ctx.bind_arg(arg, param)?;
             let result = check_stmt(ctx, body, ret).map_err(|e| err(format!("in lambda body: {e}")));
             ctx.unbind_arg(arg);
@@ -526,9 +552,14 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt, expected: &Type) -> TResult<()> {
 fn synth_bexpr(ctx: &mut Ctx, bexpr: &BExpr) -> TResult {
     match bexpr {
         BExpr::Eq(a, b) | BExpr::NEq(a, b) => {
+            // `==`/`!=` are Nat equality (lowered through `Ifz`); both operands
+            // must be Nat. Comparing other types has no lowering and is rejected
+            // here rather than panicking in the machine.
+            let nat = Type::Ident("Nat".to_string());
             let at = synth_expr(ctx, a)?;
             let bt = synth_expr(ctx, b)?;
-            ctx.unify(&at, &bt).map_err(|e| err(format!("in comparison: {e}")))?;
+            ctx.unify(&nat, &at).map_err(|e| err(format!("in comparison: {e}")))?;
+            ctx.unify(&nat, &bt).map_err(|e| err(format!("in comparison: {e}")))?;
             Ok(Type::Ident("Bool".to_string()))
         }
         BExpr::And(a, b) | BExpr::Or(a, b) => {
@@ -636,5 +667,25 @@ mod tests {
     #[test]
     fn int_is_a_type_error() {
         assert!(check("exists n :: Int. n.\n").is_err());
+    }
+
+    // A4: conditions that used to type-check and then panic in the machine /
+    // translator are now clean type errors.
+    #[test]
+    fn bool_equality_is_a_type_error() {
+        // `==`/`!=` are Nat-only; comparing Bools would panic with "Ifz on ..".
+        assert!(check("true == false.\n").is_err());
+    }
+
+    #[test]
+    fn pair_pattern_lambda_is_a_type_error() {
+        let src = "app :: ((Nat * Nat) -> Nat) -> Nat\napp g = g (1,2).\n\napp (\\(x,y). x).\n";
+        assert!(check(src).is_err());
+    }
+
+    #[test]
+    fn polymorphic_pair_argument_is_a_type_error() {
+        // Pair components need concrete value types to be destructured.
+        assert!(check("fst :: (a * b) -> a\nfst (x,y) = x.\n\nfst (1,2).\n").is_err());
     }
 }

@@ -349,37 +349,38 @@ fn cases_parser(
         .at_least(1)
         .try_map(|case_list, span| {
             let mut cases = Cases::new();
+            let custom = |m: &'static str| Simple::custom(span.clone(), m);
             for (pattern, body) in case_list {
                 match pattern.strip_parentheses() {
                     Expr::Zero | Expr::Nat(0) => {
-                        cases.set_type_or_check(CasesType::Nat);
-                        cases.set_nat_zero(body);
+                        cases.set_type_or_check(CasesType::Nat).map_err(custom)?;
+                        cases.set_nat_zero(body).map_err(custom)?;
                     },
                     Expr::Succ(e) => {
                         let var = match *e {
                             Expr::Ident(s) => s,
-                            _ => return Err(Simple::custom(span, "expected identifier in succ case")),
+                            _ => return Err(custom("expected identifier in succ case")),
                         };
-                        cases.set_type_or_check(CasesType::Nat);
-                        cases.set_nat_succ(var, body);
+                        cases.set_type_or_check(CasesType::Nat).map_err(custom)?;
+                        cases.set_nat_succ(var, body).map_err(custom)?;
                     },
                     Expr::Nil => {
-                        cases.set_type_or_check(CasesType::List);
-                        cases.set_list_nil(body);
+                        cases.set_type_or_check(CasesType::List).map_err(custom)?;
+                        cases.set_list_nil(body).map_err(custom)?;
                     },
                     Expr::Cons(e1, e2) => {
                         let x = match *e1 {
                             Expr::Ident(s) => s,
-                            _ => return Err(Simple::custom(span, "expected identifier in cons case")),
+                            _ => return Err(custom("expected identifier in cons case")),
                         };
                         let xs = match *e2 {
                             Expr::Ident(s) => s,
-                            _ => return Err(Simple::custom(span, "expected identifier in cons case")),
+                            _ => return Err(custom("expected identifier in cons case")),
                         };
-                        cases.set_type_or_check(CasesType::List);
-                        cases.set_list_cons(x, xs, body);
+                        cases.set_type_or_check(CasesType::List).map_err(custom)?;
+                        cases.set_list_cons(x, xs, body).map_err(custom)?;
                     },
-                    _ => return Err(Simple::custom(span, "unsupported case pattern")),
+                    _ => return Err(custom("unsupported case pattern")),
                 }
             }
             Ok(cases)
@@ -836,5 +837,16 @@ id x = x.
         let src = "case p of (x, y) -> x.";
 
         assert!(parse(src).is_err());
+    }
+
+    // A4: malformed case sets are recoverable parse errors, not panics.
+    #[test]
+    fn duplicate_case_arm_is_a_parse_error() {
+        assert!(parse("f :: Nat -> Nat\nf n = case n of Z -> 1 | Z -> 2.\n\nf 0.\n").is_err());
+    }
+
+    #[test]
+    fn mixed_nat_and_list_case_is_a_parse_error() {
+        assert!(parse("f :: Nat -> Nat\nf n = case n of Z -> 1 | [] -> 2.\n\nf 0.\n").is_err());
     }
 }

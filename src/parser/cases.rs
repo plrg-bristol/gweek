@@ -52,37 +52,42 @@ impl Cases {
         }
     }
 
-    pub fn set_type_or_check(&mut self, r#type: CasesType) {
+    pub fn set_type_or_check(&mut self, r#type: CasesType) -> Result<(), &'static str> {
         if self.r#type.is_some() {
             let t = self.r#type.as_mut().unwrap();
-            if *t != r#type { panic!("bad cases") }
+            if *t != r#type { return Err("case mixes Nat and list patterns") }
         } else {
             self.r#type = Some(r#type);
         }
+        Ok(())
     }
 
-    pub fn set_nat_zero(&mut self, body: Stmt) {
+    pub fn set_nat_zero(&mut self, body: Stmt) -> Result<(), &'static str> {
         self.initialize_nat_case();
-        if self.nat_case.as_ref().unwrap().zk.is_some() { panic!("zero case already set") }
+        if self.nat_case.as_ref().unwrap().zk.is_some() { return Err("duplicate zero case") }
         self.nat_case.as_mut().unwrap().zk = Some(Box::new(body));
+        Ok(())
     }
 
-    pub fn set_nat_succ(&mut self, var: String, body: Stmt) {
+    pub fn set_nat_succ(&mut self, var: String, body: Stmt) -> Result<(), &'static str> {
         self.initialize_nat_case();
-        if self.nat_case.as_ref().unwrap().sk.is_some() { panic!("succ case already set") }
-        self.nat_case.as_mut().unwrap().sk = Some(CasesNatSucc { var, body: Box::new(body) })
+        if self.nat_case.as_ref().unwrap().sk.is_some() { return Err("duplicate successor case") }
+        self.nat_case.as_mut().unwrap().sk = Some(CasesNatSucc { var, body: Box::new(body) });
+        Ok(())
     }
 
-    pub fn set_list_nil(&mut self, body: Stmt) {
+    pub fn set_list_nil(&mut self, body: Stmt) -> Result<(), &'static str> {
         self.initialize_list_case();
-        if self.list_case.as_ref().unwrap().nilk.is_some() { panic!("nil case already set") }
+        if self.list_case.as_ref().unwrap().nilk.is_some() { return Err("duplicate nil case") }
         self.list_case.as_mut().unwrap().nilk = Some(Box::new(body));
+        Ok(())
     }
 
-    pub fn set_list_cons(&mut self, x: String, xs: String, body: Stmt) {
+    pub fn set_list_cons(&mut self, x: String, xs: String, body: Stmt) -> Result<(), &'static str> {
         self.initialize_list_case();
-        if self.list_case.as_ref().unwrap().consk.is_some() { panic!("cons case already set") }
-        self.list_case.as_mut().unwrap().consk = Some(CasesListCons { x, xs, body: Box::new(body) })
+        if self.list_case.as_ref().unwrap().consk.is_some() { return Err("duplicate cons case") }
+        self.list_case.as_mut().unwrap().consk = Some(CasesListCons { x, xs, body: Box::new(body) });
+        Ok(())
     }
 }
 

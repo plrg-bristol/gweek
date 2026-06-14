@@ -871,13 +871,10 @@ fn const_bool(expr: &Expr) -> Option<bool> {
     }
 }
 
-/// Constant-folds equality of two operands when both are fully literal,
-/// covering both `Nat` and `Bool` operands.
+/// Constant-folds equality of two fully-literal `Nat` operands (`==`/`!=` are
+/// Nat-only; the type checker rejects other operand types).
 fn const_eq(a: &Expr, b: &Expr) -> Option<bool> {
-    if let (Some(x), Some(y)) = (const_nat(a), const_nat(b)) {
-        return Some(x == y);
-    }
-    Some(const_bool(a)? == const_bool(b)?)
+    Some(const_nat(a)? == const_nat(b)?)
 }
 
 /// Constant-folds a `Nat`-valued expression when it is fully literal.
