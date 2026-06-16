@@ -29,7 +29,11 @@ impl<'a> Display for MValue<'a> {
             MValue::Var(i) => write!(f, "idx {}", i),
             MValue::Unit => write!(f, "()"),
             MValue::Nat(n) => write!(f, "{}", n),
-            MValue::Zero | MValue::Succ(_) => write!(f, "{}", to_nat(self).unwrap()),
+            MValue::Zero => write!(f, "{}", 0),
+            MValue::Succ(v) => match to_nat(self) {
+                Some(s) => write!(f, "{}", s),
+                None => write!(f, "S ({})", v)
+            },
             MValue::Nil | MValue::Cons(..) => match to_list(self) {
                 Some(items) => write!(f, "[{}]", items.join(", ")),
                 None => match self {
