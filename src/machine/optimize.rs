@@ -307,18 +307,6 @@ fn swap_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, depth: usize) -> &
     })
 }
 
-/// Conservative totality check: is this computation guaranteed to return?
-fn is_total(comp: &MComputation) -> bool {
-    match comp {
-        MComputation::Return(_) => true,
-        MComputation::Bind { comp: c, cont } => is_total(c) && is_total(cont),
-        MComputation::Ifz { zk, sk, .. } => is_total(zk) && is_total(sk),
-        MComputation::Match { nilk, consk, .. } => is_total(nilk) && is_total(consk),
-        MComputation::Case { inlk, inrk, .. } => is_total(inlk) && is_total(inrk),
-        _ => false,
-    }
-}
-
 // --- Optimizer ---
 
 fn is_fail(comp: &MComputation) -> bool {
@@ -443,7 +431,7 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
         // fail to x. M  -->  fail
         // eta: M to x. return x  -->  M
         // dead-bind: return V to x. M  -->  M↓  (when x not in FV(M))
-        // dead-end: M to x. fail  -->  fail  (when M total)
+        // dead-end: M to x. fail  -->  fail
         // bind-assoc, pull-choice, pull-exists, pull-equate
         MComputation::Bind { comp: c, cont } => {
             if let MComputation::Return(v) = c {
@@ -475,8 +463,8 @@ fn rewrite<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: &[Option<&'a MV
                     return c;
                 }
             }
-            // Dead-End: M to x. fail  -->  fail  (when M is guaranteed to return)
-            if is_fail(cont) && is_total(c) {
+            // Dead-End: M to x. fail  -->  fail
+            if is_fail(cont) {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("dead-end");
                 return fail(arena);
