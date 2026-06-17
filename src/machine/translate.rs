@@ -22,12 +22,6 @@ impl TEnv {
         TEnv { env: vec![], nullary: HashSet::new(), members: HashMap::new() }
     }
 
-    /*
-    The location of a variable in the current execution environment
-    is the number of variables that have been declared after it.
-    Therefore we need to return the location of the last instance of
-    a variable relative to the end of the vector.
-    */
     fn find(&self, v: &str) -> usize {
         self.env
             .iter()
@@ -54,16 +48,6 @@ impl TEnv {
     }
 }
 
-/*
-Translates CBV representation of terms into CBPV.
-A term in the AST is either the type of a function
-(FuncType), the definition of a function (Func),
-or else the main program (Stmt).
-
-Returns a pair whose first component is the main
-program and second is the environment of function
-names and definitions.
-*/
 pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
     let sigs: HashMap<String, Type> = ast
         .iter()
@@ -589,7 +573,6 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
             tenv.unbind();
             arena.alloc(MComputation::Bind { comp, cont: case })
         }
-        // The variable seems to disappear?
         Stmt::Let { var, val, body } => {
             let comp = translate_stmt(arena, *val, tenv);
             tenv.bind(&var);
