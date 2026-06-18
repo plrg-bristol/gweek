@@ -1,3 +1,5 @@
+//! Boolean expressions: the comparison and connective operators `==`, `!=`, `&&`, `||`, `!`.
+
 use super::expr::Expr;
 
 // Boolean expressions

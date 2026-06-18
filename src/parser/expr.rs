@@ -1,3 +1,7 @@
+//! Expressions: data and application. An [`Expr`] covers the data constructors (`Z`/`S`, `[]`/
+//! cons, pairs, list literals, booleans, numbers), identifiers, application, lambdas, boolean
+//! expressions ([`BExpr`]), and a parenthesised statement.
+
 use super::{arg::Arg, bexpr::BExpr, stmt::Stmt};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

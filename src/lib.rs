@@ -1,3 +1,36 @@
+//! # gweek
+//!
+//! An interpreter for a small **functional-logic** language: functional in that programs are
+//! pattern-matching equations over first-order data (naturals, lists, pairs, sums), logical in
+//! that they may introduce logic variables (`exists x :: T`), constrain them by unification
+//! (`lhs =:= rhs`), branch non-deterministically (`a <> b`), and search for all solutions.
+//!
+//! Programs are not run by a recursive `eval`. They are compiled to a Call-By-Push-Value term
+//! and executed on an explicit-state abstract machine that can be *cloned* at every branch
+//! point, so each clone explores one alternative under a chosen search strategy. Two
+//! representation choices make that cheap: everything is allocated in one `bumpalo` arena and
+//! held by thin reference, and values are split from computations ([`machine::mterms`]).
+//!
+//! ## The pipeline
+//!
+//! ```text
+//! source ──▶ parse ──▶ type-check ──▶ translate ──▶ [optimize] ──▶ evaluate
+//!            parser    type_check     machine::      machine::      machine::eval
+//!                                     translate      optimize       (+ step)
+//! ```
+//!
+//! | Stage | Module | What it does |
+//! |---|---|---|
+//! | Parse | [`parser`] | source text → surface AST (`Decl`/`Stmt`/`Expr`/`Type`) via chumsky |
+//! | Type-check | [`type_check`] | two-pass bidirectional checker; rejects ill-typed programs |
+//! | Translate | [`machine::translate`] | lower to CBPV with de Bruijn indices |
+//! | Optimize | [`machine::optimize`] | optional `-o` equational peephole pass |
+//! | Evaluate | [`machine`] | a search strategy drives many machine clones |
+//!
+//! The same chain is wired twice: the CLI (`main.rs`) and the library/WASM entry points below
+//! (`run_gweek`, `run_gweek_batch`), which stream or batch solutions to the browser
+//! playground.
+
 pub mod machine;
 pub mod parser;
 pub mod type_check;

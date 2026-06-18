@@ -1,3 +1,7 @@
+//! Case arms. [`Cases`] is the accumulator a `case` arm-list folds into: a [`CasesType`] tag
+//! (`Nat` or `List`) plus the arms for each shape. Its building methods reject duplicate or
+//! type-mixed arms (e.g. "duplicate zero case", "case mixes Nat and list patterns").
+
 use super::stmt::Stmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

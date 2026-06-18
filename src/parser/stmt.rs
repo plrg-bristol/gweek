@@ -1,3 +1,7 @@
+//! Statements: the control and constraint forms of the surface syntax. A [`Stmt`] is an `if`,
+//! `let`, `exists`, `=:=` ([`Equate`](Stmt::Equate)), `<>` ([`Choice`](Stmt::Choice)), `case`,
+//! `fail`, or a bare expression.
+
 use crate::parser::cases::Cases;
 
 use super::{expr::Expr, r#type::Type};

@@ -1,3 +1,25 @@
+//! # The equational optimizer
+//!
+//! An optional peephole optimizer over CBPV terms, enabled with `-o`. It rewrites a term before
+//! evaluation using equational laws of the CBPV theory; the pass is verified to preserve the
+//! solution multiset on every terminating example. [`optimize`] rewrites the main computation and
+//! [`optimize_val`] a top-level function value (recursing into its `Thunk`); both are pure
+//! rewrites on arena-allocated terms.
+//!
+//! The core machinery is **one** generic binder-aware traversal (`map_val`/`map_comp`) that
+//! carries a count of binders crossed and applies a leaf callback at every `Var`; the de Bruijn
+//! passes (`shift`, `subst`, `swap`) are thin wrappers over it. The driver recurses into
+//! subterms under a compile-time environment of statically-known bindings, then tries top-level
+//! rules, re-optimizing whenever a rule fires so rewriting runs to a fixpoint.
+//!
+//! The rules, by form: `Bind` (eta, dead-bind, variable aliasing, dead-end, and the pull/assoc
+//! rules that hoist a producer out of the binding position); `Force(thunk M) → M`; `App` (beta,
+//! app-bind); `Choice` (flatten, drop `fail`, unwrap singletons); `Exists`/`Equate`
+//! (reflexivity, cycle-to-fail, hoisting, and constructor-decomposition parameter laws);
+//! `Lambda` (push into choices, swap with `Exists`, hoist `Equate`); and the eliminators
+//! (`deep_resolve` the scrutinee and beta-reduce into the matching branch when it is a known
+//! constructor).
+
 use bumpalo::Bump;
 
 use super::mterms::{MComputation, MValue};
@@ -238,7 +260,7 @@ fn subst_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, repl: &'a MValue<
 // --- Helpers ---
 
 /// Check if a value structurally contains `needle` as a strict sub-value.
-/// Used for cycle detection in equate: V =:= C[V] -> fail.
+/// Used for cycle detection in equate: `V =:= C[V]` -> fail.
 fn val_contains(needle: &MValue, haystack: &MValue) -> bool {
     if needle == haystack {
         return true;

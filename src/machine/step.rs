@@ -1,3 +1,34 @@
+//! # The transition function
+//!
+//! The heart of the interpreter: one **machine state** ([`Machine`]) and the transition function
+//! [`step`](Machine::step) that advances it. A scheduler in `eval` runs many of these. A
+//! [`Machine`] bundles the computation closure currently running, a [`Stack`] of continuation
+//! frames, the logic environment (`lenv`), and the suspension environment (`senv`). The stack is
+//! a persistent arena-backed cons-list, so `Clone`/`Copy` is one pointer copy — essential for
+//! cheap branching.
+//!
+//! The scheduler never calls `step` directly; it calls
+//! [`run_to_branch`](Machine::run_to_branch), which loops `step` tight and returns a
+//! [`RunResult`] at the next **branch** (a `Choice` or logic-variable split), at **completion**,
+//! or on **timeout**. Running determinism in a tight inner loop is the machine's main throughput
+//! lever. Each `step` matches on the head computation and returns a successor `Machine` (or
+//! `Branch` / `Fail` / `Done`):
+//!
+//! - **Sequencing** — `Return` pops a continuation frame or drains a suspension; `Bind` either
+//!   binds eagerly, pushes a strict frame, or *suspends* the right-hand side; `Force` head-closes
+//!   a thunk and runs it.
+//! - **Functions** — `App` pushes the argument; `Lambda` pops and binds it.
+//! - **Functional-logic** — `Choice` branches (cloning `lenv`/`senv`), `Exists` allocates a fresh
+//!   logic variable, `Equate` runs unification.
+//! - **Eliminators** — `Ifz`/`Match`/`Case` head-close the scrutinee; on a concrete constructor
+//!   they take that branch, on an unbound logic variable they emit a `Branch` guessing each
+//!   constructor with fresh sub-variables (the case-split mechanism).
+//! - **Recursion** — `Rec` thunks itself and binds that thunk at index 0, so a body calls itself
+//!   by forcing variable 0.
+//!
+//! The timeout deadline is polled inside `run_to_branch` through a shared `Clock` that reads the
+//! wall clock only every 1024 ticks, so a divergent deterministic loop still honours `--timeout`.
+
 use bumpalo::Bump;
 use smallvec::{smallvec, SmallVec};
 

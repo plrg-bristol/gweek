@@ -1,3 +1,14 @@
+//! # The grammar
+//!
+//! The chumsky combinator grammar behind [`parse`], the parser's only public entry point.
+//! `parse` strips `--` comments, then runs a stack of `recursive` parsers: `program` →
+//! `declaration` (type signature / function / bare statement) → `statement_parser`
+//! (`if`/`let`/`exists`/`case`/`fail`/expression, with `=:=` and `<>` continuations) →
+//! `expression` (prefix `\`/`!`/`S`, then postfix cons / boolean ops / application) →
+//! `primary_expr` (the atoms). Reserved words are rejected as identifiers, and `type_parser`
+//! layers `*` tighter than `->`. Case patterns that are not `Nat`- or `List`-shaped fall through
+//! to a recoverable parse **error**, never a panic.
+
 use chumsky::prelude::*;
 
 use crate::parser::{

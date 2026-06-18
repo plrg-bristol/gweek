@@ -1,3 +1,16 @@
+//! # The de Bruijn value environment
+//!
+//! [`Env`] is the runtime variable environment: a persistent cons-list of `VClosure`s backed by
+//! the bump arena, indexed by de Bruijn position. The list cells are an internal `EnvInner` enum
+//! and `Env` is a single pointer to the head cell — so `Env` is `Copy` and O(1) to clone, which
+//! is what makes cloning a machine at a branch cheap. Each `extend_*` allocates one fresh cell
+//! pointing at the current head, so sibling branches share the tail.
+//!
+//! **Subtlety:** [`extend_val`](Env::extend_val) *dealiases*. If the value is itself a `Var(i)`,
+//! it follows the variable chain to a non-`Var` closure and pushes *that*, collapsing
+//! indirection eagerly so a later [`lookup`](Env::lookup) lands on a real closure in one hop.
+//! This eager resolution is load-bearing for the correctness of the closing operations.
+
 use bumpalo::Bump;
 
 use super::mterms::MValue;

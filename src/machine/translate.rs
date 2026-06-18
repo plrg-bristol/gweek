@@ -1,3 +1,22 @@
+//! # Lowering: surface AST → CBPV
+//!
+//! Lowers the type-checked surface AST into the machine's CBPV term language
+//! ([`mterms`](super::mterms)), turning named variables into de Bruijn indices. The entry point
+//! [`translate`] returns the main computation plus the list of top-level function values.
+//!
+//! Name resolution uses a stack of names (`TEnv`): the lowering binds a placeholder for **every**
+//! intermediate `Bind` it introduces so indices stay aligned — getting these push/pop counts
+//! right is the translator's whole correctness burden. The surface call-by-value reading is made
+//! explicit as CBPV sequencing (`Bind`/`Return`/`Force`/`Thunk`).
+//!
+//! Top-level functions are grouped into strongly-connected components (Tarjan's algorithm) and
+//! ordered by dependency. A singleton becomes a `Thunk(Rec { body })`; a genuinely
+//! mutually-recursive group is lowered to a single selector-dispatched fixpoint
+//! `rec self. λsel. ifz sel { … }`. Statements and expressions map straightforwardly — `let` →
+//! `Bind`, `exists` → `Exists`, `=:=` → two `Bind`s and an `Equate`, `case` → `Ifz`/`Match`,
+//! `if` → `Case` on `Bool = Sum(Unit, Unit)`, application → `Force(op); App(arg)` — and boolean
+//! expressions lower through a recursive `Nat` equality with short-circuiting connectives.
+
 use std::collections::{HashMap, HashSet};
 
 use bumpalo::Bump;

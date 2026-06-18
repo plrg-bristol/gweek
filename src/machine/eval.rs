@@ -1,3 +1,26 @@
+//! # The search schedulers
+//!
+//! Owns the **search**: creates the runtime arena, builds the initial machine, imports the
+//! top-level function values, and runs one of four scheduling strategies that drive the
+//! machine's `run_to_branch` over the search tree, recording solutions.
+//!
+//! Four entry points share the machinery — [`eval`] (CLI, prints solutions),
+//! [`eval_collect`] (WASM batch, returns one `String`), [`eval_streaming`] (WASM, callback per
+//! solution), and [`run`] (tests, returns a count) — all dispatching on [`Strategy`]:
+//!
+//! - **BFS** — level frontier; complete and fair, but the frontier (and arena) can blow up.
+//!   Default.
+//! - **DFS** — a stack; fast and lean, incomplete on infinite branches.
+//! - **IDDFS** — repeated depth-limited DFS, doubling the limit; counts each solution in exactly
+//!   one round via a frontier window, so no cross-round dedup is needed.
+//! - **Fair** — round-robin over work-stacks, each given a step quota; complete with DFS-like
+//!   speed, the recommended general default.
+//!
+//! Deadline polling rides on a shared `Clock` (defined in `step`) that reads the wall clock only
+//! once every 1024 ticks. `record_solution` closes the answer value to a ground term; a residual
+//! free logic variable is reported as a `_<id>` placeholder rather than dropped, and a cyclic
+//! term renders as an error rather than overflowing.
+
 use std::collections::VecDeque;
 
 #[cfg(not(target_arch = "wasm32"))]

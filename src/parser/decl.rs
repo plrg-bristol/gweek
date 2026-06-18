@@ -1,3 +1,6 @@
+//! Top-level declarations. A [`Decl`] is a type signature (`name :: type`), a function
+//! definition (`name arg* = body`), or a bare statement to be run.
+
 use super::{arg::Arg, stmt::*, r#type::Type};
 
 // Functions

@@ -1,3 +1,14 @@
+//! # Runtime types
+//!
+//! The runtime type vocabulary, following the CBPV value/computation split. [`ValueType`] is
+//! `Unit`, `Nat`, `Product`, `Sum`, `List`, or `Thunk` of a [`ComputationType`]; a
+//! [`ComputationType`] is `Return` of a value type (printed `F(t)`) or `Arrow` (printed
+//! `a -> b`). Compound cases `Box` their children to stay finite.
+//!
+//! These are the types a logic variable carries (via `LogicEnv`) so the eliminators know which
+//! constructors to guess when splitting an unbound variable. `translate_vtype` produces them
+//! from surface types — e.g. `Bool` ↦ `Sum(Unit, Unit)`.
+
 use std::fmt::{self, Display};
 
 #[derive(PartialEq, Clone, Debug)]

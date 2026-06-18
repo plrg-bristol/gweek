@@ -1,3 +1,23 @@
+//! # The logic-variable environment
+//!
+//! [`LogicEnv`] is the store of logic-variable bindings and equivalence classes. It wraps an
+//! `Rc<UnionFind>` whose per-variable datum is `(ValueType, Option<VClosure>)` — the variable's
+//! declared type plus its binding, if any. The `Rc` gives copy-on-write semantics so branching
+//! clones the store cheaply; the first mutation of a shared clone deep-copies it.
+//!
+//! - [`fresh`](LogicEnv::fresh) registers a new unbound variable of a given type (called by
+//!   `Exists` and the case-split branches).
+//! - [`lookup`](LogicEnv::lookup) / [`set_vclos`](LogicEnv::set_vclos) read and write a binding,
+//!   [`get_type`](LogicEnv::get_type) reads the stored type, and [`identify`](LogicEnv::identify)
+//!   unions two classes when two unbound variables meet.
+//! - [`root`](LogicEnv::root) returns the canonical representative, so a unified class renders as
+//!   a single residual placeholder.
+//!
+//! **Invariant:** every read and write canonicalizes through the union-find root. This is what
+//! makes binding sound — a constraint on any member of a class is visible through all of them —
+//! and the [`Root`](super::union_find::Root) token enforces it by construction, so a write
+//! physically cannot land in a non-root slot.
+
 use std::rc::Rc;
 
 use crate::machine::value_type::ValueType;

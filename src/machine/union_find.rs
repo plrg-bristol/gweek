@@ -1,3 +1,18 @@
+//! # Disjoint sets with per-node data
+//!
+//! [`UnionFind<T>`] is a generic union-find that *owns* a datum of type `T` per node and exposes
+//! it **only** through a canonical [`Root`] token. `LogicEnv` instantiates it at
+//! `T = (ValueType, Option<VClosure>)` to key logic-variable data on equivalence-class
+//! representatives.
+//!
+//! The point of the [`Root`] newtype is soundness by construction: a `Root` can only be minted by
+//! [`find`](UnionFind::find), and [`get`](UnionFind::get)/[`get_mut`](UnionFind::get_mut) accept
+//! only a `Root`, so it is *impossible from outside* to read a binding at one slot while writing
+//! it at another — the read/write canonicalization invariant is inexpressible to violate. Fusing
+//! the data into the structure (one node vector plus one datum vector) removes the desync surface
+//! that two parallel arrays would create. [`canonical`](UnionFind::canonical) deliberately
+//! bypasses the token to return a raw class id for read-only naming uses.
+
 use std::cell::Cell;
 
 /// The canonical index of a logic variable's equivalence class.

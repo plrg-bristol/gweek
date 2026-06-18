@@ -1,3 +1,24 @@
+//! # The CBPV term language
+//!
+//! The machine's term language: the Call-By-Push-Value split into **values** ([`MValue`]) and
+//! **computations** ([`MComputation`]). Every other machine module manipulates these. Terms are
+//! arena-allocated and held by reference (`&'a MValue<'a>`), so they are `Copy` and cheap to
+//! share.
+//!
+//! - [`MValue`] is inert data: naturals (compact [`Nat`](MValue::Nat) or symbolic
+//!   [`Zero`](MValue::Zero)/[`Succ`](MValue::Succ)), pairs, sum injections, lists, and
+//!   [`Thunk`](MValue::Thunk) — the value/computation bridge wrapping a frozen computation.
+//! - [`MComputation`] is everything that *runs*: the CBPV core
+//!   ([`Return`](MComputation::Return)/[`Bind`](MComputation::Bind)/[`Force`](MComputation::Force)/[`Lambda`](MComputation::Lambda)/[`App`](MComputation::App)),
+//!   the eliminators ([`Ifz`](MComputation::Ifz)/[`Match`](MComputation::Match)/[`Case`](MComputation::Case)),
+//!   the functional-logic forms ([`Choice`](MComputation::Choice)/[`Exists`](MComputation::Exists)/[`Equate`](MComputation::Equate)),
+//!   and [`Rec`](MComputation::Rec) for self-reference.
+//!
+//! A natural has two forms because an unbound logic variable of type `Nat` is split into `0`
+//! and `S(fresh)`, which needs a symbolic successor. How each variant *steps* is the `step`
+//! module; how surface syntax *becomes* these is [`translate`](super::translate). `Display`
+//! renders values for solution output.
+
 use std::fmt::{self, Display};
 
 use bumpalo::Bump;
