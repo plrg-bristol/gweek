@@ -1,25 +1,14 @@
 //! # The search schedulers
 //!
-//! Owns the **search**: creates the runtime arena, builds the initial machine, imports the
-//! top-level function values, and runs one of four scheduling strategies that drive the
-//! machine's `run_to_branch` over the search tree, recording solutions.
+//! This module owns the search. It builds the arena and the initial machine, then drives the
+//! machine's `run_to_branch` under one of four strategies, recording each solution. Four entry
+//! points share the apparatus — [`eval()`] for the CLI, [`eval_collect`] and [`eval_streaming`]
+//! for the web, [`run`] for tests — all dispatching on [`Strategy`]:
 //!
-//! Four entry points share the machinery — [`eval`] (CLI, prints solutions),
-//! [`eval_collect`] (WASM batch, returns one `String`), [`eval_streaming`] (WASM, callback per
-//! solution), and [`run`] (tests, returns a count) — all dispatching on [`Strategy`]:
-//!
-//! - **BFS** — level frontier; complete and fair, but the frontier (and arena) can blow up.
-//!   Default.
-//! - **DFS** — a stack; fast and lean, incomplete on infinite branches.
-//! - **IDDFS** — repeated depth-limited DFS, doubling the limit; counts each solution in exactly
-//!   one round via a frontier window, so no cross-round dedup is needed.
-//! - **Fair** — round-robin over work-stacks, each given a step quota; complete with DFS-like
-//!   speed, the recommended general default.
-//!
-//! Deadline polling rides on a shared `Clock` (defined in `step`) that reads the wall clock only
-//! once every 1024 ticks. `record_solution` closes the answer value to a ground term; a residual
-//! free logic variable is reported as a `_<id>` placeholder rather than dropped, and a cyclic
-//! term renders as an error rather than overflowing.
+//! - *BFS* — complete and fair, but its frontier may blow up (the default);
+//! - *DFS* — lean and fast, yet incomplete on an infinite branch;
+//! - *IDDFS* — depth-limited DFS, doubled until a round prunes nothing: complete, low memory;
+//! - *Fair* — round-robin work-stacks, complete with DFS-like speed (the one to reach for).
 
 use std::collections::VecDeque;
 

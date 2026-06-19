@@ -1,17 +1,11 @@
 //! # Disjoint sets with per-node data
 //!
-//! [`UnionFind<T>`] is a generic union-find that *owns* a datum of type `T` per node and exposes
-//! it **only** through a canonical [`Root`] token. `LogicEnv` instantiates it at
-//! `T = (ValueType, Option<VClosure>)` to key logic-variable data on equivalence-class
-//! representatives.
-//!
-//! The point of the [`Root`] newtype is soundness by construction: a `Root` can only be minted by
-//! [`find`](UnionFind::find), and [`get`](UnionFind::get)/[`get_mut`](UnionFind::get_mut) accept
-//! only a `Root`, so it is *impossible from outside* to read a binding at one slot while writing
-//! it at another — the read/write canonicalization invariant is inexpressible to violate. Fusing
-//! the data into the structure (one node vector plus one datum vector) removes the desync surface
-//! that two parallel arrays would create. [`canonical`](UnionFind::canonical) deliberately
-//! bypasses the token to return a raw class id for read-only naming uses.
+//! [`UnionFind<T>`] owns one datum of type `T` per node and hands it out *only* through a
+//! canonical [`Root`] token. The point of the token is soundness by construction: a `Root` is
+//! minted solely by [`find`](UnionFind::find), and [`get`](UnionFind::get) /
+//! [`get_mut`](UnionFind::get_mut) demand one, so a read and a write physically cannot disagree
+//! about which class slot they address — the invariant is made inexpressible to violate. `LogicEnv`
+//! instantiates it at `T = (ValueType, Option<VClosure>)`.
 
 use std::cell::Cell;
 

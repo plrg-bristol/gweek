@@ -1,10 +1,9 @@
-//! # The gweek CLI
+//! # The gweek command-line interface
 //!
-//! The command-line entry point. Parses flags, **constructs** a [`Config`](gweek::machine::Config)
-//! passed by value into the pipeline, then runs parse → type-check → translate → optionally
-//! optimize → evaluate, printing each solution. Parse and type errors are rendered with the
-//! `ariadne` crate and exit non-zero. See [`gweek`] for the library and the WASM entry points,
-//! which run the same pipeline.
+//! The command-line entry point. It parses the flags into a [`Config`](gweek::machine::Config),
+//! then runs the pipeline — parse, type-check, translate, optionally optimise, evaluate — printing
+//! each solution as it is found; parse and type errors are rendered with `ariadne`. See [`gweek`]
+//! for the library proper and its WASM entry points, which run the very same pipeline.
 
 use std::fs;
 use std::process;

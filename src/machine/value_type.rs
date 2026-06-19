@@ -1,13 +1,10 @@
 //! # Runtime types
 //!
-//! The runtime type vocabulary, following the CBPV value/computation split. [`ValueType`] is
-//! `Unit`, `Nat`, `Product`, `Sum`, `List`, or `Thunk` of a [`ComputationType`]; a
-//! [`ComputationType`] is `Return` of a value type (printed `F(t)`) or `Arrow` (printed
-//! `a -> b`). Compound cases `Box` their children to stay finite.
-//!
-//! These are the types a logic variable carries (via `LogicEnv`) so the eliminators know which
-//! constructors to guess when splitting an unbound variable. `translate_vtype` produces them
-//! from surface types — e.g. `Bool` ↦ `Sum(Unit, Unit)`.
+//! The vocabulary of runtime types, split as CBPV demands: [`ValueType`] (`Unit`, `Nat`,
+//! `Product`, `Sum`, `List`, `Thunk`) and [`ComputationType`] (`Return` or `Arrow`). These are the
+//! types a logic variable remembers, so that when an unbound variable must be split the
+//! eliminators know which constructors to guess; `translate_vtype` builds them from surface types
+//! — e.g. `Bool` ↦ `Sum(Unit, Unit)`.
 
 use std::fmt::{self, Display};
 

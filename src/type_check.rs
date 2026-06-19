@@ -1,23 +1,13 @@
 //! # The type checker
 //!
 //! A two-pass bidirectional type checker with Hindley–Milner-style instantiation. [`type_check`]
-//! collects function signatures first (so functions may refer to each other), then checks each
-//! body and bare statement, accumulating every [`TypeError`] rather than stopping at the first.
-//!
-//! - **Unification** is Robinson's algorithm over a metavariable substitution. Metavariables are
-//!   encoded as `Type::Ident("?<id>")`, names the lexer can never produce, so they cannot clash
-//!   with user type variables. Binding does an occurs check, rejecting infinite types.
-//! - **Polymorphism** is real instantiation, not string equality: each use of a global signature
-//!   replaces its (lowercase-initial) type variables with fresh metavars, so `id :: a -> a`
-//!   applies at any concrete type while `bad :: a -> b` rejects `bad x = x`. Local bindings stay
-//!   monomorphic.
-//! - **Bidirectional checking** synthesises a term's type bottom-up where possible and pushes an
-//!   expected type down otherwise; an application checks its argument against the parameter type,
-//!   which is how an otherwise un-synthesisable lambda gets a type.
-//!
-//! The checker rejects exactly the constructs that would otherwise slip through and panic during
-//! translation — unknown types like `Int`, non-`Nat` `==`/`!=`, pair-pattern lambda arguments —
-//! so well-typed programs never reach those downstream `panic!`s.
+//! gathers the function signatures first — so the functions may refer to one another — then checks
+//! each body, accumulating every [`TypeError`] rather than halting at the first. Unification is
+//! Robinson's, over a substitution whose metavariables are encoded as `Type::Ident("?<id>")`, a
+//! name the lexer can never produce; polymorphism is real instantiation, each use of a global
+//! signature receiving fresh metavariables. The checker is also a gatekeeper — it rejects exactly
+//! the programs that would otherwise reach an unreachable `panic!` downstream (unknown types,
+//! non-`Nat` equality, pair-pattern lambda arguments).
 
 use std::collections::HashMap;
 use std::fmt;

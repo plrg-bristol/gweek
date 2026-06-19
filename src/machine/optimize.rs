@@ -1,24 +1,12 @@
-//! # The equational optimizer
+//! # The equational optimiser
 //!
-//! An optional peephole optimizer over CBPV terms, enabled with `-o`. It rewrites a term before
-//! evaluation using equational laws of the CBPV theory; the pass is verified to preserve the
-//! solution multiset on every terminating example. [`optimize`] rewrites the main computation and
-//! [`optimize_val`] a top-level function value (recursing into its `Thunk`); both are pure
-//! rewrites on arena-allocated terms.
-//!
-//! The core machinery is **one** generic binder-aware traversal (`map_val`/`map_comp`) that
-//! carries a count of binders crossed and applies a leaf callback at every `Var`; the de Bruijn
-//! passes (`shift`, `subst`, `swap`) are thin wrappers over it. The driver recurses into
-//! subterms under a compile-time environment of statically-known bindings, then tries top-level
-//! rules, re-optimizing whenever a rule fires so rewriting runs to a fixpoint.
-//!
-//! The rules, by form: `Bind` (eta, dead-bind, variable aliasing, dead-end, and the pull/assoc
-//! rules that hoist a producer out of the binding position); `Force(thunk M) → M`; `App` (beta,
-//! app-bind); `Choice` (flatten, drop `fail`, unwrap singletons); `Exists`/`Equate`
-//! (reflexivity, cycle-to-fail, hoisting, and constructor-decomposition parameter laws);
-//! `Lambda` (push into choices, swap with `Exists`, hoist `Equate`); and the eliminators
-//! (`deep_resolve` the scrutinee and beta-reduce into the matching branch when it is a known
-//! constructor).
+//! An optional peephole optimiser over CBPV terms (enabled by `-o`) that rewrites a program by the
+//! equational laws of the theory while preserving its multiset of solutions. [`optimize`] rewrites
+//! the main computation, [`optimize_val`] a function value. The machinery is one generic
+//! binder-aware traversal (`map_val`/`map_comp`), which the de Bruijn passes — shift, subst, swap —
+//! merely wrap; the driver optimises subterms under a compile-time environment, then applies the
+//! top-level rules to a fixpoint: beta and eta, dead-bind, the pull/assoc family, choice
+//! flattening, equate decomposition, and eliminator beta.
 
 use bumpalo::Bump;
 

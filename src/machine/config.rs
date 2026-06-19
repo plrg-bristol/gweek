@@ -1,10 +1,9 @@
 //! # Runtime configuration
 //!
-//! [`Config`] holds the run-time knobs — search [`Strategy`], `optimize`, `timeout_secs`,
-//! `occurs_check`, `strict`, `first_only` — the in-memory form of the CLI flags. It is a plain
-//! struct passed **by reference**: the evaluator, the machine's step loop, and unification all
-//! take `cfg: &Config` explicitly (no thread-local), and the timeout deadline is computed once
-//! and threaded down as an absolute `Instant`.
+//! [`Config`] collects the run-time knobs — the search [`Strategy`], `optimize`, `timeout_secs`,
+//! `occurs_check`, `strict`, `first_only` — viz. the in-memory form of the CLI flags. It is a
+//! plain record, passed by reference everywhere rather than stashed in a thread-local, so that the
+//! one source of truth travels down the pipeline explicitly.
 
 use super::eval::Strategy;
 

@@ -1,26 +1,14 @@
 //! # Value closures
 //!
-//! [`VClosure`] is how the machine refers to a value whose resolution may be deferred: a `Copy`
-//! enum that is either a concrete `MValue` in its environment (`Clos`), an unresolved logic
-//! variable (`LogicVar`), or a suspension (`Susp`). This indirection is what lets unification and
-//! the eliminators discover that "a value" is actually an unknown to branch on or a thunk to
-//! force.
+//! A [`VClosure`] is how the machine names a value whose resolution may yet be deferred: a concrete
+//! `MValue` in its environment (`Clos`), an unresolved logic variable (`LogicVar`), or a suspension
+//! (`Susp`). This indirection is exactly what lets unification and the eliminators discover that
+//! what looks like a value is in truth an unknown to branch on, or a thunk to force.
 //!
-//! Two closing operations:
-//!
-//! - [`close_head`](VClosure::close_head) resolves *one level* — following `Var` indices,
-//!   chasing bound logic variables, and forcing suspensions — stopping at the first concrete head
-//!   or an unbound variable. A still-pending suspension propagates as `Err(SuspAt)`, prompting a
-//!   reschedule. This is the workhorse the step loop and unification call before inspecting a
-//!   value's shape.
-//! - [`close`](VClosure::close) resolves *fully* to a ground [`Closed`] answer term for output.
-//!   It is **iterative**, driven by an explicit work stack so the depth bound holds regardless of
-//!   stack-frame size; beyond `MAX_CLOSE_DEPTH` the term is assumed cyclic and it returns
-//!   [`CyclicTerm`] instead of looping (cyclic terms only arise under `--no-occurs-check`).
-//!
-//! An unbound logic variable in an answer is rendered as a `_<id>` placeholder keyed on the
-//! canonical class root, not dropped. [`occurs_lvar`](VClosure::occurs_lvar) implements the
-//! occurs check used by unification.
+//! Two operations close it. [`close_head`](VClosure::close_head) resolves one level — a pending
+//! suspension escapes as `Err(SuspAt)`, prompting a reschedule. [`close`](VClosure::close) resolves
+//! fully to a ground [`Closed`] answer, iteratively and under a depth bound, so that a cyclic term
+//! — possible only under `--no-occurs-check` — yields [`CyclicTerm`] rather than looping forever.
 
 use std::fmt::{self, Display};
 

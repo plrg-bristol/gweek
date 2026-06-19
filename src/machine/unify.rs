@@ -1,20 +1,11 @@
 //! # Unification
 //!
-//! Implements the algorithm behind the `=:=` constraint, called from the `Equate` step.
-//! [`unify`] takes `cfg` explicitly (it carries `occurs_check`) and reports through
-//! [`UnifyError`]: `Occurs` (occurs-check failure), `Fail` (structural mismatch), or `Susp`
-//! (an operand needs forcing first — the caller reschedules).
-//!
-//! Unification is **iterative**, not recursive: a worklist of closure pairs seeded with
-//! `(lhs, rhs)`. Each step head-closes both sides and matches:
-//!
-//! - var ~ var → union the classes (no value chosen);
-//! - var ~ value → occurs-check (if enabled), then bind the variable;
-//! - value ~ value → structural — equal nullary constructors succeed, matching constructors
-//!   push their children, and the dual natural representation (`Nat(n)` vs `Zero`/`Succ`) is
-//!   reconciled here.
-//!
-//! The occurs check itself lives in `vclosure::occurs_lvar` and is on unless `--no-occurs-check`.
+//! The algorithm behind the `=:=` constraint, invoked from the `Equate` step. [`unify`] reports
+//! through [`UnifyError`]: `Occurs`, `Fail`, or `Susp` — the last meaning an operand must be forced
+//! before we can proceed. It is iterative, not recursive: a worklist of closure pairs, each
+//! head-closed and matched — a variable against a variable unions their classes, a variable against
+//! a value binds it (after an optional occurs check), and a value against a value recurses
+//! structurally, reconciling the dual `Nat`/`Succ` representation of naturals on the way.
 
 use bumpalo::Bump;
 

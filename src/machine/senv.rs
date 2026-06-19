@@ -1,17 +1,10 @@
 //! # The suspension environment
 //!
-//! [`SuspEnv`] stores **suspensions** — `let`-bound computations that have not yet run. Each
-//! entry is `Err(cclos)` while still a pending computation closure and becomes `Ok(vclos)` once
-//! forced to a value; a `next_pending` cursor tracks where to resume draining. Suspensions are
-//! identified by the `SuspId` newtype, distinct from logic variables' `LVar`.
-//!
-//! The entries sit behind an `Rc`, giving copy-on-write backtracking like the logic store:
-//! cloning a machine at a branch is cheap, and the first write of a shared clone deep-copies the
-//! vector. [`fresh`](SuspEnv::fresh) appends a pending entry (called when a non-strict `let`
-//! freezes its right-hand side); [`lookup`](SuspEnv::lookup) returns the value or an
-//! [`SuspAt`] signalling "still pending, reschedule"; [`set`](SuspEnv::set) records a forced
-//! result; [`next`](SuspEnv::next) yields the first still-pending suspension when draining at
-//! the end of a run.
+//! [`SuspEnv`] holds *suspensions* — `let`-bound computations that have not yet run. An entry is
+//! `Err(cclos)` while it remains a frozen computation and becomes `Ok(vclos)` once forced; the
+//! entries sit behind an `Rc`, so backtracking clones them copy-on-write. The signal that matters
+//! is [`lookup`](SuspEnv::lookup): it returns the value, or an [`SuspAt`] meaning *not yet — force
+//! it and come back*.
 
 use std::rc::Rc;
 
