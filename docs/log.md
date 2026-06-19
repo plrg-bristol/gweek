@@ -81,3 +81,16 @@ component, concept, architecture and reference pages — most had drifted purely
 Six architecture/reference pages were committed separately (`496bc1c`); the remaining pages plus
 these meta updates land together. The in-flight uncommitted `parse.rs` clippy edit (a point-free
 `.map(PostOp::Cons)`) is trivial and shifts no anchors.
+
+## [2026-06-19] restructure | trim to durable; rustdoc owns per-module detail
+
+Added module-level rustdoc (`//!`) across all 26 source modules, then retired the wiki layers
+that duplicated them. Deleted the 17 `components/` pages and `architecture/pipeline.md` — their
+job is the rustdoc's now. Also deleted the hand-maintained `index.md` (Obsidian's explorer/graph
+is the index). Kept the durable material: [[overview]], the `concepts/` pages, `reference/`, and
+the frozen [[deep-review]].
+
+Rewrote [[AGENTS]]: the wiki no longer mirrors source module-by-module; dropped `source:`/
+`commit:` pins and the `file:line` anchor discipline in favour of a **no line citations** rule
+(names, not line numbers — they drift the instant code moves, as adding the rustdoc just proved).
+[[deep-review]] stays pinned as a historical snapshot, exempt from that rule.

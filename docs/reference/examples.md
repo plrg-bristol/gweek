@@ -19,7 +19,7 @@ These are the showcase programs: generate candidates non-deterministically and p
 
 | File | What it does |
 |---|---|
-| `coins.gwk` | Coin-change: ways to make a total from coins {1, 2, 10} (the [[index|README]] example). |
+| `coins.gwk` | Coin-change: ways to make a total from coins {1, 2, 10} (the README example). |
 | `nqueens.gwk`, `nqueens10.gwk` | N-queens placement (the worked example in [[suspensions-and-forcing]]). |
 | `magic.gwk`, `magic_slow.gwk` | 3×3 magic square — fast (incremental) vs naive (generate-then-test). |
 | `magic4.gwk`, `magic4_slow.gwk` | 4×4 magic square: incremental pick-and-prune vs naive generate-and-test. |
