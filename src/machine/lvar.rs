@@ -3,9 +3,11 @@
 //! [`LogicEnv`] maps every logical variable to its type, and potentially a value closure if it has
 //! been resolved.
 //!
-//! Variables are introduced unbound, looked up, bound, and unified with one another, the last of
-//! which makes them indistinguishable. [`canonical`](LogicEnv::canonical) picks a representative
-//! from an equivalence class and is only used for printing.
+//! [`fresh`](LogicEnv::fresh) introduces an unbound variable of a given type;
+//! [`lookup`](LogicEnv::lookup) and [`set_vclos`](LogicEnv::set_vclos) read and write its binding;
+//! [`identify`](LogicEnv::identify) unifies two logical variables, making them indistinguishable.
+//! [`canonical`](LogicEnv::canonical) returns the canonical logical variable in the same
+//! equivalence class; it is only used for printing.
 //!
 //! The equivalence classes of logical variables are implemented by an `Rc<UnionFind>`, which is
 //! copy-on-write so that a nondeterministic branch can clone them cheaply, paying only when they
