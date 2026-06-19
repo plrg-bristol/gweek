@@ -1,23 +1,10 @@
-//! # The CBPV term language
-//!
-//! The slogan is: *a value is, a computation does*. [`MValue`] is inert data — naturals, pairs,
-//! sum injections, lists, and [`Thunk`](MValue::Thunk), a frozen computation; [`MComputation`] is
-//! everything that acts — the CBPV core, the eliminators `Ifz`/`Match`/`Case`, the
-//! functional-logic forms `Choice`/`Exists`/`Equate`, and `Rec` for self-reference. This split is
-//! precisely what makes evaluation order, and hence the search, controllable. Terms are
-//! arena-allocated and held by reference, so they are `Copy`. A natural carries two forms — compact
-//! `Nat(u64)` and symbolic `Zero`/`Succ` — because splitting an unbound `Nat` variable demands a
-//! symbolic successor.
+//! # The CBPV IR
 
 use std::fmt::{self, Display};
 
 use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
-
-/*
-CBPV representation of programs.
-*/
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MValue<'a> {
