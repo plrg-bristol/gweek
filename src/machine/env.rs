@@ -1,15 +1,16 @@
-//! # The de Bruijn value environment
+//! # The environment
 //!
-//! [`Env`] is the runtime variable environment: a persistent, arena-backed cons-list of
-//! `VClosure`s indexed by de Bruijn position, and nothing but a pointer to its head cell — hence
-//! `Copy` and O(1) to clone, which is what makes cloning a machine at a branch cheap.
+//! [`Env`] is an environment that maps variables (de Bruijn indices) to value closures
+//! (`VClosure`). It is implemented using a persistent cons-list on an arena, giving constant time
+//! cloning.
 //!
-//! Why two types? `EnvInner` is the recursive node (`Nil` / `Cons(VClosure, Env)`); `Env` is the
-//! thin `&EnvInner` handle. Holding the indirection *inside* `Env` keeps every environment
-//! uniformly one pointer — even `empty` allocates a `Nil` — and keeps the cons-cell shape private;
-//! the `Stack` of [`step`](super::step) is the same idiom. One subtlety:
-//! [`extend_val`](Env::extend_val) *dealiases* — handed a `Var`, it chases the chain to a real
-//! closure and pushes that, so a later [`lookup`](Env::lookup) lands in one hop.
+//! `EnvInner` is the recursive list type, while `Env` is a
+//! thin `&EnvInner` handle. This means every environment is
+//! uniformly one pointer.
+//!
+//! The [`extend_val`](Env::extend_val) extends an environment by a value closure, which it
+//! de-aliases: if handed a `Var` it dereferences it to a value closure whose value is a head. Every
+//! subsequent [`lookup`](Env::lookup) yields a head form which can immediately be pattern-matched.
 
 use bumpalo::Bump;
 
@@ -25,12 +26,6 @@ enum EnvInner<'a> {
 /// Clone/Copy is O(1) — just a pointer copy.
 #[derive(Clone, Copy)]
 pub struct Env<'a>(&'a EnvInner<'a>);
-
-impl<'a> std::fmt::Debug for Env<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Env(...)")
-    }
-}
 
 impl<'a> Env<'a> {
     pub fn empty(arena: &'a Bump) -> Env<'a> {
@@ -85,5 +80,11 @@ impl<'a> Env<'a> {
                 }
             }
         }
+    }
+}
+
+impl<'a> std::fmt::Debug for Env<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Env(...)")
     }
 }
