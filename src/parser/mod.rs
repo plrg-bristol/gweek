@@ -8,12 +8,12 @@
 //! precedence is layered from prefix, through postfix, to the statement forms.
 
 pub mod arg;
+pub mod bexpr;
 pub mod cases;
 pub mod decl;
-pub mod r#type;
-pub mod stmt;
 pub mod expr;
-pub mod bexpr;
 mod parse;
+pub mod stmt;
+pub mod r#type;
 
 pub use parse::parse;

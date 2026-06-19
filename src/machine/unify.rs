@@ -44,7 +44,9 @@ pub fn unify<'a>(
             }
             (VClosure::LogicVar { ident }, _) => {
                 if cfg.occurs_check
-                    && rhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)?
+                    && rhs
+                        .occurs_lvar(lenv, senv, *ident)
+                        .map_err(UnifyError::Susp)?
                 {
                     return Err(UnifyError::Occurs);
                 }
@@ -52,7 +54,9 @@ pub fn unify<'a>(
             }
             (_, VClosure::LogicVar { ident }) => {
                 if cfg.occurs_check
-                    && lhs.occurs_lvar(lenv, senv, *ident).map_err(UnifyError::Susp)?
+                    && lhs
+                        .occurs_lvar(lenv, senv, *ident)
+                        .map_err(UnifyError::Susp)?
                 {
                     return Err(UnifyError::Occurs);
                 }
@@ -107,7 +111,10 @@ pub fn unify<'a>(
                 }
                 (MValue::Cons(x, xs), MValue::Cons(y, ys)) => {
                     q.push((VClosure::mk_clos(x, *lenv_r), VClosure::mk_clos(y, *renv_r)));
-                    q.push((VClosure::mk_clos(xs, *lenv_r), VClosure::mk_clos(ys, *renv_r)));
+                    q.push((
+                        VClosure::mk_clos(xs, *lenv_r),
+                        VClosure::mk_clos(ys, *renv_r),
+                    ));
                 }
                 (MValue::Pair(a, b), MValue::Pair(c, d)) => {
                     q.push((VClosure::mk_clos(a, *lenv_r), VClosure::mk_clos(c, *renv_r)));

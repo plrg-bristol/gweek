@@ -9,23 +9,23 @@
 //! [`Config`] is threaded by reference throughout.
 
 pub mod config;
-pub mod mterms;
-pub mod optimize;
-pub mod translate;
 mod env;
 mod eval;
 mod lvar;
+pub mod mterms;
+pub mod optimize;
 mod senv;
 mod step;
+pub mod translate;
 mod unify;
 mod union_find;
 mod value_type;
 mod vclosure;
 
-pub(crate) use env::Env;
-pub(crate) use vclosure::VClosure;
 pub use config::Config;
+pub(crate) use env::Env;
 pub use eval::{eval, eval_collect, eval_streaming, run, Strategy};
+pub(crate) use vclosure::VClosure;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct LVar(pub usize);

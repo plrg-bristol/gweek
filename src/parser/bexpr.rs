@@ -9,5 +9,5 @@ pub enum BExpr {
     NEq(Box<Expr>, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
-    Not(Box<Expr>)
+    Not(Box<Expr>),
 }

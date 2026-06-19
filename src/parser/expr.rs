@@ -18,7 +18,7 @@ pub enum Expr {
     Nat(usize),
     Bool(bool),
     Pair(Box<Expr>, Box<Expr>),
-    Stmt(Box<Stmt>)
+    Stmt(Box<Stmt>),
 }
 
 impl Expr {

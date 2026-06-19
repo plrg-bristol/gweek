@@ -48,14 +48,21 @@ pub fn eval<'a>(cfg: &Config, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>
     let mut on_solution = |s: &str| println!("> {}", s);
     let (solns, timed_out) = run_internal(cfg, &arena, comp, env, deadline, &mut on_solution);
     if timed_out {
-        println!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns);
+        println!(
+            ">>> timed out after {}s, {} solutions found",
+            cfg.timeout_secs, solns
+        );
     } else {
         println!(">>> {} solutions", solns);
     }
 }
 
 /// Collect all solutions into a String (for WASM).
-pub fn eval_collect<'a>(cfg: &Config, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>]) -> String {
+pub fn eval_collect<'a>(
+    cfg: &Config,
+    comp: &'a MComputation<'a>,
+    vals: &[&'a MValue<'a>],
+) -> String {
     let arena = Bump::new();
     let env = import_env(&arena, vals);
     let deadline = deadline_from(cfg);
@@ -65,7 +72,10 @@ pub fn eval_collect<'a>(cfg: &Config, comp: &'a MComputation<'a>, vals: &[&'a MV
         run_internal(cfg, &arena, comp, env, deadline, &mut on_solution)
     };
     if timed_out {
-        solutions.push(format!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns));
+        solutions.push(format!(
+            ">>> timed out after {}s, {} solutions found",
+            cfg.timeout_secs, solns
+        ));
     } else {
         solutions.push(format!(">>> {} solutions", solns));
     }
@@ -85,14 +95,22 @@ pub fn eval_streaming<'a>(
     let mut cb = |s: &str| on_solution(&format!("> {}", s));
     let (solns, timed_out) = run_internal(cfg, &arena, comp, env, deadline, &mut cb);
     if timed_out {
-        format!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns)
+        format!(
+            ">>> timed out after {}s, {} solutions found",
+            cfg.timeout_secs, solns
+        )
     } else {
         format!(">>> {} solutions", solns)
     }
 }
 
 /// Run without output (for tests). Creates its own runtime arena.
-pub fn run<'a>(cfg: &Config, comp: &'a MComputation<'a>, vals: &[&'a MValue<'a>], print: bool) -> usize {
+pub fn run<'a>(
+    cfg: &Config,
+    comp: &'a MComputation<'a>,
+    vals: &[&'a MValue<'a>],
+    print: bool,
+) -> usize {
     let arena = Bump::new();
     let env = import_env(&arena, vals);
     let deadline = deadline_from(cfg);
@@ -142,7 +160,12 @@ fn fresh_machine<'a>(arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>) 
 }
 
 /// Record a solution; returns true if we should stop (--first mode).
-fn record_solution(cfg: &Config, m: &Machine, solns: &mut usize, on_solution: &mut dyn FnMut(&str)) -> bool {
+fn record_solution(
+    cfg: &Config,
+    m: &Machine,
+    solns: &mut usize,
+    on_solution: &mut dyn FnMut(&str),
+) -> bool {
     if let MComputation::Return(v) = m.cclos.0 {
         on_solution(&output(v, m.cclos.1, &m.lenv, &m.senv));
         *solns += 1;
@@ -153,7 +176,14 @@ fn record_solution(cfg: &Config, m: &Machine, solns: &mut usize, on_solution: &m
     false
 }
 
-fn eval_bfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
+fn eval_bfs<'a>(
+    cfg: &Config,
+    arena: &'a Bump,
+    comp: &'a MComputation<'a>,
+    env: Env<'a>,
+    deadline: Instant,
+    on_solution: &mut dyn FnMut(&str),
+) -> (usize, bool) {
     let mut machines = vec![fresh_machine(arena, comp, env)];
     let mut next = Vec::new();
     let mut solns = 0;
@@ -182,7 +212,14 @@ fn eval_bfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: 
     (solns, false)
 }
 
-fn eval_dfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
+fn eval_dfs<'a>(
+    cfg: &Config,
+    arena: &'a Bump,
+    comp: &'a MComputation<'a>,
+    env: Env<'a>,
+    deadline: Instant,
+    on_solution: &mut dyn FnMut(&str),
+) -> (usize, bool) {
     let mut stack = vec![fresh_machine(arena, comp, env)];
     let mut solns = 0;
     let mut clock = Clock::new(deadline);
@@ -207,7 +244,14 @@ fn eval_dfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: 
     (solns, false)
 }
 
-fn eval_iddfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
+fn eval_iddfs<'a>(
+    cfg: &Config,
+    arena: &'a Bump,
+    comp: &'a MComputation<'a>,
+    env: Env<'a>,
+    deadline: Instant,
+    on_solution: &mut dyn FnMut(&str),
+) -> (usize, bool) {
     let mut solns = 0;
     let mut depth_limit: usize = 1;
     let mut clock = Clock::new(deadline);
@@ -254,7 +298,14 @@ fn eval_iddfs<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env
     (solns, false)
 }
 
-fn eval_fair<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env: Env<'a>, deadline: Instant, on_solution: &mut dyn FnMut(&str)) -> (usize, bool) {
+fn eval_fair<'a>(
+    cfg: &Config,
+    arena: &'a Bump,
+    comp: &'a MComputation<'a>,
+    env: Env<'a>,
+    deadline: Instant,
+    on_solution: &mut dyn FnMut(&str),
+) -> (usize, bool) {
     const QUOTA: usize = 10000;
     const MAX_THREADS: usize = 10000;
     let mut queue: VecDeque<Vec<Machine<'a>>> = VecDeque::new();
@@ -312,7 +363,12 @@ fn eval_fair<'a>(cfg: &Config, arena: &'a Bump, comp: &'a MComputation<'a>, env:
     (solns, false)
 }
 
-fn output<'a>(val: &'a MValue<'a>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> String {
+fn output<'a>(
+    val: &'a MValue<'a>,
+    env: Env<'a>,
+    lenv: &LogicEnv<'a>,
+    senv: &SuspEnv<'a>,
+) -> String {
     match VClosure::mk_clos(val, env).close(lenv, senv) {
         Ok(closed) => closed.to_string(),
         Err(_) => "<cyclic term: cannot print (occurs check disabled)>".to_string(),
@@ -322,8 +378,8 @@ fn output<'a>(val: &'a MValue<'a>, env: Env<'a>, lenv: &LogicEnv<'a>, senv: &Sus
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser;
     use crate::machine::translate::translate;
+    use crate::parser;
 
     /// Parse, translate and run `src`, collecting the rendered solutions.
     fn solutions(src: &str, strategy: Strategy) -> Vec<String> {

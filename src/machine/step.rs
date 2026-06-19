@@ -161,7 +161,14 @@ impl<'a> Machine<'a> {
     }
 
     fn step(self, cfg: &Config) -> Step<'a> {
-        let Machine { arena, cclos: (comp, env), stack, lenv, senv, done: _ } = self;
+        let Machine {
+            arena,
+            cclos: (comp, env),
+            stack,
+            lenv,
+            senv,
+            done: _,
+        } = self;
 
         match comp {
             MComputation::Return(val) => match stack.0 {
@@ -179,7 +186,14 @@ impl<'a> Machine<'a> {
                                 done: false,
                             })
                         }
-                        None => Step::Done(Machine { arena, cclos: (comp, env), stack, lenv, senv, done: true }),
+                        None => Step::Done(Machine {
+                            arena,
+                            cclos: (comp, env),
+                            stack,
+                            lenv,
+                            senv,
+                            done: true,
+                        }),
                     }
                 }
                 StackInner::Cons(sc, tail) => match sc.frame {
@@ -471,9 +485,7 @@ impl<'a> Machine<'a> {
                             done: false,
                         }),
                         MValue::Cons(v, w) => {
-                            let new_env = env
-                                .extend_val(arena, v, cenv)
-                                .extend_val(arena, w, cenv);
+                            let new_env = env.extend_val(arena, v, cenv).extend_val(arena, w, cenv);
                             Step::Continue(Machine {
                                 arena,
                                 cclos: (consk, new_env),
@@ -494,10 +506,7 @@ impl<'a> Machine<'a> {
                         let nil_val = arena.alloc(MValue::Nil);
                         let m_nil = {
                             let mut lenv = lenv.clone();
-                            lenv.set_vclos(
-                                ident,
-                                VClosure::mk_clos(nil_val, empty),
-                            );
+                            lenv.set_vclos(ident, VClosure::mk_clos(nil_val, empty));
                             Machine {
                                 arena,
                                 cclos: (nilk, env),
@@ -523,7 +532,10 @@ impl<'a> Machine<'a> {
                             );
                             Machine {
                                 arena,
-                                cclos: (consk, env.extend_lvar(arena, head).extend_lvar(arena, tail)),
+                                cclos: (
+                                    consk,
+                                    env.extend_lvar(arena, head).extend_lvar(arena, tail),
+                                ),
                                 stack,
                                 lenv,
                                 senv,
@@ -578,10 +590,7 @@ impl<'a> Machine<'a> {
                             let inl_val = arena.alloc(MValue::Inl(var0));
                             lenv.set_vclos(
                                 ident,
-                                VClosure::mk_clos(
-                                    inl_val,
-                                    empty.extend_lvar(arena, fresh),
-                                ),
+                                VClosure::mk_clos(inl_val, empty.extend_lvar(arena, fresh)),
                             );
                             Machine {
                                 arena,
@@ -599,10 +608,7 @@ impl<'a> Machine<'a> {
                             let inr_val = arena.alloc(MValue::Inr(var0));
                             lenv.set_vclos(
                                 ident,
-                                VClosure::mk_clos(
-                                    inr_val,
-                                    empty.extend_lvar(arena, fresh),
-                                ),
+                                VClosure::mk_clos(inr_val, empty.extend_lvar(arena, fresh)),
                             );
                             Machine {
                                 arena,

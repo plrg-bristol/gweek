@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
-use crate::parser::{arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, stmt::Stmt, r#type::Type};
+use crate::parser::{
+    arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, r#type::Type, stmt::Stmt,
+};
 
 use super::mterms::{MComputation, MValue};
 
@@ -29,7 +31,11 @@ struct TEnv {
 
 impl TEnv {
     fn new() -> TEnv {
-        TEnv { env: vec![], nullary: HashSet::new(), members: HashMap::new() }
+        TEnv {
+            env: vec![],
+            nullary: HashSet::new(),
+            members: HashMap::new(),
+        }
     }
 
     fn find(&self, v: &str) -> usize {
@@ -58,7 +64,10 @@ impl TEnv {
     }
 }
 
-pub fn translate<'a>(arena: &'a Bump, ast: Vec<Decl>) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
+pub fn translate<'a>(
+    arena: &'a Bump,
+    ast: Vec<Decl>,
+) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
     let sigs: HashMap<String, Type> = ast
         .iter()
         .filter_map(|d| match d {
@@ -153,8 +162,11 @@ fn order_functions(ast: Vec<Decl>) -> (Vec<Vec<Func>>, Vec<Decl>) {
     }
 
     let func_names: HashSet<String> = funcs.iter().map(|f| f.name.clone()).collect();
-    let name_to_idx: HashMap<String, usize> =
-        funcs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
+    let name_to_idx: HashMap<String, usize> = funcs
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.name.clone(), i))
+        .collect();
 
     // Edge i -> j when function i references function j (i depends on j).
     let n = funcs.len();
@@ -497,7 +509,12 @@ fn collect_leaves(pattern: &Arg, ty: &Type, out: &mut Vec<(String, ValueType)>) 
 /// Rebuilds the value matching `pattern`, addressing the leaf logic variables
 /// by their de Bruijn index. With `m` leaves bound in left-to-right order, the
 /// `j`-th leaf sits at index `(m - 1) - j`.
-fn rebuild_pattern<'a>(arena: &'a Bump, pattern: &Arg, m: usize, next: &mut usize) -> &'a MValue<'a> {
+fn rebuild_pattern<'a>(
+    arena: &'a Bump,
+    pattern: &Arg,
+    m: usize,
+    next: &mut usize,
+) -> &'a MValue<'a> {
     match pattern {
         Arg::Ident(_) => {
             let idx = (m - 1) - *next;
@@ -540,7 +557,10 @@ fn bind_pattern<'a>(
     let rhs = arena.alloc(MValue::Var(pair_idx + m));
     let mut comp: &MComputation = arena.alloc(MComputation::Equate { lhs, rhs, body });
     for (_, vty) in leaves.into_iter().rev() {
-        comp = arena.alloc(MComputation::Exists { ptype: vty, body: comp });
+        comp = arena.alloc(MComputation::Exists {
+            ptype: vty,
+            body: comp,
+        });
     }
     comp
 }
@@ -554,9 +574,10 @@ fn translate_vtype(ptype: Type) -> ValueType {
         }
         Type::Ident(s) => panic!("cannot translate type {}", s),
         Type::List(t) => ValueType::List(Box::new(translate_vtype(*t))),
-        Type::Product(t1, t2) => {
-            ValueType::Product(Box::new(translate_vtype(*t1)), Box::new(translate_vtype(*t2)))
-        }
+        Type::Product(t1, t2) => ValueType::Product(
+            Box::new(translate_vtype(*t1)),
+            Box::new(translate_vtype(*t2)),
+        ),
         Type::Any => panic!("cannot translate unresolved type"),
     }
 }
@@ -654,7 +675,11 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
                     let consk = translate_stmt(arena, *cons_case.body, tenv);
                     tenv.unbind();
                     tenv.unbind();
-                    arena.alloc(MComputation::Match { list: var0, nilk, consk })
+                    arena.alloc(MComputation::Match {
+                        list: var0,
+                        nilk,
+                        consk,
+                    })
                 }
             };
             tenv.unbind();
@@ -691,8 +716,14 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             let var0 = arena.alloc(MValue::Var(0));
             let cons = arena.alloc(MValue::Cons(var1, var0));
             let ret = arena.alloc(MComputation::Return(cons));
-            let inner = arena.alloc(MComputation::Bind { comp: comp_tail, cont: ret });
-            arena.alloc(MComputation::Bind { comp: comp_head, cont: inner })
+            let inner = arena.alloc(MComputation::Bind {
+                comp: comp_tail,
+                cont: ret,
+            });
+            arena.alloc(MComputation::Bind {
+                comp: comp_head,
+                cont: inner,
+            })
         }
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
@@ -722,9 +753,18 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             let var1 = arena.alloc(MValue::Var(1));
             let var0 = arena.alloc(MValue::Var(0));
             let force = arena.alloc(MComputation::Force(var1));
-            let app = arena.alloc(MComputation::App { op: force, arg: var0 });
-            let inner = arena.alloc(MComputation::Bind { comp: comp_arg, cont: app });
-            arena.alloc(MComputation::Bind { comp: comp_op, cont: inner })
+            let app = arena.alloc(MComputation::App {
+                op: force,
+                arg: var0,
+            });
+            let inner = arena.alloc(MComputation::Bind {
+                comp: comp_arg,
+                cont: app,
+            });
+            arena.alloc(MComputation::Bind {
+                comp: comp_op,
+                cont: inner,
+            })
         }
         Expr::BExpr(bexpr) => translate_bexpr(arena, bexpr, tenv),
         Expr::List(elems) => translate_list(arena, &elems, tenv),
@@ -733,9 +773,14 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             // the group's selector function to the member's index, which
             // returns the member's thunk.
             let comp = if let Some((bundle, sel)) = tenv.members.get(&s).cloned() {
-                let force = arena.alloc(MComputation::Force(arena.alloc(MValue::Var(tenv.find(&bundle)))));
+                let force = arena.alloc(MComputation::Force(
+                    arena.alloc(MValue::Var(tenv.find(&bundle))),
+                ));
                 let selector = arena.alloc(MValue::Nat(sel as u64));
-                arena.alloc(MComputation::App { op: force, arg: selector })
+                arena.alloc(MComputation::App {
+                    op: force,
+                    arg: selector,
+                })
             } else {
                 let var = arena.alloc(MValue::Var(tenv.find(&s)));
                 arena.alloc(MComputation::Return(var))
@@ -767,7 +812,11 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
 /// (`Sum(Unit, Unit)`, `Inl` = true, `Inr` = false).
 fn return_bool<'a>(arena: &'a Bump, b: bool) -> &'a MComputation<'a> {
     let unit = arena.alloc(MValue::Unit);
-    let val = if b { arena.alloc(MValue::Inl(unit)) } else { arena.alloc(MValue::Inr(unit)) };
+    let val = if b {
+        arena.alloc(MValue::Inl(unit))
+    } else {
+        arena.alloc(MValue::Inr(unit))
+    };
     arena.alloc(MComputation::Return(val))
 }
 
@@ -776,9 +825,8 @@ fn return_bool<'a>(arena: &'a Bump, b: bool) -> &'a MComputation<'a> {
 /// where `a == b` evaluates to the `Bool` representation of their equality.
 fn nat_eq_thunk<'a>(arena: &'a Bump) -> &'a MValue<'a> {
     let var = |i| -> &'a MValue<'a> { arena.alloc(MValue::Var(i)) };
-    let ifz = |num, zk, sk| -> &'a MComputation<'a> {
-        arena.alloc(MComputation::Ifz { num, zk, sk })
-    };
+    let ifz =
+        |num, zk, sk| -> &'a MComputation<'a> { arena.alloc(MComputation::Ifz { num, zk, sk }) };
 
     // Innermost comparison; environment is [b = 0, a = 1, self = 2].
 
@@ -800,7 +848,10 @@ fn nat_eq_thunk<'a>(arena: &'a Bump) -> &'a MValue<'a> {
             op: arena.alloc(MComputation::Force(var(0))),
             arg: var(1), // b'
         });
-        arena.alloc(MComputation::Bind { comp: apply_a, cont: apply_b })
+        arena.alloc(MComputation::Bind {
+            comp: apply_a,
+            cont: apply_b,
+        })
     };
     let asucc = ifz(var(1), return_bool(arena, false), recurse);
 
@@ -830,9 +881,18 @@ fn nat_eq_comp<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, tenv: &mut TEnv) -> &'
         op: arena.alloc(MComputation::Force(arena.alloc(MValue::Var(0)))),
         arg: arena.alloc(MValue::Var(1)),
     });
-    let recurse = arena.alloc(MComputation::Bind { comp: apply_a, cont: apply_b });
-    let inner = arena.alloc(MComputation::Bind { comp: rhs_comp, cont: recurse });
-    arena.alloc(MComputation::Bind { comp: lhs_comp, cont: inner })
+    let recurse = arena.alloc(MComputation::Bind {
+        comp: apply_a,
+        cont: apply_b,
+    });
+    let inner = arena.alloc(MComputation::Bind {
+        comp: rhs_comp,
+        cont: recurse,
+    });
+    arena.alloc(MComputation::Bind {
+        comp: lhs_comp,
+        cont: inner,
+    })
 }
 
 /// Negates a computation producing a `Bool` by swapping `Inl`/`Inr`.
@@ -905,7 +965,13 @@ fn translate_bexpr<'a>(arena: &'a Bump, bexpr: BExpr, tenv: &mut TEnv) -> &'a MC
 /// For `||`: true short-circuits to true, false evaluates the right operand.
 /// The left operand binds at index 0, then the `Case` payload binds at index 0,
 /// so the right operand is translated under two extra binders.
-fn translate_connective<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, and: bool, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn translate_connective<'a>(
+    arena: &'a Bump,
+    lhs: Expr,
+    rhs: Expr,
+    and: bool,
+    tenv: &mut TEnv,
+) -> &'a MComputation<'a> {
     let lhs_comp = translate_expr(arena, lhs, tenv);
     tenv.bind("_");
     tenv.bind("_");
@@ -922,7 +988,10 @@ fn translate_connective<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, and: bool, te
         inlk,
         inrk,
     });
-    arena.alloc(MComputation::Bind { comp: lhs_comp, cont: case })
+    arena.alloc(MComputation::Bind {
+        comp: lhs_comp,
+        cont: case,
+    })
 }
 
 fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a MComputation<'a> {
@@ -940,8 +1009,14 @@ fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a M
             let var0 = arena.alloc(MValue::Var(0));
             let cons = arena.alloc(MValue::Cons(var1, var0));
             let ret = arena.alloc(MComputation::Return(cons));
-            let inner = arena.alloc(MComputation::Bind { comp: ctail, cont: ret });
-            arena.alloc(MComputation::Bind { comp: chead, cont: inner })
+            let inner = arena.alloc(MComputation::Bind {
+                comp: ctail,
+                cont: ret,
+            });
+            arena.alloc(MComputation::Bind {
+                comp: chead,
+                cont: inner,
+            })
         }
     }
 }
@@ -951,7 +1026,12 @@ fn translate_nat<'a>(arena: &'a Bump, n: usize) -> &'a MComputation<'a> {
     arena.alloc(MComputation::Return(val))
 }
 
-fn translate_pair<'a>(arena: &'a Bump, fst: Expr, snd: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn translate_pair<'a>(
+    arena: &'a Bump,
+    fst: Expr,
+    snd: Expr,
+    tenv: &mut TEnv,
+) -> &'a MComputation<'a> {
     let fst_comp = translate_expr(arena, fst, tenv);
     tenv.bind("_");
     let snd_comp = translate_expr(arena, snd, tenv);
@@ -960,6 +1040,12 @@ fn translate_pair<'a>(arena: &'a Bump, fst: Expr, snd: Expr, tenv: &mut TEnv) ->
     let var0 = arena.alloc(MValue::Var(0));
     let pair = arena.alloc(MValue::Pair(var1, var0));
     let ret = arena.alloc(MComputation::Return(pair));
-    let inner = arena.alloc(MComputation::Bind { comp: snd_comp, cont: ret });
-    arena.alloc(MComputation::Bind { comp: fst_comp, cont: inner })
+    let inner = arena.alloc(MComputation::Bind {
+        comp: snd_comp,
+        cont: ret,
+    });
+    arena.alloc(MComputation::Bind {
+        comp: fst_comp,
+        cont: inner,
+    })
 }

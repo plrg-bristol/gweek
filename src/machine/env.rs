@@ -51,7 +51,11 @@ impl<'a> Env<'a> {
 
     pub fn extend_val(&self, arena: &'a Bump, val: &'a MValue<'a>, env: Env<'a>) -> Env<'a> {
         let mut vclos = VClosure::Clos { val, env };
-        while let VClosure::Clos { val: MValue::Var(i), env: e } = vclos {
+        while let VClosure::Clos {
+            val: MValue::Var(i),
+            env: e,
+        } = vclos
+        {
             vclos = e.lookup(*i).expect("var lookup in extend");
         }
         Env(arena.alloc(EnvInner::Cons(vclos, *self)))

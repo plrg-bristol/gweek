@@ -69,13 +69,17 @@ fn main() {
             "--strict" => strict = true,
             "--first" => first_only = true,
             "--timeout" => {
-                timeout_secs = args.next().unwrap_or_else(|| {
-                    eprintln!("Error: --timeout requires a value\n{USAGE}");
-                    process::exit(1);
-                }).parse().unwrap_or_else(|_| {
-                    eprintln!("Error: --timeout value must be a positive integer\n{USAGE}");
-                    process::exit(1);
-                });
+                timeout_secs = args
+                    .next()
+                    .unwrap_or_else(|| {
+                        eprintln!("Error: --timeout requires a value\n{USAGE}");
+                        process::exit(1);
+                    })
+                    .parse()
+                    .unwrap_or_else(|_| {
+                        eprintln!("Error: --timeout value must be a positive integer\n{USAGE}");
+                        process::exit(1);
+                    });
             }
             "--help" | "-h" => {
                 println!("{USAGE}");
@@ -131,9 +135,14 @@ fn main() {
     let (main_comp, env) = if optimize {
         let comp = machine::optimize::optimize(&arena, main_comp);
         #[cfg(feature = "opt-stats")]
-        let env = machine::optimize::optimize_env_with_stats(&arena, &env, &|a, v| machine::optimize::optimize_val(a, v));
+        let env = machine::optimize::optimize_env_with_stats(&arena, &env, &|a, v| {
+            machine::optimize::optimize_val(a, v)
+        });
         #[cfg(not(feature = "opt-stats"))]
-        let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
+        let env: Vec<_> = env
+            .iter()
+            .map(|v| machine::optimize::optimize_val(&arena, v))
+            .collect();
         (comp, env)
     } else {
         (main_comp, env)
@@ -186,7 +195,7 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 #[cfg(test)]
 mod tests {
     use bumpalo::Bump;
-    use gweek::machine::{self, translate::translate, run, Config, Strategy};
+    use gweek::machine::{self, run, translate::translate, Config, Strategy};
     use gweek::{parser, type_check};
     use std::fs;
 
@@ -222,18 +231,24 @@ mod tests {
     // B10: a pair function argument is destructured and projected.
     #[test]
     fn pair_argument_projection() {
-        assert!(collect_source("f :: Nat * Nat -> Nat\nf (x,y) = y.\n\nf (3,4).\n").contains("> 4"));
-        assert!(collect_source("g :: Nat * Nat -> Nat\ng (x,y) = x.\n\ng (3,4).\n").contains("> 3"));
+        assert!(
+            collect_source("f :: Nat * Nat -> Nat\nf (x,y) = y.\n\nf (3,4).\n").contains("> 4")
+        );
+        assert!(
+            collect_source("g :: Nat * Nat -> Nat\ng (x,y) = x.\n\ng (3,4).\n").contains("> 3")
+        );
     }
 
     // B3: mutually recursive top-level functions translate and evaluate.
     #[test]
     fn mutual_recursion() {
-        let prog = |n: u32| format!(
-            "isEven :: Nat -> Bool\nisEven n = case n of Z -> true | S m -> isOdd m.\n\n\
+        let prog = |n: u32| {
+            format!(
+                "isEven :: Nat -> Bool\nisEven n = case n of Z -> true | S m -> isOdd m.\n\n\
              isOdd :: Nat -> Bool\nisOdd n = case n of Z -> false | S m -> isEven m.\n\n\
              isEven {n}.\n"
-        );
+            )
+        };
         assert!(collect_source(&prog(4)).contains("> true"));
         assert!(collect_source(&prog(3)).contains("> false"));
     }
@@ -254,7 +269,10 @@ mod tests {
         let cfg = test_config(strategy);
         if opt {
             let comp = machine::optimize::optimize(&arena, comp);
-            let env: Vec<_> = env.iter().map(|v| machine::optimize::optimize_val(&arena, v)).collect();
+            let env: Vec<_> = env
+                .iter()
+                .map(|v| machine::optimize::optimize_val(&arena, v))
+                .collect();
             run(&cfg, comp, &env, false)
         } else {
             run(&cfg, comp, &env, false)
@@ -299,7 +317,10 @@ mod tests {
 
     #[test]
     fn find_list_bfs_opt() {
-        assert_eq!(run_example_opt("examples/find_list.gwk", Strategy::Bfs), 462);
+        assert_eq!(
+            run_example_opt("examples/find_list.gwk", Strategy::Bfs),
+            462
+        );
     }
 
     #[test]

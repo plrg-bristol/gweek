@@ -155,9 +155,9 @@ impl Ctx {
                 self.bind_arg(b, tb)?;
                 Ok(())
             }
-            (Arg::Pair(..), ty) => Err(err(format!(
-                "pattern match on pair but expected type {ty}"
-            ))),
+            (Arg::Pair(..), ty) => {
+                Err(err(format!("pattern match on pair but expected type {ty}")))
+            }
         }
     }
 
@@ -192,14 +192,14 @@ impl Ctx {
             Type::Ident(s) => match as_meta(s) {
                 Some(other) => {
                     other == id
-                        || self.subst[other].as_ref().is_some_and(|t| self.occurs(id, t))
+                        || self.subst[other]
+                            .as_ref()
+                            .is_some_and(|t| self.occurs(id, t))
                 }
                 None => false,
             },
             Type::List(t) => self.occurs(id, t),
-            Type::Product(a, b) | Type::Arrow(a, b) => {
-                self.occurs(id, a) || self.occurs(id, b)
-            }
+            Type::Product(a, b) | Type::Arrow(a, b) => self.occurs(id, a) || self.occurs(id, b),
             Type::Any => false,
         }
     }
@@ -213,7 +213,9 @@ impl Ctx {
             }
         }
         if self.occurs(id, ty) {
-            return Err(err(format!("cannot construct infinite type: ?{id} occurs in {ty}")));
+            return Err(err(format!(
+                "cannot construct infinite type: ?{id} occurs in {ty}"
+            )));
         }
         self.subst[id] = Some(ty.clone());
         Ok(())
@@ -312,9 +314,8 @@ fn check_func(ctx: &mut Ctx, name: &str, args: &[Arg], body: &Stmt, ty: &Type) -
     }
 
     let body_type = synth_stmt(ctx, body)?;
-    ctx.unify(&ret_type, &body_type).map_err(|e| {
-        err(format!("in function '{name}': {e}"))
-    })?;
+    ctx.unify(&ret_type, &body_type)
+        .map_err(|e| err(format!("in function '{name}': {e}")))?;
 
     // Unbind arguments (in reverse order)
     for arg in args.iter().rev() {
@@ -349,7 +350,8 @@ fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
         Stmt::Equate { lhs, rhs, body } => {
             let lt = synth_expr(ctx, lhs)?;
             let rt = synth_expr(ctx, rhs)?;
-            ctx.unify(&lt, &rt).map_err(|e| err(format!("in equate: {e}")))?;
+            ctx.unify(&lt, &rt)
+                .map_err(|e| err(format!("in equate: {e}")))?;
             synth_stmt(ctx, body)
         }
 
@@ -360,7 +362,8 @@ fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
             for e in exprs {
                 let t = synth_expr(ctx, e)?;
                 if let Some(prev) = &ty {
-                    ctx.unify(prev, &t).map_err(|e| err(format!("in choice: {e}")))?;
+                    ctx.unify(prev, &t)
+                        .map_err(|e| err(format!("in choice: {e}")))?;
                 } else {
                     ty = Some(t);
                 }
@@ -376,7 +379,8 @@ fn synth_stmt(ctx: &mut Ctx, stmt: &Stmt) -> TResult {
                 .map_err(|e| err(format!("if condition: {e}")))?;
             let tt = synth_stmt(ctx, then)?;
             let et = synth_stmt(ctx, r#else)?;
-            ctx.unify(&tt, &et).map_err(|e| err(format!("if branches: {e}")))?;
+            ctx.unify(&tt, &et)
+                .map_err(|e| err(format!("if branches: {e}")))?;
             Ok(tt)
         }
     }
@@ -390,7 +394,9 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
             ctx.unify(&Type::Ident("Nat".to_string()), &scrut_type)
                 .map_err(|e| err(format!("case scrutinee: {e}")))?;
 
-            let nat_case = cases.nat_case.as_ref()
+            let nat_case = cases
+                .nat_case
+                .as_ref()
                 .ok_or_else(|| err("nat case missing branches"))?;
 
             let mut result_type: Option<Type> = None;
@@ -405,7 +411,8 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
                 let t = synth_stmt(ctx, &sk.body)?;
                 ctx.unbind();
                 if let Some(prev) = &result_type {
-                    ctx.unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
+                    ctx.unify(prev, &t)
+                        .map_err(|e| err(format!("case branches: {e}")))?;
                 } else {
                     result_type = Some(t);
                 }
@@ -417,12 +424,12 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
         Some(CasesType::List) => {
             let elem_type = match &scrut_type {
                 Type::List(t) => *t.clone(),
-                _ => return Err(err(format!(
-                    "list case on non-list type {scrut_type}"
-                ))),
+                _ => return Err(err(format!("list case on non-list type {scrut_type}"))),
             };
 
-            let list_case = cases.list_case.as_ref()
+            let list_case = cases
+                .list_case
+                .as_ref()
                 .ok_or_else(|| err("list case missing branches"))?;
 
             let mut result_type: Option<Type> = None;
@@ -439,7 +446,8 @@ fn synth_case(ctx: &mut Ctx, scrutinee: &Expr, cases: &Cases) -> TResult {
                 ctx.unbind();
                 ctx.unbind();
                 if let Some(prev) = &result_type {
-                    ctx.unify(prev, &t).map_err(|e| err(format!("case branches: {e}")))?;
+                    ctx.unify(prev, &t)
+                        .map_err(|e| err(format!("case branches: {e}")))?;
                 } else {
                     result_type = Some(t);
                 }
@@ -474,7 +482,8 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             let ht = synth_expr(ctx, head)?;
             let tt = synth_expr(ctx, tail)?;
             let expected_list = Type::List(Box::new(ht.clone()));
-            ctx.unify(&expected_list, &tt).map_err(|e| err(format!("in cons: {e}")))?;
+            ctx.unify(&expected_list, &tt)
+                .map_err(|e| err(format!("in cons: {e}")))?;
             Ok(expected_list)
         }
 
@@ -485,7 +494,8 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             let first_type = synth_expr(ctx, &elems[0])?;
             for e in &elems[1..] {
                 let t = synth_expr(ctx, e)?;
-                ctx.unify(&first_type, &t).map_err(|e| err(format!("in list literal: {e}")))?;
+                ctx.unify(&first_type, &t)
+                    .map_err(|e| err(format!("in list literal: {e}")))?;
             }
             Ok(Type::List(Box::new(first_type)))
         }
@@ -508,9 +518,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             }
         }
 
-        Expr::Lambda(..) => {
-            Err(err("cannot infer type of lambda; needs a type annotation"))
-        }
+        Expr::Lambda(..) => Err(err("cannot infer type of lambda; needs a type annotation")),
 
         Expr::BExpr(bexpr) => synth_bexpr(ctx, bexpr),
 
@@ -528,10 +536,13 @@ fn check_expr(ctx: &mut Ctx, expr: &Expr, expected: &Type) -> TResult<()> {
             // (named arguments and projection work); functions, which have a
             // declared signature, do support pair arguments.
             if matches!(arg, Arg::Pair(..)) {
-                return Err(err("pair-pattern lambda arguments are not supported; bind a name and project"));
+                return Err(err(
+                    "pair-pattern lambda arguments are not supported; bind a name and project",
+                ));
             }
             ctx.bind_arg(arg, param)?;
-            let result = check_stmt(ctx, body, ret).map_err(|e| err(format!("in lambda body: {e}")));
+            let result =
+                check_stmt(ctx, body, ret).map_err(|e| err(format!("in lambda body: {e}")));
             ctx.unbind_arg(arg);
             result
         }
@@ -569,8 +580,10 @@ fn synth_bexpr(ctx: &mut Ctx, bexpr: &BExpr) -> TResult {
             let nat = Type::Ident("Nat".to_string());
             let at = synth_expr(ctx, a)?;
             let bt = synth_expr(ctx, b)?;
-            ctx.unify(&nat, &at).map_err(|e| err(format!("in comparison: {e}")))?;
-            ctx.unify(&nat, &bt).map_err(|e| err(format!("in comparison: {e}")))?;
+            ctx.unify(&nat, &at)
+                .map_err(|e| err(format!("in comparison: {e}")))?;
+            ctx.unify(&nat, &bt)
+                .map_err(|e| err(format!("in comparison: {e}")))?;
             Ok(Type::Ident("Bool".to_string()))
         }
         BExpr::And(a, b) | BExpr::Or(a, b) => {
@@ -618,12 +631,10 @@ impl fmt::Display for Type {
             Type::Ident(s) => write!(f, "{s}"),
             Type::List(t) => write!(f, "[{t}]"),
             Type::Product(a, b) => write!(f, "{a} * {b}"),
-            Type::Arrow(a, b) => {
-                match **a {
-                    Type::Arrow(..) => write!(f, "({a}) -> {b}"),
-                    _ => write!(f, "{a} -> {b}"),
-                }
-            }
+            Type::Arrow(a, b) => match **a {
+                Type::Arrow(..) => write!(f, "({a}) -> {b}"),
+                _ => write!(f, "{a} -> {b}"),
+            },
             Type::Any => write!(f, "_"),
         }
     }

@@ -65,7 +65,9 @@ impl Display for Closed {
             Closed::Succ(_) => match self.to_nat() {
                 Some(n) => write!(f, "{}", n),
                 None => {
-                    let Closed::Succ(v) = self else { unreachable!() };
+                    let Closed::Succ(v) = self else {
+                        unreachable!()
+                    };
                     write!(f, "S ({})", v)
                 }
             },
@@ -73,7 +75,9 @@ impl Display for Closed {
             Closed::Cons(..) => match self.to_list() {
                 Some(items) => write!(f, "[{}]", items.join(", ")),
                 None => {
-                    let Closed::Cons(v, w) = self else { unreachable!() };
+                    let Closed::Cons(v, w) = self else {
+                        unreachable!()
+                    };
                     write!(f, "({} : {})", v, w)
                 }
             },
@@ -136,14 +140,12 @@ impl<'a> VClosure<'a> {
         match self.close_head(lenv, senv)? {
             VClosure::Clos { val, env } => match val {
                 MValue::Succ(v) => VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident),
-                MValue::Cons(v, w) => Ok(
-                    VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident)?
-                        || VClosure::mk_clos(w, env).occurs_lvar(lenv, senv, ident)?,
-                ),
-                MValue::Pair(a, b) => Ok(
-                    VClosure::mk_clos(a, env).occurs_lvar(lenv, senv, ident)?
-                        || VClosure::mk_clos(b, env).occurs_lvar(lenv, senv, ident)?,
-                ),
+                MValue::Cons(v, w) => Ok(VClosure::mk_clos(v, env)
+                    .occurs_lvar(lenv, senv, ident)?
+                    || VClosure::mk_clos(w, env).occurs_lvar(lenv, senv, ident)?),
+                MValue::Pair(a, b) => Ok(VClosure::mk_clos(a, env)
+                    .occurs_lvar(lenv, senv, ident)?
+                    || VClosure::mk_clos(b, env).occurs_lvar(lenv, senv, ident)?),
                 MValue::Inl(v) | MValue::Inr(v) => {
                     VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident)
                 }
@@ -158,7 +160,11 @@ impl<'a> VClosure<'a> {
         }
     }
 
-    pub fn close_head(self, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Result<VClosure<'a>, SuspAt<'a>> {
+    pub fn close_head(
+        self,
+        lenv: &LogicEnv<'a>,
+        senv: &SuspEnv<'a>,
+    ) -> Result<VClosure<'a>, SuspAt<'a>> {
         let mut vclos = self;
         loop {
             vclos = match &vclos {
