@@ -25,7 +25,7 @@ pub enum BExpr {
     Not(Box<Expr>),
 }
 
-/// Expressions: data and application
+/// Expressions: data and application, the control and constraint forms
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     Zero,
@@ -35,61 +35,37 @@ pub enum Expr {
     App(Box<Expr>, Box<Expr>),
     BExpr(BExpr),
     List(Vec<Expr>),
-    Lambda(Arg, Box<Stmt>),
+    Lambda(Arg, Box<Expr>),
     Ident(String),
     Nat(usize),
     Bool(bool),
     Pair(Box<Expr>, Box<Expr>),
-    Stmt(Box<Stmt>),
-}
-
-impl Expr {
-    pub fn strip_parentheses(self) -> Expr {
-        let mut e = self;
-        while let Expr::Stmt(stmt) = e {
-            match *stmt {
-                Stmt::Expr(expr) => e = expr,
-                other => {
-                    e = Expr::Stmt(Box::new(other));
-                    break;
-                }
-            }
-        }
-
-        e
-    }
-}
-
-/// Statements: the control and constraint forms
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Stmt {
     If {
-        cond: Box<Stmt>,
-        then: Box<Stmt>,
-        r#else: Box<Stmt>,
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        r#else: Box<Expr>,
     },
     Let {
         var: String,
-        val: Box<Stmt>,
-        body: Box<Stmt>,
+        val: Box<Expr>,
+        body: Box<Expr>,
     },
     Exists {
         var: String,
         r#type: Type,
-        body: Box<Stmt>,
+        body: Box<Expr>,
     },
     Equate {
-        lhs: Expr,
-        rhs: Expr,
-        body: Box<Stmt>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        body: Box<Expr>,
     },
     Choice(Vec<Expr>),
     Case {
-        expr: Expr,
+        expr: Box<Expr>,
         cases: Cases,
     },
     Fail,
-    Expr(Expr),
 }
 
 /// Top-level declarations
@@ -102,9 +78,9 @@ pub enum Decl {
     Func {
         name: String,
         args: Vec<Arg>,
-        body: Stmt,
+        body: Expr,
     },
-    Stmt(Stmt),
+    Expr(Expr),
 }
 
 /// Case arms: the accumulator a `case` arm-list folds into. Its building methods reject duplicate
@@ -124,19 +100,19 @@ pub enum CasesType {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CasesNat {
-    pub zk: Option<Box<Stmt>>,
+    pub zk: Option<Box<Expr>>,
     pub sk: Option<CasesNatSucc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CasesNatSucc {
     pub var: String,
-    pub body: Box<Stmt>,
+    pub body: Box<Expr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CasesList {
-    pub nilk: Option<Box<Stmt>>,
+    pub nilk: Option<Box<Expr>>,
     pub consk: Option<CasesListCons>,
 }
 
@@ -144,7 +120,7 @@ pub struct CasesList {
 pub struct CasesListCons {
     pub x: String,
     pub xs: String,
-    pub body: Box<Stmt>,
+    pub body: Box<Expr>,
 }
 
 impl Default for Cases {
@@ -185,7 +161,7 @@ impl Cases {
         Ok(())
     }
 
-    pub fn set_nat_zero(&mut self, body: Stmt) -> Result<(), &'static str> {
+    pub fn set_nat_zero(&mut self, body: Expr) -> Result<(), &'static str> {
         self.initialize_nat_case();
         if self.nat_case.as_ref().unwrap().zk.is_some() {
             return Err("duplicate zero case");
@@ -194,7 +170,7 @@ impl Cases {
         Ok(())
     }
 
-    pub fn set_nat_succ(&mut self, var: String, body: Stmt) -> Result<(), &'static str> {
+    pub fn set_nat_succ(&mut self, var: String, body: Expr) -> Result<(), &'static str> {
         self.initialize_nat_case();
         if self.nat_case.as_ref().unwrap().sk.is_some() {
             return Err("duplicate successor case");
@@ -206,7 +182,7 @@ impl Cases {
         Ok(())
     }
 
-    pub fn set_list_nil(&mut self, body: Stmt) -> Result<(), &'static str> {
+    pub fn set_list_nil(&mut self, body: Expr) -> Result<(), &'static str> {
         self.initialize_list_case();
         if self.list_case.as_ref().unwrap().nilk.is_some() {
             return Err("duplicate nil case");
@@ -215,7 +191,7 @@ impl Cases {
         Ok(())
     }
 
-    pub fn set_list_cons(&mut self, x: String, xs: String, body: Stmt) -> Result<(), &'static str> {
+    pub fn set_list_cons(&mut self, x: String, xs: String, body: Expr) -> Result<(), &'static str> {
         self.initialize_list_case();
         if self.list_case.as_ref().unwrap().consk.is_some() {
             return Err("duplicate cons case");
@@ -241,33 +217,5 @@ impl CasesList {
             nilk: None,
             consk: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Regression: a parenthesised non-`Stmt::Expr` (e.g. `(let x = 0 in x)` used
-    // as a case pattern) reaches the catch-all arm. It must return the wrapper
-    // unchanged, not rewrap the same value and loop forever.
-    #[test]
-    fn strip_parentheses_terminates_on_non_expr_stmt() {
-        let inner = Stmt::Let {
-            var: "x".to_string(),
-            val: Box::new(Stmt::Expr(Expr::Zero)),
-            body: Box::new(Stmt::Expr(Expr::Ident("x".to_string()))),
-        };
-        let wrapped = Expr::Stmt(Box::new(inner.clone()));
-        assert_eq!(wrapped.strip_parentheses(), Expr::Stmt(Box::new(inner)));
-    }
-
-    // Nested `((e))` wrappers are stripped down to the inner expression.
-    #[test]
-    fn strip_parentheses_unwraps_nested_expr_stmts() {
-        let nested = Expr::Stmt(Box::new(Stmt::Expr(Expr::Stmt(Box::new(Stmt::Expr(
-            Expr::Nat(5),
-        ))))));
-        assert_eq!(nested.strip_parentheses(), Expr::Nat(5));
     }
 }

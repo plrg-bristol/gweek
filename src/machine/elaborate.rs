@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
-use crate::parser::ast::{Arg, BExpr, CasesType, Decl, Expr, Stmt, Type};
+use crate::parser::ast::{Arg, BExpr, CasesType, Decl, Expr, Type};
 
 use super::mterms::{MComputation, MValue};
 
@@ -99,8 +99,8 @@ pub fn elaborate<'a>(
     }
 
     for decl in stmts {
-        if let Decl::Stmt(stmt) = decl {
-            main = Some(elaborate_stmt(arena, stmt, &mut tenv));
+        if let Decl::Expr(expr) = decl {
+            main = Some(elaborate_expr(arena, expr, &mut tenv));
         }
     }
 
@@ -111,7 +111,7 @@ pub fn elaborate<'a>(
 struct Func {
     name: String,
     args: Vec<Arg>,
-    body: Stmt,
+    body: Expr,
 }
 
 /// Peels the first `n` argument types off a function signature.
@@ -150,7 +150,7 @@ fn order_functions(ast: Vec<Decl>) -> (Vec<Vec<Func>>, Vec<Decl>) {
                 pending_type = None;
                 funcs.push(Func { name, args, body });
             }
-            Decl::Stmt(_) => {
+            Decl::Expr(_) => {
                 if let Some(t) = pending_type.take() {
                     stmts.push(t);
                 }
@@ -170,7 +170,7 @@ fn order_functions(ast: Vec<Decl>) -> (Vec<Vec<Func>>, Vec<Decl>) {
     let n = funcs.len();
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (i, f) in funcs.iter().enumerate() {
-        for r in collect_refs_stmt(&f.body, &func_names) {
+        for r in collect_refs_expr(&f.body, &func_names) {
             if let Some(&j) = name_to_idx.get(&r) {
                 if j != i {
                     deps[i].push(j);
@@ -255,56 +255,10 @@ fn tarjan_scc(deps: &[Vec<usize>]) -> Vec<Vec<usize>> {
 
 // --- AST walkers for dependency collection ---
 
-fn collect_refs_stmt(stmt: &Stmt, names: &HashSet<String>) -> HashSet<String> {
+fn collect_refs_expr(expr: &Expr, names: &HashSet<String>) -> HashSet<String> {
     let mut refs = HashSet::new();
-    walk_stmt(stmt, names, &mut refs);
+    walk_expr(expr, names, &mut refs);
     refs
-}
-
-fn walk_stmt(stmt: &Stmt, names: &HashSet<String>, refs: &mut HashSet<String>) {
-    match stmt {
-        Stmt::Expr(e) => walk_expr(e, names, refs),
-        Stmt::Let { val, body, .. } => {
-            walk_stmt(val, names, refs);
-            walk_stmt(body, names, refs);
-        }
-        Stmt::Fail => (),
-        Stmt::Exists { body, .. } => walk_stmt(body, names, refs),
-        Stmt::Equate { lhs, rhs, body } => {
-            walk_expr(lhs, names, refs);
-            walk_expr(rhs, names, refs);
-            walk_stmt(body, names, refs);
-        }
-        Stmt::Choice(exprs) => {
-            for e in exprs {
-                walk_expr(e, names, refs);
-            }
-        }
-        Stmt::Case { expr, cases } => {
-            walk_expr(expr, names, refs);
-            if let Some(nc) = &cases.nat_case {
-                if let Some(zk) = &nc.zk {
-                    walk_stmt(zk, names, refs);
-                }
-                if let Some(sk) = &nc.sk {
-                    walk_stmt(&sk.body, names, refs);
-                }
-            }
-            if let Some(lc) = &cases.list_case {
-                if let Some(nk) = &lc.nilk {
-                    walk_stmt(nk, names, refs);
-                }
-                if let Some(ck) = &lc.consk {
-                    walk_stmt(&ck.body, names, refs);
-                }
-            }
-        }
-        Stmt::If { cond, then, r#else } => {
-            walk_stmt(cond, names, refs);
-            walk_stmt(then, names, refs);
-            walk_stmt(r#else, names, refs);
-        }
-    }
 }
 
 fn walk_expr(expr: &Expr, names: &HashSet<String>, refs: &mut HashSet<String>) {
@@ -319,14 +273,52 @@ fn walk_expr(expr: &Expr, names: &HashSet<String>, refs: &mut HashSet<String>) {
             walk_expr(b, names, refs);
         }
         Expr::Succ(e) => walk_expr(e, names, refs),
-        Expr::Lambda(_, body) => walk_stmt(body, names, refs),
+        Expr::Lambda(_, body) => walk_expr(body, names, refs),
         Expr::List(es) => {
             for e in es {
                 walk_expr(e, names, refs);
             }
         }
         Expr::BExpr(b) => walk_bexpr(b, names, refs),
-        Expr::Stmt(s) => walk_stmt(s, names, refs),
+        Expr::Let { val, body, .. } => {
+            walk_expr(val, names, refs);
+            walk_expr(body, names, refs);
+        }
+        Expr::Exists { body, .. } => walk_expr(body, names, refs),
+        Expr::Equate { lhs, rhs, body } => {
+            walk_expr(lhs, names, refs);
+            walk_expr(rhs, names, refs);
+            walk_expr(body, names, refs);
+        }
+        Expr::Choice(exprs) => {
+            for e in exprs {
+                walk_expr(e, names, refs);
+            }
+        }
+        Expr::Case { expr, cases } => {
+            walk_expr(expr, names, refs);
+            if let Some(nc) = &cases.nat_case {
+                if let Some(zk) = &nc.zk {
+                    walk_expr(zk, names, refs);
+                }
+                if let Some(sk) = &nc.sk {
+                    walk_expr(&sk.body, names, refs);
+                }
+            }
+            if let Some(lc) = &cases.list_case {
+                if let Some(nk) = &lc.nilk {
+                    walk_expr(nk, names, refs);
+                }
+                if let Some(ck) = &lc.consk {
+                    walk_expr(&ck.body, names, refs);
+                }
+            }
+        }
+        Expr::If { cond, then, r#else } => {
+            walk_expr(cond, names, refs);
+            walk_expr(then, names, refs);
+            walk_expr(r#else, names, refs);
+        }
         _ => {}
     }
 }
@@ -348,12 +340,12 @@ fn elaborate_func<'a>(
     name: &str,
     args: Vec<Arg>,
     arg_types: &[Option<Type>],
-    body: Stmt,
+    body: Expr,
     tenv: &mut TEnv,
 ) -> &'a MValue<'a> {
     tenv.bind(name);
     let comp = if args.is_empty() {
-        elaborate_stmt(arena, body, tenv)
+        elaborate_expr(arena, body, tenv)
     } else {
         build_args(arena, &args, arg_types, &body, tenv)
     };
@@ -401,7 +393,7 @@ fn elaborate_group<'a>(
         }
         let arg_types = arg_types(sigs.get(&f.name), f.args.len());
         let comp = if f.args.is_empty() {
-            elaborate_stmt(arena, f.body.clone(), tenv)
+            elaborate_expr(arena, f.body.clone(), tenv)
         } else {
             build_args(arena, &f.args, &arg_types, &f.body, tenv)
         };
@@ -440,11 +432,11 @@ fn build_args<'a>(
     arena: &'a Bump,
     args: &[Arg],
     arg_types: &[Option<Type>],
-    body: &Stmt,
+    body: &Expr,
     tenv: &mut TEnv,
 ) -> &'a MComputation<'a> {
     match args {
-        [] => elaborate_stmt(arena, body.clone(), tenv),
+        [] => elaborate_expr(arena, body.clone(), tenv),
         [arg, rest @ ..] => {
             let rest_types = &arg_types[1..];
             let lam_body = match arg {
@@ -477,7 +469,7 @@ fn curry<'a>(
     arena: &'a Bump,
     rest: &[Arg],
     rest_types: &[Option<Type>],
-    body: &Stmt,
+    body: &Expr,
     tenv: &mut TEnv,
 ) -> &'a MComputation<'a> {
     if rest.is_empty() {
@@ -580,19 +572,19 @@ fn elaborate_vtype(ptype: Type) -> ValueType {
     }
 }
 
-fn elaborate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComputation<'a> {
-    match stmt {
-        Stmt::If { cond, then, r#else } => {
-            let comp = elaborate_stmt(arena, *cond, tenv);
+fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+    match expr {
+        Expr::If { cond, then, r#else } => {
+            let comp = elaborate_expr(arena, *cond, tenv);
             tenv.bind("_");
             let var0 = arena.alloc(MValue::Var(0));
             // Inl = true → then branch (bind unit, discard it)
             tenv.bind("_");
-            let then_comp = elaborate_stmt(arena, *then, tenv);
+            let then_comp = elaborate_expr(arena, *then, tenv);
             tenv.unbind();
             // Inr = false → else branch (bind unit, discard it)
             tenv.bind("_");
-            let else_comp = elaborate_stmt(arena, *r#else, tenv);
+            let else_comp = elaborate_expr(arena, *r#else, tenv);
             tenv.unbind();
             let case = arena.alloc(MComputation::Case {
                 sum: var0,
@@ -602,28 +594,28 @@ fn elaborate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
             tenv.unbind();
             arena.alloc(MComputation::Bind { comp, cont: case })
         }
-        Stmt::Let { var, val, body } => {
-            let comp = elaborate_stmt(arena, *val, tenv);
+        Expr::Let { var, val, body } => {
+            let comp = elaborate_expr(arena, *val, tenv);
             tenv.bind(&var);
-            let cont = elaborate_stmt(arena, *body, tenv);
+            let cont = elaborate_expr(arena, *body, tenv);
             tenv.unbind();
             arena.alloc(MComputation::Bind { comp, cont })
         }
-        Stmt::Exists { var, r#type, body } => {
+        Expr::Exists { var, r#type, body } => {
             tenv.bind(&var);
-            let body = elaborate_stmt(arena, *body, tenv);
+            let body = elaborate_expr(arena, *body, tenv);
             tenv.unbind();
             arena.alloc(MComputation::Exists {
                 ptype: elaborate_vtype(r#type),
                 body,
             })
         }
-        Stmt::Equate { lhs, rhs, body } => {
-            let lhs_comp = elaborate_expr(arena, lhs, tenv);
+        Expr::Equate { lhs, rhs, body } => {
+            let lhs_comp = elaborate_expr(arena, *lhs, tenv);
             tenv.bind("_");
-            let rhs_comp = elaborate_expr(arena, rhs, tenv);
+            let rhs_comp = elaborate_expr(arena, *rhs, tenv);
             tenv.bind("_");
-            let body_comp = elaborate_stmt(arena, *body, tenv);
+            let body_comp = elaborate_expr(arena, *body, tenv);
             tenv.unbind();
             tenv.unbind();
             let var0 = arena.alloc(MValue::Var(0));
@@ -642,8 +634,8 @@ fn elaborate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
                 cont: inner_bind,
             })
         }
-        Stmt::Fail => arena.alloc(MComputation::Choice(&[])),
-        Stmt::Choice(exprs) => {
+        Expr::Fail => arena.alloc(MComputation::Choice(&[])),
+        Expr::Choice(exprs) => {
             let choices: Vec<_> = exprs
                 .into_iter()
                 .map(|e| elaborate_expr(arena, e, tenv))
@@ -651,26 +643,26 @@ fn elaborate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
             let slice = arena.alloc_slice_copy(&choices);
             arena.alloc(MComputation::Choice(slice))
         }
-        Stmt::Case { expr, cases } => {
+        Expr::Case { expr, cases } => {
             tenv.bind("_");
             let var0 = arena.alloc(MValue::Var(0));
             let cont = match cases.r#type.unwrap() {
                 CasesType::Nat => {
                     let nat_case = cases.nat_case.unwrap();
-                    let zk = elaborate_stmt(arena, *nat_case.zk.unwrap(), tenv);
+                    let zk = elaborate_expr(arena, *nat_case.zk.unwrap(), tenv);
                     let succ_case = nat_case.sk.unwrap();
                     tenv.bind(&succ_case.var);
-                    let sk = elaborate_stmt(arena, *succ_case.body, tenv);
+                    let sk = elaborate_expr(arena, *succ_case.body, tenv);
                     tenv.unbind();
                     arena.alloc(MComputation::Ifz { num: var0, zk, sk })
                 }
                 CasesType::List => {
                     let list_case = cases.list_case.unwrap();
-                    let nilk = elaborate_stmt(arena, *list_case.nilk.unwrap(), tenv);
+                    let nilk = elaborate_expr(arena, *list_case.nilk.unwrap(), tenv);
                     let cons_case = list_case.consk.unwrap();
                     tenv.bind(&cons_case.x);
                     tenv.bind(&cons_case.xs);
-                    let consk = elaborate_stmt(arena, *cons_case.body, tenv);
+                    let consk = elaborate_expr(arena, *cons_case.body, tenv);
                     tenv.unbind();
                     tenv.unbind();
                     arena.alloc(MComputation::Match {
@@ -681,15 +673,9 @@ fn elaborate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
                 }
             };
             tenv.unbind();
-            let comp = elaborate_expr(arena, expr, tenv);
+            let comp = elaborate_expr(arena, *expr, tenv);
             arena.alloc(MComputation::Bind { comp, cont })
         }
-        Stmt::Expr(e) => elaborate_expr(arena, e, tenv),
-    }
-}
-
-fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
-    match expr {
         Expr::Zero => {
             let zero = arena.alloc(MValue::Nat(0));
             arena.alloc(MComputation::Return(zero))
@@ -726,7 +712,7 @@ fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
                 tenv.bind(&var);
-                let body = elaborate_stmt(arena, *body, tenv);
+                let body = elaborate_expr(arena, *body, tenv);
                 tenv.unbind();
                 let lam = arena.alloc(MComputation::Lambda { body });
                 let thunk = arena.alloc(MValue::Thunk(lam));
@@ -802,7 +788,6 @@ fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             arena.alloc(MComputation::Return(val))
         }
         Expr::Pair(lhs, rhs) => elaborate_pair(arena, *lhs, *rhs, tenv),
-        Expr::Stmt(s) => elaborate_stmt(arena, *s, tenv),
     }
 }
 
@@ -907,10 +892,6 @@ fn negate_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>) -> &'a MComputat
 fn const_bool(expr: &Expr) -> Option<bool> {
     match expr {
         Expr::Bool(b) => Some(*b),
-        Expr::Stmt(s) => match &**s {
-            Stmt::Expr(e) => const_bool(e),
-            _ => None,
-        },
         Expr::BExpr(b) => match b {
             BExpr::Eq(a, b) => Some(const_eq(a, b)?),
             BExpr::NEq(a, b) => Some(!const_eq(a, b)?),
@@ -934,10 +915,6 @@ fn const_nat(expr: &Expr) -> Option<u64> {
         Expr::Zero => Some(0),
         Expr::Nat(n) => Some(*n as u64),
         Expr::Succ(e) => Some(const_nat(e)? + 1),
-        Expr::Stmt(s) => match &**s {
-            Stmt::Expr(e) => const_nat(e),
-            _ => None,
-        },
         _ => None,
     }
 }

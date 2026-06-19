@@ -1,13 +1,15 @@
 //! # The grammar
 //!
 //! The chumsky grammar behind [`parse`]. Having stripped the `--` comments, it is a stack of
-//! `recursive` parsers — `program`, `declaration`, `statement_parser`, `expression`,
-//! `primary_expr` — with `type_parser` binding `*` more tightly than `->`. A case pattern that is
-//! neither `Nat`- nor `List`-shaped becomes a recoverable parse error, never a panic.
+//! `recursive` parsers — `program`, `declaration`, `expression`, `application`, `primary_expr` —
+//! with `type_parser` binding `*` more tightly than `->`. The three expression tiers layer
+//! precedence: the binding and control forms (`if`, `let`, `case`, …) sit outermost, application
+//! and operators in the middle, atoms innermost. A case pattern that is neither `Nat`- nor
+//! `List`-shaped becomes a recoverable parse error, never a panic.
 
 use chumsky::prelude::*;
 
-use crate::parser::ast::{Arg, BExpr, Cases, CasesType, Decl, Expr, Stmt, Type};
+use crate::parser::ast::{Arg, BExpr, Cases, CasesType, Decl, Expr, Type};
 
 pub fn parse(src: &str) -> Result<Vec<Decl>, Vec<Simple<char>>> {
     let src = strip_comments(src);
@@ -109,28 +111,26 @@ fn declaration() -> impl Parser<char, Decl, Error = Simple<char>> {
     let func = ident()
         .then(argument().repeated())
         .then_ignore(just('=').padded())
-        .then(statement_parser())
+        .then(expression())
         .then_ignore(just('.').padded())
         .map(|((name, args), body)| Decl::Func { name, args, body });
 
-    let bare_stmt = statement_parser()
-        .then_ignore(just('.').padded())
-        .map(Decl::Stmt);
+    let bare_expr = expression().then_ignore(just('.').padded()).map(Decl::Expr);
 
-    choice((func_type, func, bare_stmt))
+    choice((func_type, func, bare_expr))
 }
 
-fn statement_parser() -> impl Parser<char, Stmt, Error = Simple<char>> + Clone {
-    recursive(|stmt| {
-        let expr = expression(stmt.clone());
+fn expression() -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
+    recursive(|expr| {
+        let app = application(expr.clone());
 
         let if_ = keyword("if")
-            .ignore_then(stmt.clone())
+            .ignore_then(expr.clone())
             .then_ignore(keyword("then"))
-            .then(stmt.clone())
+            .then(expr.clone())
             .then_ignore(keyword("else"))
-            .then(stmt.clone())
-            .map(|((cond, then), else_)| Stmt::If {
+            .then(expr.clone())
+            .map(|((cond, then), else_)| Expr::If {
                 cond: Box::new(cond),
                 then: Box::new(then),
                 r#else: Box::new(else_),
@@ -139,10 +139,10 @@ fn statement_parser() -> impl Parser<char, Stmt, Error = Simple<char>> + Clone {
         let let_ = keyword("let")
             .ignore_then(ident())
             .then_ignore(just('=').padded())
-            .then(stmt.clone())
+            .then(expr.clone())
             .then_ignore(keyword("in"))
-            .then(stmt.clone())
-            .map(|((var, val), body)| Stmt::Let {
+            .then(expr.clone())
+            .map(|((var, val), body)| Expr::Let {
                 var,
                 val: Box::new(val),
                 body: Box::new(body),
@@ -153,44 +153,47 @@ fn statement_parser() -> impl Parser<char, Stmt, Error = Simple<char>> + Clone {
             .then_ignore(sym("::"))
             .then(type_parser())
             .then_ignore(just('.').padded())
-            .then(stmt.clone())
-            .map(|((var, ty), body)| Stmt::Exists {
+            .then(expr.clone())
+            .map(|((var, ty), body)| Expr::Exists {
                 var,
                 r#type: ty,
                 body: Box::new(body),
             });
 
         let case = keyword("case")
-            .ignore_then(expr.clone())
+            .ignore_then(app.clone())
             .then_ignore(keyword("of"))
-            .then(cases_parser(expr.clone(), stmt.clone()))
-            .map(|(e, cases)| Stmt::Case { expr: e, cases });
+            .then(cases_parser(app.clone(), expr.clone()))
+            .map(|(e, cases)| Expr::Case {
+                expr: Box::new(e),
+                cases,
+            });
 
-        let fail = keyword("fail").to(Stmt::Fail);
+        let fail = keyword("fail").to(Expr::Fail);
 
-        let expr_stmt = expr
+        let app_expr = app
             .clone()
             .then(
                 choice((
                     sym("=:=")
-                        .ignore_then(expr.clone())
+                        .ignore_then(app.clone())
                         .then_ignore(just('.').padded())
-                        .then(stmt)
+                        .then(expr)
                         .map(
-                            |(rhs, body): (Expr, Stmt)| -> Box<dyn FnOnce(Expr) -> Stmt> {
-                                Box::new(move |lhs| Stmt::Equate {
-                                    lhs,
-                                    rhs,
+                            |(rhs, body): (Expr, Expr)| -> Box<dyn FnOnce(Expr) -> Expr> {
+                                Box::new(move |lhs| Expr::Equate {
+                                    lhs: Box::new(lhs),
+                                    rhs: Box::new(rhs),
                                     body: Box::new(body),
                                 })
                             },
                         ),
-                    sym("<>").ignore_then(expr.separated_by(sym("<>"))).map(
-                        |rest: Vec<Expr>| -> Box<dyn FnOnce(Expr) -> Stmt> {
+                    sym("<>").ignore_then(app.separated_by(sym("<>"))).map(
+                        |rest: Vec<Expr>| -> Box<dyn FnOnce(Expr) -> Expr> {
                             Box::new(move |first| {
                                 let mut all = vec![first];
                                 all.extend(rest);
-                                Stmt::Choice(all)
+                                Expr::Choice(all)
                             })
                         },
                     ),
@@ -199,24 +202,24 @@ fn statement_parser() -> impl Parser<char, Stmt, Error = Simple<char>> + Clone {
             )
             .map(|(e, cont)| match cont {
                 Some(f) => f(e),
-                None => Stmt::Expr(e),
+                None => e,
             });
 
-        choice((if_, let_, exists, case, fail, expr_stmt))
+        choice((if_, let_, exists, case, fail, app_expr))
     })
 }
 
-fn expression(
-    stmt: impl Parser<char, Stmt, Error = Simple<char>> + Clone + 'static,
+fn application(
+    expr: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
 ) -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
-    recursive(move |expr: Recursive<'_, char, Expr, Simple<char>>| {
-        let primary = primary_expr(stmt.clone(), expr.clone());
+    recursive(move |app: Recursive<'_, char, Expr, Simple<char>>| {
+        let primary = primary_expr(expr.clone(), app.clone());
 
         let lambda = just('\\')
             .padded()
             .ignore_then(argument())
             .then_ignore(just('.').padded())
-            .then(stmt.clone())
+            .then(expr.clone())
             .map(|(arg, body)| Expr::Lambda(arg, Box::new(body)));
 
         let not_expr = just('!')
@@ -226,7 +229,7 @@ fn expression(
 
         let succ = text::keyword::<_, _, Simple<char>>("S")
             .padded()
-            .ignore_then(expr.clone())
+            .ignore_then(app.clone())
             .map(|e| Expr::Succ(Box::new(e)));
 
         let bexpr_op = choice((
@@ -240,7 +243,7 @@ fn expression(
             .clone()
             .then(
                 choice((
-                    just(':').padded().ignore_then(expr).map(PostOp::Cons),
+                    just(':').padded().ignore_then(app).map(PostOp::Cons),
                     bexpr_op
                         .then(primary.clone())
                         .map(|(op, rhs)| PostOp::BExpr(op, rhs)),
@@ -277,8 +280,8 @@ enum PostOp {
 }
 
 fn primary_expr(
-    stmt: impl Parser<char, Stmt, Error = Simple<char>> + Clone + 'static,
     expr: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
+    app: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
 ) -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
     let nat_zero = text::keyword::<_, _, Simple<char>>("Z")
         .padded()
@@ -286,23 +289,20 @@ fn primary_expr(
 
     let list_nil = just('[').padded().then(just(']').padded()).to(Expr::Nil);
 
-    let pair = expr
+    let pair = app
         .clone()
         .then_ignore(just(',').padded())
-        .then(expr.clone())
+        .then(app.clone())
         .delimited_by(just('(').padded(), just(')').padded())
         .map(|(a, b)| Expr::Pair(Box::new(a), Box::new(b)));
 
-    let list = expr
-        .clone()
+    let list = app
         .separated_by(just(',').padded())
         .at_least(1)
         .delimited_by(just('[').padded(), just(']').padded())
         .map(Expr::List);
 
-    let paren = stmt
-        .delimited_by(just('(').padded(), just(')').padded())
-        .map(|s| Expr::Stmt(Box::new(s)));
+    let paren = expr.delimited_by(just('(').padded(), just(')').padded());
 
     choice((
         nat_zero,
@@ -317,20 +317,19 @@ fn primary_expr(
 }
 
 fn cases_parser(
+    app: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
     expr: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
-    stmt: impl Parser<char, Stmt, Error = Simple<char>> + Clone + 'static,
 ) -> impl Parser<char, Cases, Error = Simple<char>> + Clone {
-    let single_case = expr.clone().then_ignore(sym("->")).then(stmt);
+    let single_case = app.then_ignore(sym("->")).then(expr);
 
     single_case
-        .clone()
         .separated_by(just('|').padded())
         .at_least(1)
         .try_map(|case_list, span| {
             let mut cases = Cases::new();
             let custom = |m: &'static str| Simple::custom(span.clone(), m);
             for (pattern, body) in case_list {
-                match pattern.strip_parentheses() {
+                match pattern {
                     Expr::Zero | Expr::Nat(0) => {
                         cases.set_type_or_check(CasesType::Nat).map_err(custom)?;
                         cases.set_nat_zero(body).map_err(custom)?;
@@ -394,7 +393,7 @@ const x y = x.";
                 Decl::Func {
                     name: "const".to_string(),
                     args: vec![Arg::Ident("x".to_string()), Arg::Ident("y".to_string())],
-                    body: Stmt::Expr(Expr::Ident("x".to_string()))
+                    body: Expr::Ident("x".to_string())
                 }
             ]
         )
@@ -426,7 +425,7 @@ id x = x.";
                 Decl::Func {
                     name: "const".to_string(),
                     args: vec![Arg::Ident("x".to_string()), Arg::Ident("y".to_string())],
-                    body: Stmt::Expr(Expr::Ident("x".to_string()))
+                    body: Expr::Ident("x".to_string())
                 },
                 Decl::FuncType {
                     name: "id".to_string(),
@@ -438,7 +437,7 @@ id x = x.";
                 Decl::Func {
                     name: "id".to_string(),
                     args: vec![Arg::Ident("x".to_string())],
-                    body: Stmt::Expr(Expr::Ident("x".to_string()))
+                    body: Expr::Ident("x".to_string())
                 }
             ]
         )
@@ -467,16 +466,16 @@ fix f = exists n :: Nat. f n =:= n. n.";
                 Decl::Func {
                     name: "fix".to_string(),
                     args: vec![Arg::Ident("f".to_string())],
-                    body: Stmt::Exists {
+                    body: Expr::Exists {
                         var: "n".to_string(),
                         r#type: Type::Ident("Nat".to_string()),
-                        body: Box::new(Stmt::Equate {
-                            lhs: Expr::App(
+                        body: Box::new(Expr::Equate {
+                            lhs: Box::new(Expr::App(
                                 Box::new(Expr::Ident("f".to_string())),
                                 Box::new(Expr::Ident("n".to_string()))
-                            ),
-                            rhs: Expr::Ident("n".to_string()),
-                            body: Box::new(Stmt::Expr(Expr::Ident("n".to_string())))
+                            )),
+                            rhs: Box::new(Expr::Ident("n".to_string())),
+                            body: Box::new(Expr::Ident("n".to_string()))
                         })
                     }
                 }
@@ -492,13 +491,13 @@ fix f = exists n :: Nat. f n =:= n. n.";
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::Exists {
+            vec![Decl::Expr(Expr::Exists {
                 var: "n".to_string(),
                 r#type: Type::Ident("Nat".to_string()),
-                body: Box::new(Stmt::Equate {
-                    lhs: Expr::Ident("n".to_string()),
-                    rhs: Expr::Nat(52),
-                    body: Box::new(Stmt::Expr(Expr::Ident("n".to_string())))
+                body: Box::new(Expr::Equate {
+                    lhs: Box::new(Expr::Ident("n".to_string())),
+                    rhs: Box::new(Expr::Nat(52)),
+                    body: Box::new(Expr::Ident("n".to_string()))
                 })
             })]
         )
@@ -526,20 +525,20 @@ id 5.";
                 Decl::Func {
                     name: "id".to_string(),
                     args: vec![Arg::Ident("x".to_string())],
-                    body: Stmt::Exists {
+                    body: Expr::Exists {
                         var: "n".to_string(),
                         r#type: Type::Ident("Nat".to_string()),
-                        body: Box::new(Stmt::Equate {
-                            lhs: Expr::Ident("n".to_string()),
-                            rhs: Expr::Ident("x".to_string()),
-                            body: Box::new(Stmt::Expr(Expr::Ident("n".to_string())))
+                        body: Box::new(Expr::Equate {
+                            lhs: Box::new(Expr::Ident("n".to_string())),
+                            rhs: Box::new(Expr::Ident("x".to_string())),
+                            body: Box::new(Expr::Ident("n".to_string()))
                         })
                     }
                 },
-                Decl::Stmt(Stmt::Expr(Expr::App(
+                Decl::Expr(Expr::App(
                     Box::new(Expr::Ident("id".to_string())),
                     Box::new(Expr::Nat(5))
-                )))
+                ))
             ]
         )
     }
@@ -560,12 +559,12 @@ id :: a -> a";
                 Decl::Func {
                     name: "id".to_string(),
                     args: vec![Arg::Ident("x".to_string())],
-                    body: Stmt::Expr(Expr::Ident("x".to_string()))
+                    body: Expr::Ident("x".to_string())
                 },
-                Decl::Stmt(Stmt::Expr(Expr::App(
+                Decl::Expr(Expr::App(
                     Box::new(Expr::Ident("id".to_string())),
                     Box::new(Expr::Nat(5))
-                ))),
+                )),
                 Decl::FuncType {
                     name: "id".to_string(),
                     r#type: Type::Arrow(
@@ -599,9 +598,9 @@ id x = x.
                 Decl::Func {
                     name: "id".to_string(),
                     args: vec![Arg::Ident("x".to_string())],
-                    body: Stmt::Expr(Expr::Ident("x".to_string()))
+                    body: Expr::Ident("x".to_string())
                 },
-                Decl::Stmt(Stmt::Choice(vec![
+                Decl::Expr(Expr::Choice(vec![
                     Expr::Nat(1),
                     Expr::App(
                         Box::new(Expr::Ident("id".to_string())),
@@ -619,7 +618,7 @@ id x = x.
 
         let ast = parse(src).unwrap();
 
-        assert_eq!(ast, vec![Decl::Stmt(Stmt::Expr(Expr::Bool(true)))]);
+        assert_eq!(ast, vec![Decl::Expr(Expr::Bool(true))]);
     }
 
     #[test]
@@ -630,10 +629,10 @@ id x = x.
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::Expr(Expr::BExpr(BExpr::Eq(
+            vec![Decl::Expr(Expr::BExpr(BExpr::Eq(
                 Box::new(Expr::Bool(true)),
                 Box::new(Expr::Bool(false))
-            ))))]
+            )))]
         );
     }
 
@@ -645,15 +644,13 @@ id x = x.
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::If {
-                cond: Box::new(Stmt::Expr(Expr::BExpr(BExpr::Not(Box::new(Expr::Stmt(
-                    Box::new(Stmt::Expr(Expr::BExpr(BExpr::NEq(
-                        Box::new(Expr::Nat(1)),
-                        Box::new(Expr::Nat(2))
-                    ))))
+            vec![Decl::Expr(Expr::If {
+                cond: Box::new(Expr::BExpr(BExpr::Not(Box::new(Expr::BExpr(BExpr::NEq(
+                    Box::new(Expr::Nat(1)),
+                    Box::new(Expr::Nat(2))
                 )))))),
-                then: Box::new(Stmt::Expr(Expr::Nat(0))),
-                r#else: Box::new(Stmt::Expr(Expr::Nat(1)))
+                then: Box::new(Expr::Nat(0)),
+                r#else: Box::new(Expr::Nat(1))
             })]
         );
     }
@@ -666,13 +663,13 @@ id x = x.
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::Exists {
+            vec![Decl::Expr(Expr::Exists {
                 var: "xs".to_string(),
                 r#type: Type::List(Box::new(Type::Ident("Nat".to_string()))),
-                body: Box::new(Stmt::Equate {
-                    lhs: Expr::Ident("xs".to_string()),
-                    rhs: Expr::List(vec![Expr::Nat(1), Expr::Nat(2), Expr::Nat(3)]),
-                    body: Box::new(Stmt::Expr(Expr::Ident("xs".to_string())))
+                body: Box::new(Expr::Equate {
+                    lhs: Box::new(Expr::Ident("xs".to_string())),
+                    rhs: Box::new(Expr::List(vec![Expr::Nat(1), Expr::Nat(2), Expr::Nat(3)])),
+                    body: Box::new(Expr::Ident("xs".to_string()))
                 })
             })]
         )
@@ -731,13 +728,13 @@ id x = x.
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::Expr(Expr::Cons(
+            vec![Decl::Expr(Expr::Cons(
                 Box::new(Expr::Nat(1)),
                 Box::new(Expr::Cons(
                     Box::new(Expr::Nat(2)),
                     Box::new(Expr::List(vec![Expr::Nat(3), Expr::Nat(4)]))
                 ))
-            )))]
+            ))]
         )
     }
 
@@ -749,13 +746,13 @@ id x = x.
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::Expr(Expr::BExpr(BExpr::And(
+            vec![Decl::Expr(Expr::BExpr(BExpr::And(
                 Box::new(Expr::Bool(true)),
-                Box::new(Expr::Stmt(Box::new(Stmt::Expr(Expr::BExpr(BExpr::Or(
+                Box::new(Expr::BExpr(BExpr::Or(
                     Box::new(Expr::Bool(false)),
                     Box::new(Expr::Bool(true))
-                ))))))
-            ))))]
+                )))
+            )))]
         )
     }
 
@@ -788,15 +785,15 @@ id x = x.
 
         assert_eq!(
             ast,
-            vec![Decl::Stmt(Stmt::Case {
-                expr: Expr::Ident("n".to_string()),
+            vec![Decl::Expr(Expr::Case {
+                expr: Box::new(Expr::Ident("n".to_string())),
                 cases: Cases {
                     r#type: Some(CasesType::Nat),
                     nat_case: Some(CasesNat {
-                        zk: Some(Box::new(Stmt::Expr(Expr::Ident("n".to_string())))),
+                        zk: Some(Box::new(Expr::Ident("n".to_string()))),
                         sk: Some(CasesNatSucc {
                             var: "m".to_string(),
-                            body: Box::new(Stmt::Expr(Expr::Ident("m".to_string())))
+                            body: Box::new(Expr::Ident("m".to_string()))
                         })
                     }),
                     list_case: None
