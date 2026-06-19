@@ -1,13 +1,17 @@
-//! # The logic-variable environment
+//! # The logic variable environment
 //!
-//! [`LogicEnv`] is the store of logic-variable bindings and their equivalence classes: an
-//! `Rc<UnionFind>` whose per-variable datum is `(ValueType, Option<VClosure>)`, copy-on-write so
-//! that branching clones it cheaply. [`fresh`](LogicEnv::fresh) introduces an unbound variable and
-//! [`identify`](LogicEnv::identify) merges two classes when they meet.
+//! [`LogicEnv`] maps every logical variable to its type, and potentially a value closure if it has
+//! been resolved.
 //!
-//! The one invariant on which soundness rests: every read and write canonicalises through the
-//! union-find root, so a constraint placed on any member of a class is seen by all of them. The
-//! [`Root`](super::union_find::Root) token enforces this — a write cannot land anywhere else.
+//! [`fresh`](LogicEnv::fresh) introduces an unbound variable of a given type;
+//! [`lookup`](LogicEnv::lookup) and [`set_vclos`](LogicEnv::set_vclos) read and write its binding;
+//! [`identify`](LogicEnv::identify) unifies two logical variables, making them indistinguishable.
+//! [`canonical`](LogicEnv::canonical) returns the canonical logical variable in the same
+//! equivalence class; it is only used for printing.
+//!
+//! The equivalence classes of logical variables are implemented by an `Rc<UnionFind>`, which is
+//! copy-on-write so that a nondeterministic branch can clone them cheaply, paying only when they
+//! make changes.
 
 use std::rc::Rc;
 
@@ -52,10 +56,7 @@ impl<'a> LogicEnv<'a> {
         Rc::make_mut(&mut self.store).union(ident1.0, ident2.0);
     }
 
-    /// The canonical logic variable of `ident`'s equivalence class, so that
-    /// distinct-but-unified variables share one identity when a residual free
-    /// variable is displayed.
-    pub fn root(&self, ident: LVar) -> LVar {
+    pub fn canonical(&self, ident: LVar) -> LVar {
         LVar(self.store.canonical(ident.0))
     }
 }
@@ -92,11 +93,23 @@ mod tests {
 
         // The binding must be visible through both idents.
         assert!(
-            matches!(lenv.lookup(a), Some(VClosure::Clos { val: MValue::Nat(3), .. })),
+            matches!(
+                lenv.lookup(a),
+                Some(VClosure::Clos {
+                    val: MValue::Nat(3),
+                    ..
+                })
+            ),
             "binding lost when looked up via the non-root ident"
         );
         assert!(
-            matches!(lenv.lookup(b), Some(VClosure::Clos { val: MValue::Nat(3), .. })),
+            matches!(
+                lenv.lookup(b),
+                Some(VClosure::Clos {
+                    val: MValue::Nat(3),
+                    ..
+                })
+            ),
             "binding lost when looked up via the root ident"
         );
 
