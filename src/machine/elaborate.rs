@@ -13,9 +13,7 @@ use std::collections::{HashMap, HashSet};
 use bumpalo::Bump;
 
 use crate::machine::value_type::ValueType;
-use crate::parser::{
-    arg::Arg, bexpr::BExpr, cases::CasesType, decl::Decl, expr::Expr, r#type::Type, stmt::Stmt,
-};
+use crate::parser::ast::{Arg, BExpr, CasesType, Decl, Expr, Stmt, Type};
 
 use super::mterms::{MComputation, MValue};
 

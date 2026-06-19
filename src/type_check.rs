@@ -12,15 +12,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::parser::{
-    arg::Arg,
-    bexpr::BExpr,
-    cases::{Cases, CasesType},
-    decl::Decl,
-    expr::Expr,
-    r#type::Type,
-    stmt::Stmt,
-};
+use crate::parser::ast::{Arg, BExpr, Cases, CasesType, Decl, Expr, Stmt, Type};
 
 #[derive(Debug)]
 pub struct TypeError {

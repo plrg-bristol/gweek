@@ -7,15 +7,7 @@
 
 use chumsky::prelude::*;
 
-use crate::parser::{
-    arg::Arg,
-    bexpr::BExpr,
-    cases::{Cases, CasesType},
-    decl::Decl,
-    expr::Expr,
-    r#type::Type,
-    stmt::Stmt,
-};
+use crate::parser::ast::{Arg, BExpr, Cases, CasesType, Decl, Expr, Stmt, Type};
 
 pub fn parse(src: &str) -> Result<Vec<Decl>, Vec<Simple<char>>> {
     let src = strip_comments(src);
@@ -377,7 +369,7 @@ fn cases_parser(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::cases::{CasesNat, CasesNatSucc};
+    use crate::parser::ast::{CasesNat, CasesNatSucc};
 
     #[test]
     fn test1() {

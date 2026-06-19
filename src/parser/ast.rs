@@ -1,9 +1,114 @@
-//! Case arms. [`Cases`] is the accumulator a `case` arm-list folds into: a [`CasesType`] tag
-//! (`Nat` or `List`) plus the arms for each shape. Its building methods reject duplicate or
-//! type-mixed arms (e.g. "duplicate zero case", "case mixes Nat and list patterns").
+/// Function and lambda argument patterns
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Arg {
+    Ident(String),
+    Pair(Box<Arg>, Box<Arg>),
+}
 
-use super::stmt::Stmt;
+/// Types
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Type {
+    Arrow(Box<Type>, Box<Type>),
+    Ident(String),
+    List(Box<Type>),
+    Product(Box<Type>, Box<Type>),
+    Any,
+}
 
+/// Boolean expressions
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BExpr {
+    Eq(Box<Expr>, Box<Expr>),
+    NEq(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+    Not(Box<Expr>),
+}
+
+/// Expressions: data and application
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Expr {
+    Zero,
+    Succ(Box<Expr>),
+    Nil,
+    Cons(Box<Expr>, Box<Expr>),
+    App(Box<Expr>, Box<Expr>),
+    BExpr(BExpr),
+    List(Vec<Expr>),
+    Lambda(Arg, Box<Stmt>),
+    Ident(String),
+    Nat(usize),
+    Bool(bool),
+    Pair(Box<Expr>, Box<Expr>),
+    Stmt(Box<Stmt>),
+}
+
+impl Expr {
+    pub fn strip_parentheses(self) -> Expr {
+        let mut e = self;
+        while let Expr::Stmt(stmt) = e {
+            match *stmt {
+                Stmt::Expr(expr) => e = expr,
+                other => {
+                    e = Expr::Stmt(Box::new(other));
+                    break;
+                }
+            }
+        }
+
+        e
+    }
+}
+
+/// Statements: the control and constraint forms
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Stmt {
+    If {
+        cond: Box<Stmt>,
+        then: Box<Stmt>,
+        r#else: Box<Stmt>,
+    },
+    Let {
+        var: String,
+        val: Box<Stmt>,
+        body: Box<Stmt>,
+    },
+    Exists {
+        var: String,
+        r#type: Type,
+        body: Box<Stmt>,
+    },
+    Equate {
+        lhs: Expr,
+        rhs: Expr,
+        body: Box<Stmt>,
+    },
+    Choice(Vec<Expr>),
+    Case {
+        expr: Expr,
+        cases: Cases,
+    },
+    Fail,
+    Expr(Expr),
+}
+
+/// Top-level declarations
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Decl {
+    FuncType {
+        name: String,
+        r#type: Type,
+    },
+    Func {
+        name: String,
+        args: Vec<Arg>,
+        body: Stmt,
+    },
+    Stmt(Stmt),
+}
+
+/// Case arms: the accumulator a `case` arm-list folds into. Its building methods reject duplicate
+/// or type-mixed arms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cases {
     pub r#type: Option<CasesType>,
@@ -136,5 +241,33 @@ impl CasesList {
             nilk: None,
             consk: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: a parenthesised non-`Stmt::Expr` (e.g. `(let x = 0 in x)` used
+    // as a case pattern) reaches the catch-all arm. It must return the wrapper
+    // unchanged, not rewrap the same value and loop forever.
+    #[test]
+    fn strip_parentheses_terminates_on_non_expr_stmt() {
+        let inner = Stmt::Let {
+            var: "x".to_string(),
+            val: Box::new(Stmt::Expr(Expr::Zero)),
+            body: Box::new(Stmt::Expr(Expr::Ident("x".to_string()))),
+        };
+        let wrapped = Expr::Stmt(Box::new(inner.clone()));
+        assert_eq!(wrapped.strip_parentheses(), Expr::Stmt(Box::new(inner)));
+    }
+
+    // Nested `((e))` wrappers are stripped down to the inner expression.
+    #[test]
+    fn strip_parentheses_unwraps_nested_expr_stmts() {
+        let nested = Expr::Stmt(Box::new(Stmt::Expr(Expr::Stmt(Box::new(Stmt::Expr(
+            Expr::Nat(5),
+        ))))));
+        assert_eq!(nested.strip_parentheses(), Expr::Nat(5));
     }
 }
