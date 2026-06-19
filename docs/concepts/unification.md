@@ -9,7 +9,7 @@ Unification is how gweek solves the constraint `lhs =:= rhs`: it makes two value
 binding [[logic-variables|logic variables]], or fails the branch if they cannot be made
 equal. The concept page covers the *idea*; the line-by-line algorithm is in [[unify]].
 
-The constraint is surface `Stmt::Equate`, lowered to `MComputation::Equate { lhs, rhs, body }`
+The constraint is surface `Stmt::Equate`, elaborated to `MComputation::Equate { lhs, rhs, body }`
 and stepped at `step.rs:345`, which calls `unify(cfg, arena, lhs, rhs, …)` (`step.rs:347`) and
 continues into `body` on success.
 

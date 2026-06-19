@@ -17,7 +17,7 @@ Created the wiki against commit `7972077` (spine-first scope).
 - Concepts: [[cbpv]], [[logic-variables]], [[unification]], [[nondeterminism]],
   [[de-bruijn]], [[type-system]]; folded existing `notes.md` → [[suspensions-and-forcing]]
   and `search-strategies.md` → [[search-strategies]].
-- Full component pages: [[mterms]], [[step]], [[eval]], [[unify]], [[translate]].
+- Full component pages: [[mterms]], [[step]], [[eval]], [[unify]], [[elaborate]].
 - Stubs (one paragraph + `source:` + links): [[parser]], [[type-checker]], [[optimizer]],
   [[lvar]], [[union-find]], [[senv]], [[env]], [[vclosure]], [[value-type]], [[config]],
   [[main-and-lib]].
@@ -38,8 +38,8 @@ The in-flight refactor merged into `main` (21 commits) implemented **essentially
 - Retired the "known issue" callouts that are now fixed; reframed them as "was §X, fixed":
   residual free variables now reported ([[logic-variables]], [[eval]] · B7); IDDFS counts by
   depth frontier, no string dedup ([[eval]], [[search-strategies]] · B8); `--timeout` honoured
-  inside [[step|`run_to_branch`]] (B9); boolean exprs / mutual recursion / pair args lower
-  ([[translate]] · B2/B3/B10); real polymorphism + lambda-arg checking + `Int` rejection
+  inside [[step|`run_to_branch`]] (B9); boolean exprs / mutual recursion / pair args elaborate
+  ([[elaborate]] · B2/B3/B10); real polymorphism + lambda-arg checking + `Int` rejection
   ([[type-checker]], [[type-system]] · B4/B5/B11); `*`/`->` precedence and recoverable case
   patterns ([[parser]], [[grammar]] · B6/B12).
 - Structural rewrites: thread-local `Config` gone, now threaded `&Config` ([[config]], [[eval]],
@@ -71,7 +71,7 @@ component, concept, architecture and reference pages — most had drifted purely
 - **Re-verified [[deep-review]].** Newly confirmed fixed since the last sync: **P1**
   (`[profile.release]` `lto`/`codegen-units` tuning is in `Cargo.toml`). Corrected a phantom —
   there is **no `Int` type** in the code; **B11**'s panic path is an unknown-type-identifier
-  error in `translate_vtype` ([[translate]]). Still open: **P2** (COW backtracking), **P3**
+  error in `elaborate_vtype` ([[elaborate]]). Still open: **P2** (COW backtracking), **P3**
   (arena growth), **A3** (`MValue::Zero`), and **C1** (the `step.rs` `Machine{…}` rebuild
   boilerplate, deliberately left inline — 29 sites remain). **P2** callouts kept on
   [[lvar]]/[[union-find]]/[[logic-variables]].

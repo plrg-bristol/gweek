@@ -1,6 +1,6 @@
 //! # The abstract machine
 //!
-//! Evaluation here is not a recursive function but a machine. A program is lowered to a
+//! Evaluation here is not a recursive function but a machine. A program is elaborated to a
 //! Call-By-Push-Value term ([`mterms`]) and run on an explicit-state machine — the `step` module —
 //! whose every state is an ordinary value. The idea is simple: at a branch point the machine is
 //! *cloned*, each clone exploring one alternative, and a [`Strategy`] ([`eval()`]) chooses the
@@ -9,6 +9,7 @@
 //! [`Config`] is threaded by reference throughout.
 
 pub mod config;
+pub mod elaborate;
 mod env;
 mod eval;
 mod lvar;
@@ -16,7 +17,6 @@ pub mod mterms;
 pub mod optimize;
 mod senv;
 mod step;
-pub mod translate;
 mod unify;
 mod union_find;
 mod value_type;

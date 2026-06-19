@@ -10,20 +10,20 @@ gweek has no variable *names* at runtime. A variable is `MValue::Var(usize)`
 site: `Var(0)` is the most recently bound variable, `Var(1)` the one before, and so on. This
 removes the need for capture-avoiding substitution and makes environments simple stacks.
 
-## Established at translation
+## Established at elaboration
 
-[[translate|`translate`]] converts surface names to indices. It threads a name stack
-`TEnv` (`translate.rs:10`); `find(v)` returns the index of the *last* binding of `v`,
-measured from the end (`translate.rs:31-36`):
+[[elaborate|`elaborate`]] converts surface names to indices. It threads a name stack
+`TEnv` (`elaborate.rs:10`); `find(v)` returns the index of the *last* binding of `v`,
+measured from the end (`elaborate.rs:31-36`):
 
 ```rust
 self.env.iter().rev().position(|x| x == v)   // distance from the end
 ```
 
-Every binder in the lowering pushes a name before translating its body and pops it after, so
-indices stay consistent. Note that *intermediate* `Bind`s introduced by lowering also occupy
+Every binder in the elaboration pushes a name before elaborating its body and pops it after, so
+indices stay consistent. Note that *intermediate* `Bind`s introduced by elaboration also occupy
 slots — that is why compound forms bind a placeholder for each sub-result. Getting these
-push/pop counts right is the whole correctness burden of the translator.
+push/pop counts right is the whole correctness burden of the elaborator.
 
 ## Consumed at runtime
 
@@ -48,4 +48,4 @@ through a **single** generic binder-aware traversal — `map_val`/`map_comp` (`o
 the depth bookkeeping is written once instead of triplicated ([[deep-review]] §A1, fixed in
 commit `fe70c5d`).
 
-Related: [[translate]], [[env]], [[optimizer]], [[cbpv]].
+Related: [[elaborate]], [[env]], [[optimizer]], [[cbpv]].

@@ -1,7 +1,7 @@
 //! # The gweek command-line interface
 //!
 //! The command-line entry point. It parses the flags into a [`Config`](gweek::machine::Config),
-//! then runs the pipeline — parse, type-check, translate, optionally optimise, evaluate — printing
+//! then runs the pipeline — parse, type-check, elaborate, optionally optimise, evaluate — printing
 //! each solution as it is found; parse and type errors are rendered with `ariadne`. See [`gweek`]
 //! for the library proper and its WASM entry points, which run the very same pipeline.
 
@@ -12,7 +12,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use bumpalo::Bump;
 use chumsky::prelude::Simple;
 
-use gweek::machine::{self, translate::translate, Config, Strategy};
+use gweek::machine::{self, elaborate::elaborate, Config, Strategy};
 use gweek::parser;
 use gweek::type_check;
 
@@ -131,7 +131,7 @@ fn main() {
     }
 
     let arena = Bump::new();
-    let (main_comp, env) = translate(&arena, ast);
+    let (main_comp, env) = elaborate(&arena, ast);
     let (main_comp, env) = if optimize {
         let comp = machine::optimize::optimize(&arena, main_comp);
         #[cfg(feature = "opt-stats")]
@@ -195,7 +195,7 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 #[cfg(test)]
 mod tests {
     use bumpalo::Bump;
-    use gweek::machine::{self, run, translate::translate, Config, Strategy};
+    use gweek::machine::{self, elaborate::elaborate, run, Config, Strategy};
     use gweek::{parser, type_check};
     use std::fs;
 
@@ -211,17 +211,17 @@ mod tests {
         }
     }
 
-    // Full pipeline (parse -> type-check -> translate -> evaluate) returning the
+    // Full pipeline (parse -> type-check -> elaborate -> evaluate) returning the
     // collected output, for asserting the value a program produces.
     fn collect_source(src: &str) -> String {
         let arena = Bump::new();
         let ast = parser::parse(src).expect("should parse");
         type_check::type_check(&ast).expect("should type-check");
-        let (comp, env) = translate(&arena, ast);
+        let (comp, env) = elaborate(&arena, ast);
         machine::eval_collect(&test_config(Strategy::Bfs), comp, &env)
     }
 
-    // B2: `if`/`then`/`else` and `==` on Nat lower and evaluate correctly.
+    // B2: `if`/`then`/`else` and `==` on Nat elaborate and evaluate correctly.
     #[test]
     fn if_then_else_and_nat_eq() {
         assert!(collect_source("if (2 == 2) then 7 else 9.\n").contains("> 7"));
@@ -239,7 +239,7 @@ mod tests {
         );
     }
 
-    // B3: mutually recursive top-level functions translate and evaluate.
+    // B3: mutually recursive top-level functions elaborate and evaluate.
     #[test]
     fn mutual_recursion() {
         let prog = |n: u32| {
@@ -265,7 +265,7 @@ mod tests {
         let arena = Bump::new();
         let src = fs::read_to_string(path).unwrap();
         let ast = parser::parse(&src).unwrap();
-        let (comp, env) = translate(&arena, ast);
+        let (comp, env) = elaborate(&arena, ast);
         let cfg = test_config(strategy);
         if opt {
             let comp = machine::optimize::optimize(&arena, comp);

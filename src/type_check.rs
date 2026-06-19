@@ -59,11 +59,11 @@ fn as_meta(s: &str) -> Option<usize> {
     s.strip_prefix('?').and_then(|n| n.parse().ok())
 }
 
-// A pair argument is destructured in translation through typed logic variables,
+// A pair argument is destructured during elaboration through typed logic variables,
 // which needs a concrete value type for each component (no type variables,
-// functions, or wildcards). This mirrors what `translate::translate_type` can
-// lower, so the checker rejects the unsupported cases instead of letting them
-// panic in the translator.
+// functions, or wildcards). This mirrors what `elaborate::elaborate_vtype` can
+// elaborate, so the checker rejects the unsupported cases instead of letting them
+// panic in the elaborator.
 fn is_concrete_value_type(ty: &Type) -> bool {
     match ty {
         Type::Ident(s) => s == "Nat" || s == "Bool",
@@ -531,7 +531,7 @@ fn check_expr(ctx: &mut Ctx, expr: &Expr, expected: &Type) -> TResult<()> {
         (Expr::Nil, Type::List(_)) => Ok(()),
 
         (Expr::Lambda(arg, body), Type::Arrow(param, ret)) => {
-            // A lambda carries no type annotation, so translation cannot type
+            // A lambda carries no type annotation, so elaboration cannot type
             // the components of a destructured pair argument. Reject it here
             // (named arguments and projection work); functions, which have a
             // declared signature, do support pair arguments.
@@ -574,8 +574,8 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt, expected: &Type) -> TResult<()> {
 fn synth_bexpr(ctx: &mut Ctx, bexpr: &BExpr) -> TResult {
     match bexpr {
         BExpr::Eq(a, b) | BExpr::NEq(a, b) => {
-            // `==`/`!=` are Nat equality (lowered through `Ifz`); both operands
-            // must be Nat. Comparing other types has no lowering and is rejected
+            // `==`/`!=` are Nat equality (elaborated through `Ifz`); both operands
+            // must be Nat. Comparing other types has no elaboration and is rejected
             // here rather than panicking in the machine.
             let nat = Type::Ident("Nat".to_string());
             let at = synth_expr(ctx, a)?;
@@ -686,7 +686,7 @@ mod tests {
     }
 
     // A4: conditions that used to type-check and then panic in the machine /
-    // translator are now clean type errors.
+    // elaborator are now clean type errors.
     #[test]
     fn bool_equality_is_a_type_error() {
         // `==`/`!=` are Nat-only; comparing Bools would panic with "Ifz on ..".

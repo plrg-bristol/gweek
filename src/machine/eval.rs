@@ -378,14 +378,14 @@ fn output<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::translate::translate;
+    use crate::machine::elaborate::elaborate;
     use crate::parser;
 
-    /// Parse, translate and run `src`, collecting the rendered solutions.
+    /// Parse, elaborate and run `src`, collecting the rendered solutions.
     fn solutions(src: &str, strategy: Strategy) -> Vec<String> {
         let arena = Bump::new();
         let ast = parser::parse(src).unwrap();
-        let (comp, env_vals) = translate(&arena, ast);
+        let (comp, env_vals) = elaborate(&arena, ast);
         let run_arena = Bump::new();
         let env = import_env(&run_arena, &env_vals);
         let cfg = Config {

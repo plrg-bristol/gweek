@@ -16,7 +16,7 @@ gweek has two type vocabularies, used at two different times:
   `Product`, `Sum`, `List`, `Thunk(ComputationType)`; `ComputationType` (`value_type.rs:27`)
   is `Return(ValueType)` (written `F t`) or `Arrow(ValueType, ComputationType)`.
 
-[[translate|`translate_vtype`]] maps the surface types that can label an `exists` into runtime
+[[elaborate|`elaborate_vtype`]] maps the surface types that can label an `exists` into runtime
 `ValueType`s — notably `Bool` becomes `Sum(Unit, Unit)` (`true = inl ()`, `false = inr ()`),
 which is why booleans need no dedicated runtime form.
 
@@ -43,9 +43,9 @@ Several features the original review flagged as broken now work end-to-end ([[de
   position (§B5).
 - **`*` binds tighter than `->`** in the type parser, so `A * B -> C` parses correctly (§B6,
   see [[parser]]).
-- **`Int` is rejected cleanly** by `resolve_type` (`:580`) instead of slipping through to a
-  translation panic (§B11).
-- **Boolean expressions and `if`** type-check *and* lower (§B2, see [[translate]]).
+- **`Int` is rejected cleanly** by `resolve_type` (`:580`) instead of slipping through to an
+  elaboration panic (§B11).
+- **Boolean expressions and `if`** type-check *and* elaborate (§B2, see [[elaborate]]).
 - **Pair-pattern function arguments** are accepted and destructured (§B10).
 
-Related: [[type-checker]] (the code), [[value-type]], [[translate]], [[cbpv]].
+Related: [[type-checker]] (the code), [[value-type]], [[elaborate]], [[cbpv]].

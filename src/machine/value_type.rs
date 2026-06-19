@@ -3,7 +3,7 @@
 //! The vocabulary of runtime types, split as CBPV demands: [`ValueType`] (`Unit`, `Nat`,
 //! `Product`, `Sum`, `List`, `Thunk`) and [`ComputationType`] (`Return` or `Arrow`). These are the
 //! types a logic variable remembers, so that when an unbound variable must be split the
-//! eliminators know which constructors to guess; `translate_vtype` builds them from surface types
+//! eliminators know which constructors to guess; `elaborate_vtype` builds them from surface types
 //! — e.g. `Bool` ↦ `Sum(Unit, Unit)`.
 
 use std::fmt::{self, Display};

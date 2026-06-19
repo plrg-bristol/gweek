@@ -20,7 +20,7 @@ surface AST
    │  type_check.rs   bidirectional checker; rejects ill-typed programs
    ▼
 checked AST
-   │  machine/translate.rs   lowering to Call-By-Push-Value, de Bruijn indices
+   │  machine/elaborate.rs   elaborating to Call-By-Push-Value, de Bruijn indices
    ▼
 CBPV term
    │  machine/optimize.rs    optional peephole optimizer (-o)

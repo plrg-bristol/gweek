@@ -7,7 +7,7 @@ tags: [concept]
 
 A logic variable is an unknown that the machine may bind later, by [[unification]] or by a
 [[nondeterminism|case split]]. They are introduced by `exists x :: T. body` — surface
-`Stmt::Exists`, lowered to `MComputation::Exists { ptype, body }` ([[mterms]]) and stepped at
+`Stmt::Exists`, elaborated to `MComputation::Exists { ptype, body }` ([[mterms]]) and stepped at
 `step.rs:331-342`:
 
 ```rust

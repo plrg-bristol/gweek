@@ -1,9 +1,9 @@
-//! # Lowering: surface syntax to CBPV
+//! # Elaboration: surface syntax to CBPV
 //!
-//! Translation lowers the type-checked surface AST into the machine's CBPV term language
+//! Elaboration translates the type-checked surface AST into the machine's CBPV term language
 //! ([`mterms`](super::mterms)), replacing names by de Bruijn indices — and keeping those indices
-//! aligned, across every intermediate `Bind` it introduces, is the translator's whole correctness
-//! burden. [`translate`] returns the main computation together with the top-level function values.
+//! aligned, across every intermediate `Bind` it introduces, is the elaborator's whole correctness
+//! burden. [`elaborate`] returns the main computation together with the top-level function values.
 //! Functions are grouped into strongly-connected components by Tarjan's algorithm and ordered by
 //! dependency; a genuinely mutually-recursive group collapses to a single selector-dispatched
 //! fixpoint.
@@ -64,7 +64,7 @@ impl TEnv {
     }
 }
 
-pub fn translate<'a>(
+pub fn elaborate<'a>(
     arena: &'a Bump,
     ast: Vec<Decl>,
 ) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
@@ -87,7 +87,7 @@ pub fn translate<'a>(
             let Func { name, args, body } = group.into_iter().next().unwrap();
             let nullary = args.is_empty();
             let arg_types = arg_types(sigs.get(&name), args.len());
-            let result = translate_func(arena, &name, args, &arg_types, body, &mut tenv);
+            let result = elaborate_func(arena, &name, args, &arg_types, body, &mut tenv);
             if nullary {
                 tenv.bind_nullary(&name);
             } else {
@@ -95,14 +95,14 @@ pub fn translate<'a>(
             }
             env.push(result);
         } else {
-            let result = translate_group(arena, group, &sigs, &mut tenv);
+            let result = elaborate_group(arena, group, &sigs, &mut tenv);
             env.push(result);
         }
     }
 
     for decl in stmts {
         if let Decl::Stmt(stmt) = decl {
-            main = Some(translate_stmt(arena, stmt, &mut tenv));
+            main = Some(elaborate_stmt(arena, stmt, &mut tenv));
         }
     }
 
@@ -343,9 +343,9 @@ fn walk_bexpr(bexpr: &BExpr, names: &HashSet<String>, refs: &mut HashSet<String>
     }
 }
 
-// --- Translation ---
+// --- Elaboration ---
 
-fn translate_func<'a>(
+fn elaborate_func<'a>(
     arena: &'a Bump,
     name: &str,
     args: Vec<Arg>,
@@ -355,7 +355,7 @@ fn translate_func<'a>(
 ) -> &'a MValue<'a> {
     tenv.bind(name);
     let comp = if args.is_empty() {
-        translate_stmt(arena, body, tenv)
+        elaborate_stmt(arena, body, tenv)
     } else {
         build_args(arena, &args, arg_types, &body, tenv)
     };
@@ -364,7 +364,7 @@ fn translate_func<'a>(
     arena.alloc(MValue::Thunk(rec))
 }
 
-/// Lowers a mutually-recursive group of functions to a single fixpoint.
+/// Elaborates a mutually-recursive group of functions to a single fixpoint.
 ///
 /// The machine's `Rec` binds one self-reference, so a per-function `Rec`
 /// cannot tie a mutual knot. Instead the whole group becomes one bundle:
@@ -374,14 +374,14 @@ fn translate_func<'a>(
 /// Forcing the bundle and applying it to selector `i` returns the thunk of
 /// member `i`. Every reference to a group member -- inside a sibling, inside
 /// the member itself, or from an outside caller -- goes through this selector
-/// (see the `Expr::Ident` lowering), so the recursion is genuinely mutual:
+/// (see the `Expr::Ident` elaboration), so the recursion is genuinely mutual:
 /// each body reaches its siblings through the shared `self`.
 ///
 /// Inside the selector lambda the environment is `[sel, self, ..outer..]`; the
 /// `ifz` chain binds one predecessor per step, so in branch `i` the bundle
-/// (`self`) sits at de Bruijn index `i + 1`. Each member body is translated
+/// (`self`) sits at de Bruijn index `i + 1`. Each member body is elaborated
 /// with `tenv` set up to match exactly that layout.
-fn translate_group<'a>(
+fn elaborate_group<'a>(
     arena: &'a Bump,
     group: Vec<Func>,
     sigs: &HashMap<String, Type>,
@@ -403,7 +403,7 @@ fn translate_group<'a>(
         }
         let arg_types = arg_types(sigs.get(&f.name), f.args.len());
         let comp = if f.args.is_empty() {
-            translate_stmt(arena, f.body.clone(), tenv)
+            elaborate_stmt(arena, f.body.clone(), tenv)
         } else {
             build_args(arena, &f.args, &arg_types, &f.body, tenv)
         };
@@ -446,7 +446,7 @@ fn build_args<'a>(
     tenv: &mut TEnv,
 ) -> &'a MComputation<'a> {
     match args {
-        [] => translate_stmt(arena, body.clone(), tenv),
+        [] => elaborate_stmt(arena, body.clone(), tenv),
         [arg, rest @ ..] => {
             let rest_types = &arg_types[1..];
             let lam_body = match arg {
@@ -495,7 +495,7 @@ fn curry<'a>(
 /// types, in left-to-right order, validating the pattern against the type.
 fn collect_leaves(pattern: &Arg, ty: &Type, out: &mut Vec<(String, ValueType)>) {
     match pattern {
-        Arg::Ident(name) => out.push((name.clone(), translate_vtype(ty.clone()))),
+        Arg::Ident(name) => out.push((name.clone(), elaborate_vtype(ty.clone()))),
         Arg::Pair(a, b) => match ty {
             Type::Product(ta, tb) => {
                 collect_leaves(a, ta, out);
@@ -565,36 +565,36 @@ fn bind_pattern<'a>(
     comp
 }
 
-fn translate_vtype(ptype: Type) -> ValueType {
+fn elaborate_vtype(ptype: Type) -> ValueType {
     match ptype {
-        Type::Arrow(_, _) => panic!("don't translate thunks"),
+        Type::Arrow(_, _) => panic!("don't elaborate thunks"),
         Type::Ident(s) if s == "Nat" => ValueType::Nat,
         Type::Ident(s) if s == "Bool" => {
             ValueType::Sum(Box::new(ValueType::Unit), Box::new(ValueType::Unit))
         }
-        Type::Ident(s) => panic!("cannot translate type {}", s),
-        Type::List(t) => ValueType::List(Box::new(translate_vtype(*t))),
+        Type::Ident(s) => panic!("cannot elaborate type {}", s),
+        Type::List(t) => ValueType::List(Box::new(elaborate_vtype(*t))),
         Type::Product(t1, t2) => ValueType::Product(
-            Box::new(translate_vtype(*t1)),
-            Box::new(translate_vtype(*t2)),
+            Box::new(elaborate_vtype(*t1)),
+            Box::new(elaborate_vtype(*t2)),
         ),
-        Type::Any => panic!("cannot translate unresolved type"),
+        Type::Any => panic!("cannot elaborate unresolved type"),
     }
 }
 
-fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComputation<'a> {
     match stmt {
         Stmt::If { cond, then, r#else } => {
-            let comp = translate_stmt(arena, *cond, tenv);
+            let comp = elaborate_stmt(arena, *cond, tenv);
             tenv.bind("_");
             let var0 = arena.alloc(MValue::Var(0));
             // Inl = true → then branch (bind unit, discard it)
             tenv.bind("_");
-            let then_comp = translate_stmt(arena, *then, tenv);
+            let then_comp = elaborate_stmt(arena, *then, tenv);
             tenv.unbind();
             // Inr = false → else branch (bind unit, discard it)
             tenv.bind("_");
-            let else_comp = translate_stmt(arena, *r#else, tenv);
+            let else_comp = elaborate_stmt(arena, *r#else, tenv);
             tenv.unbind();
             let case = arena.alloc(MComputation::Case {
                 sum: var0,
@@ -605,27 +605,27 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
             arena.alloc(MComputation::Bind { comp, cont: case })
         }
         Stmt::Let { var, val, body } => {
-            let comp = translate_stmt(arena, *val, tenv);
+            let comp = elaborate_stmt(arena, *val, tenv);
             tenv.bind(&var);
-            let cont = translate_stmt(arena, *body, tenv);
+            let cont = elaborate_stmt(arena, *body, tenv);
             tenv.unbind();
             arena.alloc(MComputation::Bind { comp, cont })
         }
         Stmt::Exists { var, r#type, body } => {
             tenv.bind(&var);
-            let body = translate_stmt(arena, *body, tenv);
+            let body = elaborate_stmt(arena, *body, tenv);
             tenv.unbind();
             arena.alloc(MComputation::Exists {
-                ptype: translate_vtype(r#type),
+                ptype: elaborate_vtype(r#type),
                 body,
             })
         }
         Stmt::Equate { lhs, rhs, body } => {
-            let lhs_comp = translate_expr(arena, lhs, tenv);
+            let lhs_comp = elaborate_expr(arena, lhs, tenv);
             tenv.bind("_");
-            let rhs_comp = translate_expr(arena, rhs, tenv);
+            let rhs_comp = elaborate_expr(arena, rhs, tenv);
             tenv.bind("_");
-            let body_comp = translate_stmt(arena, *body, tenv);
+            let body_comp = elaborate_stmt(arena, *body, tenv);
             tenv.unbind();
             tenv.unbind();
             let var0 = arena.alloc(MValue::Var(0));
@@ -648,7 +648,7 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
         Stmt::Choice(exprs) => {
             let choices: Vec<_> = exprs
                 .into_iter()
-                .map(|e| translate_expr(arena, e, tenv))
+                .map(|e| elaborate_expr(arena, e, tenv))
                 .collect();
             let slice = arena.alloc_slice_copy(&choices);
             arena.alloc(MComputation::Choice(slice))
@@ -659,20 +659,20 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
             let cont = match cases.r#type.unwrap() {
                 CasesType::Nat => {
                     let nat_case = cases.nat_case.unwrap();
-                    let zk = translate_stmt(arena, *nat_case.zk.unwrap(), tenv);
+                    let zk = elaborate_stmt(arena, *nat_case.zk.unwrap(), tenv);
                     let succ_case = nat_case.sk.unwrap();
                     tenv.bind(&succ_case.var);
-                    let sk = translate_stmt(arena, *succ_case.body, tenv);
+                    let sk = elaborate_stmt(arena, *succ_case.body, tenv);
                     tenv.unbind();
                     arena.alloc(MComputation::Ifz { num: var0, zk, sk })
                 }
                 CasesType::List => {
                     let list_case = cases.list_case.unwrap();
-                    let nilk = translate_stmt(arena, *list_case.nilk.unwrap(), tenv);
+                    let nilk = elaborate_stmt(arena, *list_case.nilk.unwrap(), tenv);
                     let cons_case = list_case.consk.unwrap();
                     tenv.bind(&cons_case.x);
                     tenv.bind(&cons_case.xs);
-                    let consk = translate_stmt(arena, *cons_case.body, tenv);
+                    let consk = elaborate_stmt(arena, *cons_case.body, tenv);
                     tenv.unbind();
                     tenv.unbind();
                     arena.alloc(MComputation::Match {
@@ -683,21 +683,21 @@ fn translate_stmt<'a>(arena: &'a Bump, stmt: Stmt, tenv: &mut TEnv) -> &'a MComp
                 }
             };
             tenv.unbind();
-            let comp = translate_expr(arena, expr, tenv);
+            let comp = elaborate_expr(arena, expr, tenv);
             arena.alloc(MComputation::Bind { comp, cont })
         }
-        Stmt::Expr(e) => translate_expr(arena, e, tenv),
+        Stmt::Expr(e) => elaborate_expr(arena, e, tenv),
     }
 }
 
-fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
     match expr {
         Expr::Zero => {
             let zero = arena.alloc(MValue::Nat(0));
             arena.alloc(MComputation::Return(zero))
         }
         Expr::Succ(body) => {
-            let comp = translate_expr(arena, *body, tenv);
+            let comp = elaborate_expr(arena, *body, tenv);
             let var0 = arena.alloc(MValue::Var(0));
             let succ = arena.alloc(MValue::Succ(var0));
             let ret = arena.alloc(MComputation::Return(succ));
@@ -708,9 +708,9 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             arena.alloc(MComputation::Return(nil))
         }
         Expr::Cons(x, xs) => {
-            let comp_head = translate_expr(arena, *x, tenv);
+            let comp_head = elaborate_expr(arena, *x, tenv);
             tenv.bind("_");
-            let comp_tail = translate_expr(arena, *xs, tenv);
+            let comp_tail = elaborate_expr(arena, *xs, tenv);
             tenv.unbind();
             let var1 = arena.alloc(MValue::Var(1));
             let var0 = arena.alloc(MValue::Var(0));
@@ -728,7 +728,7 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
                 tenv.bind(&var);
-                let body = translate_stmt(arena, *body, tenv);
+                let body = elaborate_stmt(arena, *body, tenv);
                 tenv.unbind();
                 let lam = arena.alloc(MComputation::Lambda { body });
                 let thunk = arena.alloc(MValue::Thunk(lam));
@@ -741,14 +741,14 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             // synthesize no type), so this path is unreachable for well-typed
             // programs. We refuse to fabricate types here.
             Arg::Pair(..) => panic!(
-                "cannot translate a pair-pattern lambda argument: no type \
+                "cannot elaborate a pair-pattern lambda argument: no type \
                  annotation is available to type the destructured components"
             ),
         },
         Expr::App(op, arg) => {
-            let comp_op = translate_expr(arena, *op, tenv);
+            let comp_op = elaborate_expr(arena, *op, tenv);
             tenv.bind("_");
-            let comp_arg = translate_expr(arena, *arg, tenv);
+            let comp_arg = elaborate_expr(arena, *arg, tenv);
             tenv.unbind();
             let var1 = arena.alloc(MValue::Var(1));
             let var0 = arena.alloc(MValue::Var(0));
@@ -766,8 +766,8 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
                 cont: inner,
             })
         }
-        Expr::BExpr(bexpr) => translate_bexpr(arena, bexpr, tenv),
-        Expr::List(elems) => translate_list(arena, &elems, tenv),
+        Expr::BExpr(bexpr) => elaborate_bexpr(arena, bexpr, tenv),
+        Expr::List(elems) => elaborate_list(arena, &elems, tenv),
         Expr::Ident(s) => {
             // A member of a mutually-recursive group is obtained by applying
             // the group's selector function to the member's index, which
@@ -793,7 +793,7 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
                 comp
             }
         }
-        Expr::Nat(n) => translate_nat(arena, n),
+        Expr::Nat(n) => elaborate_nat(arena, n),
         Expr::Bool(b) => {
             let unit = arena.alloc(MValue::Unit);
             let val = if b {
@@ -803,8 +803,8 @@ fn translate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             };
             arena.alloc(MComputation::Return(val))
         }
-        Expr::Pair(lhs, rhs) => translate_pair(arena, *lhs, *rhs, tenv),
-        Expr::Stmt(s) => translate_stmt(arena, *s, tenv),
+        Expr::Pair(lhs, rhs) => elaborate_pair(arena, *lhs, *rhs, tenv),
+        Expr::Stmt(s) => elaborate_stmt(arena, *s, tenv),
     }
 }
 
@@ -866,9 +866,9 @@ fn nat_eq_thunk<'a>(arena: &'a Bump) -> &'a MValue<'a> {
 /// Applies the curried `Nat` equality function (a thunk) to two argument
 /// computations, yielding a computation that returns their equality `Bool`.
 fn nat_eq_comp<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
-    let lhs_comp = translate_expr(arena, lhs, tenv);
+    let lhs_comp = elaborate_expr(arena, lhs, tenv);
     tenv.bind("_");
-    let rhs_comp = translate_expr(arena, rhs, tenv);
+    let rhs_comp = elaborate_expr(arena, rhs, tenv);
     tenv.unbind();
     // Environment at the application: [b = 0, a = 1].
     let eq = nat_eq_thunk(arena);
@@ -944,38 +944,38 @@ fn const_nat(expr: &Expr) -> Option<u64> {
     }
 }
 
-fn translate_bexpr<'a>(arena: &'a Bump, bexpr: BExpr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_bexpr<'a>(arena: &'a Bump, bexpr: BExpr, tenv: &mut TEnv) -> &'a MComputation<'a> {
     if let Some(b) = const_bool(&Expr::BExpr(bexpr.clone())) {
         return return_bool(arena, b);
     }
     match bexpr {
         BExpr::Eq(lhs, rhs) => nat_eq_comp(arena, *lhs, *rhs, tenv),
         BExpr::NEq(lhs, rhs) => negate_comp(arena, nat_eq_comp(arena, *lhs, *rhs, tenv)),
-        BExpr::And(lhs, rhs) => translate_connective(arena, *lhs, *rhs, true, tenv),
-        BExpr::Or(lhs, rhs) => translate_connective(arena, *lhs, *rhs, false, tenv),
+        BExpr::And(lhs, rhs) => elaborate_connective(arena, *lhs, *rhs, true, tenv),
+        BExpr::Or(lhs, rhs) => elaborate_connective(arena, *lhs, *rhs, false, tenv),
         BExpr::Not(e) => {
-            let comp = translate_expr(arena, *e, tenv);
+            let comp = elaborate_expr(arena, *e, tenv);
             negate_comp(arena, comp)
         }
     }
 }
 
-/// Lowers `&&` (when `and`) or `||` by casing on the lowered left `Bool`.
+/// Elaborates `&&` (when `and`) or `||` by casing on the elaborated left `Bool`.
 /// For `&&`: true (`Inl`) evaluates the right operand, false (`Inr`) is false.
 /// For `||`: true short-circuits to true, false evaluates the right operand.
 /// The left operand binds at index 0, then the `Case` payload binds at index 0,
-/// so the right operand is translated under two extra binders.
-fn translate_connective<'a>(
+/// so the right operand is elaborated under two extra binders.
+fn elaborate_connective<'a>(
     arena: &'a Bump,
     lhs: Expr,
     rhs: Expr,
     and: bool,
     tenv: &mut TEnv,
 ) -> &'a MComputation<'a> {
-    let lhs_comp = translate_expr(arena, lhs, tenv);
+    let lhs_comp = elaborate_expr(arena, lhs, tenv);
     tenv.bind("_");
     tenv.bind("_");
-    let rhs_comp = translate_expr(arena, rhs, tenv);
+    let rhs_comp = elaborate_expr(arena, rhs, tenv);
     tenv.unbind();
     tenv.unbind();
     let (inlk, inrk) = if and {
@@ -994,16 +994,16 @@ fn translate_connective<'a>(
     })
 }
 
-fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a MComputation<'a> {
     match elems {
         [] => {
             let nil = arena.alloc(MValue::Nil);
             arena.alloc(MComputation::Return(nil))
         }
         [head, tail @ ..] => {
-            let chead = translate_expr(arena, head.clone(), tenv);
+            let chead = elaborate_expr(arena, head.clone(), tenv);
             tenv.bind("_");
-            let ctail = translate_list(arena, tail, tenv);
+            let ctail = elaborate_list(arena, tail, tenv);
             tenv.unbind();
             let var1 = arena.alloc(MValue::Var(1));
             let var0 = arena.alloc(MValue::Var(0));
@@ -1021,20 +1021,20 @@ fn translate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a M
     }
 }
 
-fn translate_nat<'a>(arena: &'a Bump, n: usize) -> &'a MComputation<'a> {
+fn elaborate_nat<'a>(arena: &'a Bump, n: usize) -> &'a MComputation<'a> {
     let val = arena.alloc(MValue::Nat(n as u64));
     arena.alloc(MComputation::Return(val))
 }
 
-fn translate_pair<'a>(
+fn elaborate_pair<'a>(
     arena: &'a Bump,
     fst: Expr,
     snd: Expr,
     tenv: &mut TEnv,
 ) -> &'a MComputation<'a> {
-    let fst_comp = translate_expr(arena, fst, tenv);
+    let fst_comp = elaborate_expr(arena, fst, tenv);
     tenv.bind("_");
-    let snd_comp = translate_expr(arena, snd, tenv);
+    let snd_comp = elaborate_expr(arena, snd, tenv);
     tenv.unbind();
     let var1 = arena.alloc(MValue::Var(1));
     let var0 = arena.alloc(MValue::Var(0));

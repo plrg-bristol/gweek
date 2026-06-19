@@ -9,7 +9,7 @@
 //! recursive `eval`; it is compiled to a Call-By-Push-Value term and executed on an abstract
 //! machine whose entire state is an ordinary value — so at a branch point the machine is simply
 //! cloned, each clone pursuing one alternative. The pipeline is [`parser`] → [`type_check`] →
-//! [`machine::translate`] → [`machine::optimize`] (under `-o`) → [`machine`].
+//! [`machine::elaborate`] → [`machine::optimize`] (under `-o`) → [`machine`].
 
 pub mod machine;
 pub mod parser;
@@ -66,7 +66,7 @@ where
     }
 
     let arena = bumpalo::Bump::new();
-    let (main_comp, env) = machine::translate::translate(&arena, ast);
+    let (main_comp, env) = machine::elaborate::elaborate(&arena, ast);
     let (main_comp, env) = if optimize {
         let comp = machine::optimize::optimize(&arena, main_comp);
         let env: Vec<_> = env

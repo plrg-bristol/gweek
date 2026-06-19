@@ -28,8 +28,8 @@ Values and computations are bridged by a dual pair:
 | computation → value | `Thunk(c)` (`mterms.rs:23`) | freeze a computation into a value you can pass around |
 | value → computation | `Force(v)` (`mterms.rs:110`) | run a thunked computation |
 
-So a gweek function is a **thunk of a `Lambda`** ([[translate|`translate_func`]],
-`translate.rs:342`): calling it means `Force`-ing the thunk and then `App`-lying arguments.
+So a gweek function is a **thunk of a `Lambda`** ([[elaborate|`elaborate_func`]],
+`elaborate.rs:342`): calling it means `Force`-ing the thunk and then `App`-lying arguments.
 
 ## Sequencing is explicit: `Return` / `Bind`
 
@@ -42,7 +42,7 @@ Bind { comp, cont }     -- run comp; bind its returned value at index 0 of cont'
 
 `Bind` (`step.rs:201`) is the workhorse: the surface language's nested data constructors all
 compile to chains of `Bind … Return` so that each sub-result is named before it is used
-([[translate]]). It is also where **laziness** enters: a non-`Return` `comp` is *suspended*
+([[elaborate]]). It is also where **laziness** enters: a non-`Return` `comp` is *suspended*
 rather than run, unless `--strict` is set ([[suspensions-and-forcing]]).
 
 ## Eliminators
@@ -65,5 +65,5 @@ a term language where the next step is always determined by the head constructor
 hidden control flow — so the machine state ([[step]]) can be made fully explicit and cloned.
 A direct recursive evaluator could not be snapshotted this way.
 
-Related: [[mterms]] (the term types), [[step]] (how each form steps), [[translate]] (how
+Related: [[mterms]] (the term types), [[step]] (how each form steps), [[elaborate]] (how
 surface syntax becomes CBPV), [[de-bruijn]] (variable representation).

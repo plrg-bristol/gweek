@@ -11,13 +11,13 @@ resulting tree is the set of solutions. Two things branch:
 
 ## 1. Explicit choice: `a <> b`
 
-Surface `Stmt::Choice`, lowered to `MComputation::Choice(&[..])` ([[mterms]]). The step
+Surface `Stmt::Choice`, elaborated to `MComputation::Choice(&[..])` ([[mterms]]). The step
 (`step.rs:290`) turns a choice of *n* alternatives into *n* machine states, each continuing
 with one alternative and a **clone** of the logic and suspension environments so the branches
 don't interfere. Two degenerate cases:
 
 - `Choice(&[])` is **failure** — `Step::Fail`, which prunes the branch. The surface keyword
-  `fail` lowers to exactly this ([[translate]]).
+  `fail` elaborates to exactly this ([[elaborate]]).
 - `Choice` of one alternative just continues, no branch.
 
 ## 2. Logic-variable case splits
