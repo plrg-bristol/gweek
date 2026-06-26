@@ -22,9 +22,28 @@ pub(crate) enum EnvInner {
 #[derive(Clone, Copy)]
 pub struct Env(pub(crate) NodeId);
 
+/// Resolve a value to a head closure, following `Var` indices through `env`
+/// so the stored closure is always in head form (every `lookup` yields a head).
+fn dealias(heap: &Heap, val: NodeId, env: Env) -> VClosure {
+    let mut vclos = VClosure::Clos { val, env };
+    while let VClosure::Clos { val, env: e } = vclos {
+        match heap.val(val) {
+            MValue::Var(i) => vclos = e.lookup(heap, i).expect("var lookup in extend"),
+            _ => break,
+        }
+    }
+    vclos
+}
+
 impl Env {
     pub fn empty(heap: &mut Heap) -> Env {
         heap.alloc_env(EnvInner::Nil)
+    }
+
+    /// The empty environment in the immortal region: built once at program setup,
+    /// it must outlive every collection, so its handle stays valid forever.
+    pub fn empty_imm(heap: &mut Heap) -> Env {
+        heap.alloc_imm_env(EnvInner::Nil)
     }
 
     pub fn lookup(&self, heap: &Heap, i: usize) -> Option<VClosure> {
@@ -45,14 +64,16 @@ impl Env {
     }
 
     pub fn extend_val(&self, heap: &mut Heap, val: NodeId, env: Env) -> Env {
-        let mut vclos = VClosure::Clos { val, env };
-        while let VClosure::Clos { val, env: e } = vclos {
-            match heap.val(val) {
-                MValue::Var(i) => vclos = e.lookup(heap, i).expect("var lookup in extend"),
-                _ => break,
-            }
-        }
+        let vclos = dealias(heap, val, env);
         heap.alloc_env(EnvInner::Cons(vclos, *self))
+    }
+
+    /// Like [`extend_val`](Env::extend_val), but allocates the new cell in the
+    /// immortal region: program setup that must outlive every collection, so the
+    /// returned handle stays valid forever.
+    pub fn extend_val_imm(&self, heap: &mut Heap, val: NodeId, env: Env) -> Env {
+        let vclos = dealias(heap, val, env);
+        heap.alloc_imm_env(EnvInner::Cons(vclos, *self))
     }
 
     pub fn extend_lvar(&self, heap: &mut Heap, ident: LVar) -> Env {

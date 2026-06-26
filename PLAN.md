@@ -273,6 +273,51 @@ unreachable (surviving siblings were forked holding only pre-branch ids). So:
   forced collections.
 - **Invariant assertions** compiled in debug (roots complete; no old→young).
 
+## The differential test (`collection_preserves_solutions`)
+
+**What it is.** The primary guard for correctness invariant #2 (complete root
+enumeration). For each program and each search strategy it runs the search twice
+— once with collection forced very aggressively (a 256-cell watermark, so the
+collector fires thousands of times mid-search) and once with collection all but
+disabled (`usize::MAX` watermark) — and asserts the two produce the *identical*
+sorted set of rendered solutions. A missed root, a botched forwarding, or a
+broken sharing invariant would drop or corrupt a solution and the sets would
+diverge; under aggressive collection such a bug is hit almost immediately.
+
+**How it was done initially.** It ran the shipped examples at full size —
+`perm [1,2,3,4,5,6,7]` (filtered by `last =:= 1`) and `coins` (`change 20`,
+11691 solutions) — across all four strategies (BFS / DFS / IDDFS / Fair),
+comparing the aggressive run against the relaxed one. Each individual run has a
+120 s budget (`count_with_watermark` asserts it did not time out).
+
+**Why it was so slow.** Fixing IDDFS (above) had a side effect: the test had
+*always* failed fast, panicking early inside the iddfs leg, so the full matrix
+had never actually run to completion. Once iddfs was correct, the whole matrix
+ran — and `coins/iddfs` was brutal, for two compounding reasons:
+
+1. **IDDFS re-deepens.** It re-explores the search tree from scratch at each
+   depth limit (1, 2, 4, …), so its total work is a multiple of one full
+   traversal. Over `coins`'s deep, 11691-solution tree that multiplier is large.
+2. **Every collection re-scans `lenv`/`senv` wholesale.** Those stores are not
+   arena-resident; they are roots, cloned and walked in full on *each*
+   collection (cost ∝ store size, not survivors). On a deep search the stores
+   are large, and a 256-cell watermark triggers thousands of collections.
+
+Multiply (1) by (2) in an unoptimized debug build and `coins/iddfs` blew the
+120 s per-run budget (~206 s observed; the full matrix took ~115 s even in
+release). This is a test-tractability problem, not a correctness one — the
+collector was reproducing solutions exactly throughout.
+
+**Resolution.** Scale the instances down — `perm [1,2,3,4,5]` and `change 12` —
+by substitution in the test (the shipped example files stay human-sized). The
+full four-strategy × {aggressive, relaxed} matrix, re-deepening IDDFS included,
+now completes in well under a second in debug, while the 256-cell watermark
+still forces thousands of minor and major collections mid-search. Coverage is
+unchanged: all strategies, both `lenv` (perm) and `senv` (coins) root paths, and
+the debug no-old→young assertion. (Point 2 above remains the dominant minor-GC
+cost on deep searches and is the natural next optimization target — the wholesale
+`lenv`/`senv` scan is the design choice in §1.3/Phase 2, not a defect.)
+
 ## Benchmarking
 
 - Harness: `/usr/bin/time -l` peak footprint + wall time, as used for the
@@ -306,20 +351,29 @@ unreachable (surviving siblings were forked holding only pre-branch ids). So:
 3. Phase 2: split into nursery + old generation; promotion; no write barrier.
 4. Phase 3 (optional): DFS heap-checkpoint reset.
 
-## Known issue: IDDFS reuses a stale starting env across collections
+## Resolved: IDDFS reused a stale starting env across collections
 
 The differential test `collection_preserves_solutions` (aggressive watermark)
-fails under `--iddfs` with an out-of-bounds panic in `union_find.rs` (an empty
-`UnionFind` indexed by a live `Var`). The cause is that `import_env` builds the
-starting `env` once, and `eval_iddfs` reuses that same `Env` handle to spawn a
+failed under `--iddfs` with an out-of-bounds panic (originally in
+`union_find.rs`, an empty `UnionFind` indexed by a live `Var`; under Phase 2's
+layout it surfaced instead as a `senv` index out of range — same root cause,
+different downstream symptom). The cause was that `import_env` built the starting
+`env` once, and `eval_iddfs` reused that same `Env` handle to spawn a
 `fresh_machine` at the top of *every* deepening round. A collection during round
 *N* rewrites the heap, but that `env` handle is held only by the iddfs driver
 between rounds — it is never in the root set handed to `collect` — so it is not
-forwarded. Round *N+1* then starts a machine from a stale id pointing at a
-reused-and-overwritten node, and the first `Var` lookup resolves against the
-machine's freshly-empty `lenv`, panicking. BFS/DFS/fair each build `env` once and
-consume it once before any collection, so they are unaffected. Two clean fixes:
-rebuild the starting env from the immortal top-level values at the start of each
-round (localizes the restart semantics to iddfs), or make the top-level program
-env immortal (matches §1.4 — it is program setup, never mutated, and must outlive
-every collection — but needs an immortal env/stack store in `Heap`).
+forwarded. Round *N+1* then started a machine from a stale id pointing at a
+reused-and-overwritten node, and the first `Var` lookup panicked. BFS/DFS/fair
+each build `env` once and consume it before any collection, so they were
+unaffected.
+
+**Fix taken:** the second of the two clean options — make the top-level program
+env immortal (matches §1.4). `import_env` now builds the starting environment
+with `Env::empty_imm`/`extend_val_imm` into a new immortal env store in `Heap`
+(`imm_envs`), so its handle is valid forever and `eval_iddfs` reuses it across
+rounds exactly like the other strategies — `eval_iddfs` needs no special case.
+Only the env, not the stack, needs an immortal store: the empty stack is rebuilt
+per machine in `fresh_machine`, so it is always freshly a root and never goes
+stale. The collector treats immortal env handles as leaves (an immortal env
+points only at immortal values and immortal env tails, so there are no edges out
+of it into the collected space).

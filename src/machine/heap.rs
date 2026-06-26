@@ -100,6 +100,8 @@ pub struct Heap {
     comps: Vec<MComputation>,
     /// Immortal AST values, indexed by a [`NodeId`] with the immortal bit set.
     imm_vals: Vec<MValue>,
+    /// Immortal environments, indexed by a [`NodeId`] with the immortal bit set.
+    imm_envs: Vec<EnvInner>,
     /// The old generation: cells that have survived at least one collection.
     old: Vec<Node>,
     /// The nursery: freshly-allocated cells, collected by a minor GC.
@@ -135,6 +137,7 @@ impl Heap {
         Heap {
             comps: Vec::new(),
             imm_vals: Vec::new(),
+            imm_envs: Vec::new(),
             old: Vec::new(),
             nursery: Vec::new(),
             to_space: Vec::new(),
@@ -158,6 +161,12 @@ impl Heap {
         let id = self.imm_vals.len() as u32;
         self.imm_vals.push(val);
         NodeId(id | IMMORTAL)
+    }
+
+    pub(crate) fn alloc_imm_env(&mut self, inner: EnvInner) -> Env {
+        let id = self.imm_envs.len() as u32;
+        self.imm_envs.push(inner);
+        Env(NodeId(id | IMMORTAL))
     }
 
     // --- Runtime allocation (into the nursery) ---
@@ -210,6 +219,9 @@ impl Heap {
     }
 
     pub(crate) fn env_inner(&self, env: Env) -> EnvInner {
+        if let Region::Immortal = env.0.region() {
+            return self.imm_envs[env.0.index()];
+        }
         match self.node(env.0) {
             Node::Env(e) => e,
             _ => panic!("env_inner() on a non-env node"),

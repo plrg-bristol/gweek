@@ -115,11 +115,19 @@ pub fn run(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId], print: 
     }
 }
 
-/// Build an Env from the compile-time list of top-level values.
+/// Build the program's starting environment from the compile-time list of
+/// top-level values, in the *immortal* region.
+///
+/// This environment is program setup — never mutated, pointing only at immortal
+/// values and immortal env tails — so it is allocated immortally and its handle
+/// stays valid across every collection without ever being a root. That is what
+/// lets `eval_iddfs` reuse one starting environment across all of its deepening
+/// rounds: a collected handle, held only by the driver loop between rounds and
+/// so absent from any root set, would dangle the moment a round collected.
 fn import_env(heap: &mut Heap, vals: &[NodeId]) -> Env {
-    let mut env = Env::empty(heap);
+    let mut env = Env::empty_imm(heap);
     for val in vals {
-        env = env.extend_val(heap, *val, env);
+        env = env.extend_val_imm(heap, *val, env);
     }
     env
 }
@@ -312,6 +320,9 @@ fn eval_iddfs(
     let mut depth_limit: usize = 1;
     let mut clock = Clock::new(deadline);
     loop {
+        // Reuse the immortal starting environment to seed every deepening round;
+        // being immortal, its handle survives any collection an earlier round
+        // triggered (see `import_env`).
         let mut stack = vec![(fresh_machine(heap, comp, env), 0)];
         let mut cutoff = false;
         while let Some((m, depth)) = stack.pop() {
@@ -521,25 +532,41 @@ mod tests {
     /// The core GC safety test: under aggressive collection every strategy must
     /// reproduce, identically, the solutions it finds with collection all but
     /// disabled. A missed root would drop or corrupt a solution.
+    ///
+    /// The shipped examples are sized for human demos; here they are scaled down
+    /// so the whole strategy × {aggressive, relaxed} matrix — re-deepening IDDFS
+    /// included — stays tractable under a debug `cargo test`, while a 256-cell
+    /// watermark still forces thousands of minor and major collections
+    /// mid-search. `perm` exercises logic-variable roots, `coins` suspension
+    /// roots.
     #[test]
     fn collection_preserves_solutions() {
-        let cases: &[&str] = &["examples/perm.gwk", "examples/coins.gwk"];
+        let perm = std::fs::read_to_string("examples/perm.gwk")
+            .unwrap()
+            .replace("[1,2,3,4,5,6,7]", "[1,2,3,4,5]");
+        let coins = std::fs::read_to_string("examples/coins.gwk")
+            .unwrap()
+            .replace("change 20.", "change 12.");
+        // Guard against a silently-ineffective scale-down (which would reinstate
+        // the untractable full-size search) if the examples are ever reformatted.
+        assert!(perm.contains("[1,2,3,4,5]"), "perm scale-down did not apply");
+        assert!(coins.contains("change 12."), "coins scale-down did not apply");
+
         let strategies = [
             Strategy::Bfs,
             Strategy::Dfs,
             Strategy::Iddfs,
             Strategy::Fair,
         ];
-        for path in cases {
-            let src = std::fs::read_to_string(path).unwrap();
+        for (name, src) in [("perm", perm.as_str()), ("coins", coins.as_str())] {
             for &strategy in &strategies {
-                let mut aggressive = count_with_watermark(&src, strategy, 256);
-                let mut relaxed = count_with_watermark(&src, strategy, usize::MAX);
+                let mut aggressive = count_with_watermark(src, strategy, 256);
+                let mut relaxed = count_with_watermark(src, strategy, usize::MAX);
                 aggressive.sort();
                 relaxed.sort();
                 assert_eq!(
                     aggressive, relaxed,
-                    "GC changed solutions for {path} under {strategy:?}"
+                    "GC changed solutions for {name} under {strategy:?}"
                 );
             }
         }
