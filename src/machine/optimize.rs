@@ -176,6 +176,10 @@ fn comp_eq(heap: &Heap, a: CompId, b: CompId) -> bool {
             MComputation::Bind { comp: c1, cont: k1 },
             MComputation::Bind { comp: c2, cont: k2 },
         ) => comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2),
+        (
+            MComputation::Need { comp: c1, cont: k1 },
+            MComputation::Need { comp: c2, cont: k2 },
+        ) => comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2),
         (MComputation::Lambda { body: b1 }, MComputation::Lambda { body: b2 })
         | (MComputation::Rec { body: b1 }, MComputation::Rec { body: b2 }) => {
             comp_eq(heap, *b1, *b2)
@@ -271,6 +275,12 @@ fn map_comp(
             let nc = map_comp(heap, c, binders, f);
             let nk = map_comp(heap, cont, binders + 1, f);
             heap.alloc_comp(MComputation::Bind { comp: nc, cont: nk })
+        }
+        MComputation::Need { comp: c, cont } => {
+            let (c, cont) = (*c, *cont);
+            let nc = map_comp(heap, c, binders, f);
+            let nk = map_comp(heap, cont, binders + 1, f);
+            heap.alloc_comp(MComputation::Need { comp: nc, cont: nk })
         }
         MComputation::Force(v) => {
             let v = *v;
@@ -435,6 +445,9 @@ fn has_free_var_comp(heap: &Heap, comp: CompId, target: usize) -> bool {
     match heap.comp(comp) {
         MComputation::Return(v) | MComputation::Force(v) => has_free_var_val(heap, *v, target),
         MComputation::Bind { comp: c, cont } => {
+            has_free_var_comp(heap, *c, target) || has_free_var_comp(heap, *cont, target + 1)
+        }
+        MComputation::Need { comp: c, cont } => {
             has_free_var_comp(heap, *c, target) || has_free_var_comp(heap, *cont, target + 1)
         }
         MComputation::Lambda { body }
@@ -602,6 +615,22 @@ fn opt_subterms(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId
             let cenv = push_env(env, entry);
             let ncont = opt_comp_env(heap, cont, &cenv);
             heap.alloc_comp(MComputation::Bind {
+                comp: oc,
+                cont: ncont,
+            })
+        }
+        MComputation::Need { comp: c, cont } => {
+            let (c, cont) = (*c, *cont);
+            let oc = opt_comp_env(heap, c, env);
+            let entry = if let MComputation::Return(v) = heap.comp(oc) {
+                let v = *v;
+                Some(deep_resolve(heap, v, env))
+            } else {
+                None
+            };
+            let cenv = push_env(env, entry);
+            let ncont = opt_comp_env(heap, cont, &cenv);
+            heap.alloc_comp(MComputation::Need {
                 comp: oc,
                 cont: ncont,
             })
@@ -801,6 +830,32 @@ fn rewrite(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId {
             }
             comp
         }
+        // Need rules (like Bind but always lazy):
+        // fail need x. M  -->  fail
+        // dead-bind: return V need x. M  -->  M↓  (when x not in FV(M))
+        // dead-end: M need x. fail  -->  fail
+        MComputation::Need { comp: c, cont } => {
+            let (c, cont) = (*c, *cont);
+            if let MComputation::Return(v) = heap.comp(c) {
+                let v = *v;
+                // dead-bind: cont doesn't use Var(0) -> drop the need
+                if !has_free_var_comp(heap, cont, 0) {
+                    #[cfg(feature = "opt-stats")]
+                    stats::bump("dead-bind");
+                    return shift_comp(heap, cont, -1, 0);
+                }
+            }
+            if is_fail(heap, c) {
+                return fail(heap);
+            }
+            // Dead-End: M need x. fail  -->  fail
+            if is_fail(heap, cont) {
+                #[cfg(feature = "opt-stats")]
+                stats::bump("dead-end");
+                return fail(heap);
+            }
+            comp
+        }
 
         // force(thunk M)  -->  M  (resolve through env)
         MComputation::Force(v) => {
@@ -839,6 +894,21 @@ fn rewrite(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId {
                     cont: new_app,
                 });
                 return opt_comp_env(heap, new_bind, env);
+            }
+            if let MComputation::Need { comp: c, cont } = heap.comp(op) {
+                let (c, cont) = (*c, *cont);
+                #[cfg(feature = "opt-stats")]
+                stats::bump("app-need");
+                let shifted_arg = shift_val(heap, arg, 1, 0);
+                let new_app = heap.alloc_comp(MComputation::App {
+                    op: cont,
+                    arg: shifted_arg,
+                });
+                let new_need = heap.alloc_comp(MComputation::Need {
+                    comp: c,
+                    cont: new_app,
+                });
+                return opt_comp_env(heap, new_need, env);
             }
             comp
         }

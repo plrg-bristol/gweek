@@ -47,6 +47,10 @@ pub enum MComputation {
         comp: CompId,
         cont: CompId,
     },
+    Need {
+        comp: CompId,
+        cont: CompId,
+    },
     Force(NodeId),
     Lambda {
         body: CompId,
@@ -80,6 +84,9 @@ pub fn count_nodes_comp(heap: &Heap, id: CompId) -> usize {
     match heap.comp(id) {
         MComputation::Return(v) => 1 + count_nodes_val(heap, *v),
         MComputation::Bind { comp, cont } => {
+            1 + count_nodes_comp(heap, *comp) + count_nodes_comp(heap, *cont)
+        }
+        MComputation::Need { comp, cont } => {
             1 + count_nodes_comp(heap, *comp) + count_nodes_comp(heap, *cont)
         }
         MComputation::Force(v) => 1 + count_nodes_val(heap, *v),

@@ -244,11 +244,32 @@ impl Machine {
                             done: false,
                         })
                     }
-                    None if cfg.strict => {
+                    None => {
                         let new_stack = stack.push(heap, StkFrame::To(cont), env);
                         Step::Continue(Machine {
                             cclos: (inner, env),
                             stack: new_stack,
+                            lenv,
+                            senv,
+                            done: false,
+                        })
+                    }
+                }
+            }
+            MComputation::Need { comp: inner, cont } => {
+                let inner = *inner;
+                let cont = *cont;
+                let inner_ret = if let MComputation::Return(v) = heap.comp(inner) {
+                    Some(*v)
+                } else {
+                    None
+                };
+                match inner_ret {
+                    Some(v) => {
+                        let new_env = env.extend_val(heap, v, env);
+                        Step::Continue(Machine {
+                            cclos: (cont, new_env),
+                            stack,
                             lenv,
                             senv,
                             done: false,

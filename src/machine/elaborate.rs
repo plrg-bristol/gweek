@@ -281,6 +281,10 @@ fn walk_expr(expr: &Expr, names: &HashSet<String>, refs: &mut HashSet<String>) {
             walk_expr(val, names, refs);
             walk_expr(body, names, refs);
         }
+        Expr::LetNeed { val, body, .. } => {
+            walk_expr(val, names, refs);
+            walk_expr(body, names, refs);
+        }
         Expr::Exists { body, .. } => walk_expr(body, names, refs),
         Expr::Equate { lhs, rhs, body } => {
             walk_expr(lhs, names, refs);
@@ -593,6 +597,13 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
             let cont = elaborate_expr(heap, *body, tenv);
             tenv.unbind();
             heap.alloc_comp(MComputation::Bind { comp, cont })
+        }
+        Expr::LetNeed { var, val, body } => {
+            let comp = elaborate_expr(heap, *val, tenv);
+            tenv.bind(&var);
+            let cont = elaborate_expr(heap, *body, tenv);
+            tenv.unbind();
+            heap.alloc_comp(MComputation::Need { comp, cont })
         }
         Expr::Exists { var, r#type, body } => {
             tenv.bind(&var);

@@ -50,6 +50,11 @@ pub enum Expr {
         val: Box<Expr>,
         body: Box<Expr>,
     },
+    LetNeed {
+        var: String,
+        val: Box<Expr>,
+        body: Box<Expr>,
+    },
     Exists {
         var: String,
         r#type: Type,
