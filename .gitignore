@@ -3,7 +3,9 @@
 web/pkg/
 
 # Third-party benchmark distributions (PAKCS/KiCS2); fetch separately.
-/benchmark/
+# Our own GC memory harness lives in benchmark/gc/ and is tracked.
+/benchmark/*
+!/benchmark/gc/
 
 # Quartz wiki: the upstream clone and the generated site
 .quartz/

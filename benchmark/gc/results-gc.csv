@@ -1,0 +1,31 @@
+label,program,strategy,kind,repeat,real_sec,peak_bytes,peak_mb,solutions,final
+gc,perm,bfs,complete,1,0.33,55968152,53.4,721,>>> 720 solutions
+gc,perm,bfs,complete,2,0.12,56066456,53.5,721,>>> 720 solutions
+gc,perm,bfs,complete,3,0.11,56033664,53.4,721,>>> 720 solutions
+gc,perm,fair,complete,1,0.09,53805464,51.3,721,>>> 720 solutions
+gc,perm,fair,complete,2,0.09,53805464,51.3,721,>>> 720 solutions
+gc,perm,fair,complete,3,0.09,53838208,51.3,721,>>> 720 solutions
+gc,perm,dfs,complete,1,0.04,6635880,6.3,721,>>> 720 solutions
+gc,perm,dfs,complete,2,0.04,6537576,6.2,721,>>> 720 solutions
+gc,perm,dfs,complete,3,0.04,6619496,6.3,721,>>> 720 solutions
+gc,nqueens,bfs,complete,1,0.14,81576344,77.8,93,>>> 92 solutions
+gc,nqueens,bfs,complete,2,0.14,81772976,78.0,93,>>> 92 solutions
+gc,nqueens,bfs,complete,3,0.14,81740184,78.0,93,>>> 92 solutions
+gc,nqueens,fair,complete,1,0.15,65749376,62.7,93,>>> 92 solutions
+gc,nqueens,fair,complete,2,0.15,65945984,62.9,93,>>> 92 solutions
+gc,nqueens,fair,complete,3,0.15,66060672,63.0,93,>>> 92 solutions
+gc,nqueens,dfs,complete,1,0.06,11108712,10.6,93,>>> 92 solutions
+gc,nqueens,dfs,complete,2,0.06,11338088,10.8,93,>>> 92 solutions
+gc,nqueens,dfs,complete,3,0.06,11092328,10.6,93,>>> 92 solutions
+gc,coins,bfs,complete,1,0.69,244040256,232.7,11692,>>> 11691 solutions
+gc,coins,bfs,complete,2,0.70,244400704,233.1,11692,>>> 11691 solutions
+gc,coins,bfs,complete,3,0.68,244007488,232.7,11692,>>> 11691 solutions
+gc,coins,fair,complete,1,0.70,220348968,210.1,11692,>>> 11691 solutions
+gc,coins,fair,complete,2,0.69,236651072,225.7,11692,>>> 11691 solutions
+gc,coins,fair,complete,3,0.68,231735872,221.0,11692,>>> 11691 solutions
+gc,coins,dfs,complete,1,0.21,9585000,9.1,11692,>>> 11691 solutions
+gc,coins,dfs,complete,2,0.21,9601384,9.2,11692,>>> 11691 solutions
+gc,coins,dfs,complete,3,0.21,9585000,9.1,11692,>>> 11691 solutions
+gc,pythagorean,bfs,long,1,12.01,767083456,731.5,5,>>> timed out after 12s 4 solutions found
+gc,pythagorean,fair,long,1,12.01,671974216,640.8,5,>>> timed out after 12s 4 solutions found
+gc,pythagorean,dfs,long,1,12.02,1097615064,1046.8,1,>>> timed out after 12s 0 solutions found
