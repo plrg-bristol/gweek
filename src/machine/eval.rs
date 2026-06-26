@@ -150,18 +150,38 @@ fn fresh_machine(heap: &mut Heap, comp: CompId, env: Env) -> Machine {
     }
 }
 
-/// Collect at a safe point, forwarding the roots of every live machine.
+/// Collect at a safe point. A minor collection promotes the live nursery cells
+/// into the old generation; if that pushes the old generation past its
+/// watermark, a major collection compacts it in the same pass. Each pass
+/// forwards the roots of every live machine and then scans.
 ///
 /// The plan's invariant — no intra-heap old→young pointers, with the mutable
 /// logic/suspension environments scanned wholesale as roots — means a complete
-/// root walk suffices and no write barrier is needed. Distinct machines often
-/// share a `LogicEnv`/`SuspEnv` `Rc`; the dedup maps rebuild each shared store
-/// exactly once so the sharing survives the collection.
+/// root walk suffices and no write barrier is needed.
 fn collect<'m>(heap: &mut Heap, machines: impl Iterator<Item = &'m mut Machine>) {
-    heap.begin_collection();
+    let mut machines: Vec<&mut Machine> = machines.collect();
+    heap.begin_minor();
+    forward_roots(heap, &mut machines);
+    heap.scan();
+    heap.end_minor();
+    if heap.needs_major() {
+        heap.begin_major();
+        forward_roots(heap, &mut machines);
+        heap.scan();
+        heap.end_major();
+    }
+}
+
+/// Forward every root the live machines hold into the collector's to-space.
+///
+/// Distinct machines often share a `LogicEnv`/`SuspEnv` `Rc`; the dedup maps
+/// rebuild each shared store exactly once so the sharing survives the
+/// collection. Run once per collection pass — the maps are rebuilt each time
+/// because a prior pass replaces the shared stores with fresh `Rc`s.
+fn forward_roots(heap: &mut Heap, machines: &mut [&mut Machine]) {
     let mut lenv_map: HashMap<usize, LogicEnv> = HashMap::new();
     let mut senv_map: HashMap<usize, SuspEnv> = HashMap::new();
-    for m in machines {
+    for m in machines.iter_mut() {
         m.cclos.1 = heap.forward_env(m.cclos.1);
         m.stack = Stack(heap.forward(m.stack.0));
         let lkey = m.lenv.store_ptr();
@@ -181,8 +201,6 @@ fn collect<'m>(heap: &mut Heap, machines: impl Iterator<Item = &'m mut Machine>)
             m.senv = n;
         }
     }
-    heap.scan();
-    heap.end_collection();
 }
 
 /// Record a solution; returns true if we should stop (--first mode).

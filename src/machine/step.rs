@@ -151,7 +151,7 @@ impl Machine {
             if clock.expired() {
                 return RunResult::TimedOut;
             }
-            if heap.over_watermark() {
+            if heap.nursery_full() {
                 return RunResult::NeedGc(self);
             }
             match self.step(cfg, heap) {
