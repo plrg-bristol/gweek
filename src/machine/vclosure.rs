@@ -13,15 +13,16 @@
 use std::fmt::{self, Display};
 
 use super::env::Env;
+use super::heap::Heap;
 use super::lvar::LogicEnv;
 use super::mterms::MValue;
 use super::senv::{SuspAt, SuspEnv};
 use super::value_type::ValueType;
-use super::{LVar, SuspId};
+use super::{LVar, NodeId, SuspId};
 
 #[derive(Clone, Copy, Debug)]
-pub enum VClosure<'a> {
-    Clos { val: &'a MValue<'a>, env: Env<'a> },
+pub enum VClosure {
+    Clos { val: NodeId, env: Env },
     LogicVar { ident: LVar },
     Susp { ident: SuspId },
 }
@@ -126,28 +127,40 @@ impl Closed {
     }
 }
 
-impl<'a> VClosure<'a> {
-    pub fn mk_clos(val: &'a MValue<'a>, env: Env<'a>) -> VClosure<'a> {
+impl VClosure {
+    pub fn mk_clos(val: NodeId, env: Env) -> VClosure {
         VClosure::Clos { val, env }
+    }
+
+    /// Rebuild a closure against the new heap during a collection.
+    pub(crate) fn forward(self, heap: &mut Heap) -> VClosure {
+        match self {
+            VClosure::Clos { val, env } => VClosure::Clos {
+                val: heap.forward(val),
+                env: heap.forward_env(env),
+            },
+            other => other,
+        }
     }
 
     pub fn occurs_lvar(
         &self,
-        lenv: &LogicEnv<'a>,
-        senv: &SuspEnv<'a>,
+        heap: &Heap,
+        lenv: &LogicEnv,
+        senv: &SuspEnv,
         ident: LVar,
-    ) -> Result<bool, SuspAt<'a>> {
-        match self.close_head(lenv, senv)? {
-            VClosure::Clos { val, env } => match val {
-                MValue::Succ(v) => VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident),
+    ) -> Result<bool, SuspAt> {
+        match self.close_head(heap, lenv, senv)? {
+            VClosure::Clos { val, env } => match heap.val(val) {
+                MValue::Succ(v) => VClosure::mk_clos(v, env).occurs_lvar(heap, lenv, senv, ident),
                 MValue::Cons(v, w) => Ok(VClosure::mk_clos(v, env)
-                    .occurs_lvar(lenv, senv, ident)?
-                    || VClosure::mk_clos(w, env).occurs_lvar(lenv, senv, ident)?),
+                    .occurs_lvar(heap, lenv, senv, ident)?
+                    || VClosure::mk_clos(w, env).occurs_lvar(heap, lenv, senv, ident)?),
                 MValue::Pair(a, b) => Ok(VClosure::mk_clos(a, env)
-                    .occurs_lvar(lenv, senv, ident)?
-                    || VClosure::mk_clos(b, env).occurs_lvar(lenv, senv, ident)?),
+                    .occurs_lvar(heap, lenv, senv, ident)?
+                    || VClosure::mk_clos(b, env).occurs_lvar(heap, lenv, senv, ident)?),
                 MValue::Inl(v) | MValue::Inr(v) => {
-                    VClosure::mk_clos(v, env).occurs_lvar(lenv, senv, ident)
+                    VClosure::mk_clos(v, env).occurs_lvar(heap, lenv, senv, ident)
                 }
                 MValue::Var(_) => unreachable!("value should be head-closed in occurs check"),
                 MValue::Thunk(_) => panic!("occurs check on a computation"),
@@ -162,21 +175,22 @@ impl<'a> VClosure<'a> {
 
     pub fn close_head(
         self,
-        lenv: &LogicEnv<'a>,
-        senv: &SuspEnv<'a>,
-    ) -> Result<VClosure<'a>, SuspAt<'a>> {
+        heap: &Heap,
+        lenv: &LogicEnv,
+        senv: &SuspEnv,
+    ) -> Result<VClosure, SuspAt> {
         let mut vclos = self;
         loop {
-            vclos = match &vclos {
-                VClosure::Clos { val, env } => match val {
-                    MValue::Var(i) => env.lookup(*i).expect("index undefined in env"),
+            vclos = match vclos {
+                VClosure::Clos { val, env } => match heap.val(val) {
+                    MValue::Var(i) => env.lookup(heap, i).expect("index undefined in env"),
                     _ => break,
                 },
-                VClosure::LogicVar { ident } => match lenv.lookup(*ident) {
+                VClosure::LogicVar { ident } => match lenv.lookup(ident) {
                     Some(vclos) => vclos,
                     None => break,
                 },
-                VClosure::Susp { ident } => senv.lookup(ident)?,
+                VClosure::Susp { ident } => senv.lookup(&ident)?,
             }
         }
         Ok(vclos)
@@ -187,11 +201,16 @@ impl<'a> VClosure<'a> {
     /// Implemented with an explicit work stack rather than native recursion so
     /// that the depth bound (against cyclic terms admitted by
     /// `--no-occurs-check`) is enforced regardless of stack-frame size.
-    pub fn close(&self, lenv: &LogicEnv<'a>, senv: &SuspEnv<'a>) -> Result<Closed, CyclicTerm> {
+    pub fn close(
+        &self,
+        heap: &Heap,
+        lenv: &LogicEnv,
+        senv: &SuspEnv,
+    ) -> Result<Closed, CyclicTerm> {
         // Post-order traversal: `work` holds the tasks still to process,
         // `out` accumulates finished subterms. A `Combine` task pops its
         // children off `out` and pushes the assembled node.
-        let mut work: Vec<Task<'a>> = vec![Task::Resolve(*self, 0)];
+        let mut work: Vec<Task> = vec![Task::Resolve(*self, 0)];
         let mut out: Vec<Closed> = Vec::new();
         while let Some(task) = work.pop() {
             match task {
@@ -200,13 +219,13 @@ impl<'a> VClosure<'a> {
                         return Err(CyclicTerm);
                     }
                     match vclos {
-                        VClosure::Clos { val, env } => match val {
+                        VClosure::Clos { val, env } => match heap.val(val) {
                             MValue::Var(i) => {
-                                let r = env.lookup(*i).expect("index undefined in env");
+                                let r = env.lookup(heap, i).expect("index undefined in env");
                                 work.push(Task::Resolve(r, depth));
                             }
                             MValue::Unit => out.push(Closed::Unit),
-                            MValue::Nat(n) => out.push(Closed::Nat(*n)),
+                            MValue::Nat(n) => out.push(Closed::Nat(n)),
                             MValue::Zero => out.push(Closed::Nat(0)),
                             MValue::Succ(v) => {
                                 work.push(Task::Combine(Combine::Succ));
@@ -231,7 +250,7 @@ impl<'a> VClosure<'a> {
                                 work.push(Task::Combine(Combine::Inr));
                                 work.push(Task::Resolve(VClosure::mk_clos(v, env), depth + 1));
                             }
-                            MValue::Thunk(t) => panic!("tried to close thunk: {}", t),
+                            MValue::Thunk(_) => panic!("tried to close a thunk"),
                         },
                         VClosure::LogicVar { ident } => match lenv.lookup(ident) {
                             Some(inner) => work.push(Task::Resolve(inner, depth)),
@@ -277,8 +296,8 @@ impl<'a> VClosure<'a> {
     }
 }
 
-enum Task<'a> {
-    Resolve(VClosure<'a>, usize),
+enum Task {
+    Resolve(VClosure, usize),
     Combine(Combine),
 }
 

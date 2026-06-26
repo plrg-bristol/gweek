@@ -19,9 +19,9 @@ pub mod type_check;
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use machine::mterms::{MComputation, MValue};
+use machine::heap::{CompId, NodeId};
 #[cfg(target_arch = "wasm32")]
-use machine::Config;
+use machine::{Config, Heap};
 
 #[cfg(target_arch = "wasm32")]
 fn run_with<F>(
@@ -35,7 +35,7 @@ fn run_with<F>(
     eval: F,
 ) -> String
 where
-    F: for<'a> FnOnce(&Config, &'a MComputation<'a>, &[&'a MValue<'a>]) -> String,
+    F: FnOnce(&Config, &mut Heap, CompId, &[NodeId]) -> String,
 {
     console_error_panic_hook::set_once();
 
@@ -65,20 +65,20 @@ where
         return msgs.join("\n");
     }
 
-    let arena = bumpalo::Bump::new();
-    let (main_comp, env) = machine::elaborate::elaborate(&arena, ast);
+    let mut heap = Heap::new();
+    let (main_comp, env) = machine::elaborate::elaborate(&mut heap, ast);
     let (main_comp, env) = if optimize {
-        let comp = machine::optimize::optimize(&arena, main_comp);
+        let comp = machine::optimize::optimize(&mut heap, main_comp);
         let env: Vec<_> = env
             .iter()
-            .map(|v| machine::optimize::optimize_val(&arena, v))
+            .map(|v| machine::optimize::optimize_val(&mut heap, *v))
             .collect();
         (comp, env)
     } else {
         (main_comp, env)
     };
 
-    eval(&cfg, main_comp, &env)
+    eval(&cfg, &mut heap, main_comp, &env)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -132,8 +132,8 @@ pub fn run_gweek(
         strict,
         first_only,
         timeout_secs,
-        |cfg, comp, env| {
-            machine::eval_streaming(cfg, comp, env, |line| {
+        |cfg, heap, comp, env| {
+            machine::eval_streaming(cfg, heap, comp, env, |line| {
                 let _ = on_line.call1(&JsValue::NULL, &JsValue::from_str(line));
             })
         },
@@ -159,6 +159,6 @@ pub fn run_gweek_batch(
         strict,
         first_only,
         timeout_secs,
-        |cfg, comp, env| machine::eval_collect(cfg, comp, env),
+        |cfg, heap, comp, env| machine::eval_collect(cfg, heap, comp, env),
     )
 }

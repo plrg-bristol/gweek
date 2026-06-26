@@ -95,6 +95,12 @@ impl<T> UnionFind<T> {
         &mut self.data[root.0]
     }
 
+    /// Direct mutable access to every node's datum, in registration order. Used
+    /// by the collector to forward the value closures a `LogicEnv` holds.
+    pub fn data_mut(&mut self) -> &mut [T] {
+        &mut self.data
+    }
+
     pub fn union(&mut self, i: usize, j: usize) {
         let a = self.find(i).0;
         let b = self.find(j).0;

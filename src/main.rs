@@ -9,10 +9,9 @@ use std::fs;
 use std::process;
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use bumpalo::Bump;
 use chumsky::prelude::Simple;
 
-use gweek::machine::{self, elaborate::elaborate, Config, Strategy};
+use gweek::machine::{self, elaborate::elaborate, Config, Heap, Strategy};
 use gweek::parser;
 use gweek::type_check;
 
@@ -130,24 +129,24 @@ fn main() {
         process::exit(1);
     }
 
-    let arena = Bump::new();
-    let (main_comp, env) = elaborate(&arena, ast);
+    let mut heap = Heap::new();
+    let (main_comp, env) = elaborate(&mut heap, ast);
     let (main_comp, env) = if optimize {
-        let comp = machine::optimize::optimize(&arena, main_comp);
+        let comp = machine::optimize::optimize(&mut heap, main_comp);
         #[cfg(feature = "opt-stats")]
-        let env = machine::optimize::optimize_env_with_stats(&arena, &env, &|a, v| {
-            machine::optimize::optimize_val(a, v)
+        let env = machine::optimize::optimize_env_with_stats(&mut heap, &env, &|h, v| {
+            machine::optimize::optimize_val(h, v)
         });
         #[cfg(not(feature = "opt-stats"))]
         let env: Vec<_> = env
             .iter()
-            .map(|v| machine::optimize::optimize_val(&arena, v))
+            .map(|v| machine::optimize::optimize_val(&mut heap, *v))
             .collect();
         (comp, env)
     } else {
         (main_comp, env)
     };
-    machine::eval(&cfg, main_comp, &env);
+    machine::eval(&cfg, &mut heap, main_comp, &env);
 }
 
 fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
@@ -194,8 +193,7 @@ fn report_errors(filename: &str, src: &str, errs: Vec<Simple<char>>) {
 
 #[cfg(test)]
 mod tests {
-    use bumpalo::Bump;
-    use gweek::machine::{self, elaborate::elaborate, run, Config, Strategy};
+    use gweek::machine::{self, elaborate::elaborate, run, Config, Heap, Strategy};
     use gweek::{parser, type_check};
     use std::fs;
 
@@ -214,11 +212,11 @@ mod tests {
     // Full pipeline (parse -> type-check -> elaborate -> evaluate) returning the
     // collected output, for asserting the value a program produces.
     fn collect_source(src: &str) -> String {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         let ast = parser::parse(src).expect("should parse");
         type_check::type_check(&ast).expect("should type-check");
-        let (comp, env) = elaborate(&arena, ast);
-        machine::eval_collect(&test_config(Strategy::Bfs), comp, &env)
+        let (comp, env) = elaborate(&mut heap, ast);
+        machine::eval_collect(&test_config(Strategy::Bfs), &mut heap, comp, &env)
     }
 
     // B2: `if`/`then`/`else` and `==` on Nat elaborate and evaluate correctly.
@@ -262,20 +260,20 @@ mod tests {
     }
 
     fn run_example_inner(path: &str, strategy: Strategy, opt: bool) -> usize {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         let src = fs::read_to_string(path).unwrap();
         let ast = parser::parse(&src).unwrap();
-        let (comp, env) = elaborate(&arena, ast);
+        let (comp, env) = elaborate(&mut heap, ast);
         let cfg = test_config(strategy);
         if opt {
-            let comp = machine::optimize::optimize(&arena, comp);
+            let comp = machine::optimize::optimize(&mut heap, comp);
             let env: Vec<_> = env
                 .iter()
-                .map(|v| machine::optimize::optimize_val(&arena, v))
+                .map(|v| machine::optimize::optimize_val(&mut heap, *v))
                 .collect();
-            run(&cfg, comp, &env, false)
+            run(&cfg, &mut heap, comp, &env, false)
         } else {
-            run(&cfg, comp, &env, false)
+            run(&cfg, &mut heap, comp, &env, false)
         }
     }
 

@@ -9,47 +9,47 @@
 use std::rc::Rc;
 
 use super::env::Env;
-use super::mterms::MValue;
-use super::{CClosure, SuspId, VClosure};
+use super::heap::{CompId, Heap};
+use super::{CClosure, NodeId, SuspId, VClosure};
 
 #[derive(Clone)]
-pub struct SuspEnv<'a> {
-    entries: Rc<Vec<Result<VClosure<'a>, CClosure<'a>>>>,
+pub struct SuspEnv {
+    entries: Rc<Vec<Result<VClosure, CClosure>>>,
     next_pending: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SuspAt<'a> {
+pub struct SuspAt {
     pub ident: SuspId,
-    pub cclos: CClosure<'a>,
+    pub cclos: CClosure,
 }
 
-impl<'a> SuspAt<'a> {
-    pub fn comp(&self) -> &'a super::mterms::MComputation<'a> {
+impl SuspAt {
+    pub fn comp(&self) -> CompId {
         self.cclos.0
     }
 
-    pub fn env(&self) -> Env<'a> {
+    pub fn env(&self) -> Env {
         self.cclos.1
     }
 }
 
-impl<'a> SuspEnv<'a> {
-    pub fn new() -> SuspEnv<'a> {
+impl SuspEnv {
+    pub fn new() -> SuspEnv {
         SuspEnv {
             entries: Rc::new(Vec::new()),
             next_pending: 0,
         }
     }
 
-    pub fn fresh(&mut self, cclos: CClosure<'a>) -> SuspId {
+    pub fn fresh(&mut self, cclos: CClosure) -> SuspId {
         let entries = Rc::make_mut(&mut self.entries);
         let next = entries.len();
         entries.push(Err(cclos));
         SuspId(next)
     }
 
-    pub fn lookup(&self, ident: &SuspId) -> Result<VClosure<'a>, SuspAt<'a>> {
+    pub fn lookup(&self, ident: &SuspId) -> Result<VClosure, SuspAt> {
         match &self.entries[ident.0] {
             Ok(vclos) => Ok(*vclos),
             Err(cclos) => Err(SuspAt {
@@ -59,11 +59,11 @@ impl<'a> SuspEnv<'a> {
         }
     }
 
-    pub fn set(&mut self, ident: &SuspId, val: &'a MValue<'a>, env: Env<'a>) {
+    pub fn set(&mut self, ident: &SuspId, val: NodeId, env: Env) {
         Rc::make_mut(&mut self.entries)[ident.0] = Ok(VClosure::mk_clos(val, env));
     }
 
-    pub fn next(&mut self) -> Option<SuspAt<'a>> {
+    pub fn next(&mut self) -> Option<SuspAt> {
         while self.next_pending < self.entries.len() {
             match &self.entries[self.next_pending] {
                 Ok(_) => self.next_pending += 1,
@@ -76,5 +76,27 @@ impl<'a> SuspEnv<'a> {
             }
         }
         None
+    }
+
+    /// Identity of the shared store, so a collection can rebuild each distinct
+    /// `SuspEnv` once and share it back across the machines that aliased it.
+    pub(crate) fn store_ptr(&self) -> usize {
+        Rc::as_ptr(&self.entries) as *const () as usize
+    }
+
+    /// Rebuild every stored closure against the new heap during a collection,
+    /// returning a fresh store the survivors can share.
+    pub(crate) fn forwarded(&self, heap: &mut Heap) -> SuspEnv {
+        let mut entries = (*self.entries).clone();
+        for entry in entries.iter_mut() {
+            match entry {
+                Ok(vc) => *vc = (*vc).forward(heap),
+                Err((_, env)) => *env = heap.forward_env(*env),
+            }
+        }
+        SuspEnv {
+            entries: Rc::new(entries),
+            next_pending: self.next_pending,
+        }
     }
 }

@@ -305,3 +305,21 @@ unreachable (surviving siblings were forked holding only pre-branch ids). So:
 2. Phase 1: single-space Cheney collector + roots + safe points + watermark.
 3. Phase 2: split into nursery + old generation; promotion; no write barrier.
 4. Phase 3 (optional): DFS heap-checkpoint reset.
+
+## Known issue: IDDFS reuses a stale starting env across collections
+
+The differential test `collection_preserves_solutions` (aggressive watermark)
+fails under `--iddfs` with an out-of-bounds panic in `union_find.rs` (an empty
+`UnionFind` indexed by a live `Var`). The cause is that `import_env` builds the
+starting `env` once, and `eval_iddfs` reuses that same `Env` handle to spawn a
+`fresh_machine` at the top of *every* deepening round. A collection during round
+*N* rewrites the heap, but that `env` handle is held only by the iddfs driver
+between rounds — it is never in the root set handed to `collect` — so it is not
+forwarded. Round *N+1* then starts a machine from a stale id pointing at a
+reused-and-overwritten node, and the first `Var` lookup resolves against the
+machine's freshly-empty `lenv`, panicking. BFS/DFS/fair each build `env` once and
+consume it once before any collection, so they are unaffected. Two clean fixes:
+rebuild the starting env from the immortal top-level values at the start of each
+round (localizes the restart semantics to iddfs), or make the top-level program
+env immortal (matches §1.4 — it is program setup, never mutated, and must outlive
+every collection — but needs an immortal env/stack store in `Heap`).

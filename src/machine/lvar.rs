@@ -17,16 +17,17 @@ use std::rc::Rc;
 
 use crate::machine::value_type::ValueType;
 
+use super::heap::Heap;
 use super::union_find::UnionFind;
 use super::{LVar, VClosure};
 
 #[derive(Clone)]
-pub struct LogicEnv<'a> {
-    store: Rc<UnionFind<(ValueType, Option<VClosure<'a>>)>>,
+pub struct LogicEnv {
+    store: Rc<UnionFind<(ValueType, Option<VClosure>)>>,
 }
 
-impl<'a> LogicEnv<'a> {
-    pub fn new() -> LogicEnv<'a> {
+impl LogicEnv {
+    pub fn new() -> LogicEnv {
         LogicEnv {
             store: Rc::new(UnionFind::new()),
         }
@@ -36,12 +37,12 @@ impl<'a> LogicEnv<'a> {
         LVar(Rc::make_mut(&mut self.store).register((ptype, None)))
     }
 
-    pub fn lookup(&self, ident: LVar) -> Option<VClosure<'a>> {
+    pub fn lookup(&self, ident: LVar) -> Option<VClosure> {
         let root = self.store.find(ident.0);
         self.store.get(root).1
     }
 
-    pub fn set_vclos(&mut self, ident: LVar, vclos: VClosure<'a>) {
+    pub fn set_vclos(&mut self, ident: LVar, vclos: VClosure) {
         let store = Rc::make_mut(&mut self.store);
         let root = store.find(ident.0);
         store.get_mut(root).1 = Some(vclos);
@@ -59,6 +60,26 @@ impl<'a> LogicEnv<'a> {
     pub fn canonical(&self, ident: LVar) -> LVar {
         LVar(self.store.canonical(ident.0))
     }
+
+    /// Identity of the shared store, so a collection can rebuild each distinct
+    /// `LogicEnv` once and share it back across the machines that aliased it.
+    pub(crate) fn store_ptr(&self) -> usize {
+        Rc::as_ptr(&self.store) as *const () as usize
+    }
+
+    /// Rebuild every stored value closure against the new heap during a
+    /// collection, returning a fresh store the survivors can share.
+    pub(crate) fn forwarded(&self, heap: &mut Heap) -> LogicEnv {
+        let mut store = (*self.store).clone();
+        for (_, binding) in store.data_mut() {
+            if let Some(vc) = binding {
+                *vc = (*vc).forward(heap);
+            }
+        }
+        LogicEnv {
+            store: Rc::new(store),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -66,7 +87,6 @@ mod tests {
     use super::*;
     use crate::machine::env::Env;
     use crate::machine::mterms::MValue;
-    use bumpalo::Bump;
 
     /// Regression for B1: binding a *non-root* member of a merged class must be
     /// visible through every ident in that class.
@@ -78,7 +98,7 @@ mod tests {
     /// on equal rank, so binding the *first* ident exercises the non-root write.
     #[test]
     fn binding_non_root_is_visible_through_class() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
 
         let mut lenv = LogicEnv::new();
         let a = lenv.fresh(ValueType::Nat);
@@ -86,30 +106,19 @@ mod tests {
 
         lenv.identify(a, b);
 
-        let three = arena.alloc(MValue::Nat(3));
-        let vclos = VClosure::mk_clos(three, Env::empty(&arena));
+        let three = heap.alloc_imm_val(MValue::Nat(3));
+        let empty = Env::empty(&mut heap);
+        let vclos = VClosure::mk_clos(three, empty);
         // `a` is the non-root member of {a, b} after the union above.
         lenv.set_vclos(a, vclos);
 
         // The binding must be visible through both idents.
         assert!(
-            matches!(
-                lenv.lookup(a),
-                Some(VClosure::Clos {
-                    val: MValue::Nat(3),
-                    ..
-                })
-            ),
+            matches!(lenv.lookup(a), Some(VClosure::Clos { val, .. }) if heap.val(val) == MValue::Nat(3)),
             "binding lost when looked up via the non-root ident"
         );
         assert!(
-            matches!(
-                lenv.lookup(b),
-                Some(VClosure::Clos {
-                    val: MValue::Nat(3),
-                    ..
-                })
-            ),
+            matches!(lenv.lookup(b), Some(VClosure::Clos { val, .. }) if heap.val(val) == MValue::Nat(3)),
             "binding lost when looked up via the root ident"
         );
 

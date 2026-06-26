@@ -8,18 +8,18 @@
 //! top-level rules to a fixpoint: beta and eta, dead-bind, the pull/assoc family, choice
 //! flattening, equate decomposition, and eliminator beta.
 
-use bumpalo::Bump;
-
+use super::heap::{CompId, Heap};
 use super::mterms::{MComputation, MValue};
+use super::NodeId;
 
 /// Optimize a computation using equational laws from the CBPV theory.
-pub fn optimize<'a>(arena: &'a Bump, comp: &'a MComputation<'a>) -> &'a MComputation<'a> {
+pub fn optimize(heap: &mut Heap, comp: CompId) -> CompId {
     #[cfg(feature = "opt-stats")]
-    let before = comp.count_nodes();
-    let result = opt_comp(arena, comp);
+    let before = super::mterms::count_nodes_comp(heap, comp);
+    let result = opt_comp(heap, comp);
     #[cfg(feature = "opt-stats")]
     {
-        let after = result.count_nodes();
+        let after = super::mterms::count_nodes_comp(heap, result);
         eprintln!(
             "[opt] main:  {before} -> {after} nodes ({:+.1}%)",
             pct(before, after)
@@ -30,20 +30,26 @@ pub fn optimize<'a>(arena: &'a Bump, comp: &'a MComputation<'a>) -> &'a MComputa
 }
 
 /// Optimize an MValue (recursing into Thunks to optimize computations).
-pub fn optimize_val<'a>(arena: &'a Bump, val: &'a MValue<'a>) -> &'a MValue<'a> {
-    opt_val(arena, val, &[])
+pub fn optimize_val(heap: &mut Heap, val: NodeId) -> NodeId {
+    opt_val(heap, val, &[])
 }
 
 /// Optimize an entire environment and print per-function stats.
 #[cfg(feature = "opt-stats")]
-pub fn optimize_env_with_stats<'a>(
-    arena: &'a Bump,
-    env: &[&'a MValue<'a>],
-    f: &dyn Fn(&'a Bump, &'a MValue<'a>) -> &'a MValue<'a>,
-) -> Vec<&'a MValue<'a>> {
-    let before_total: usize = env.iter().map(|v| v.count_nodes()).sum();
-    let result: Vec<_> = env.iter().map(|v| f(arena, v)).collect();
-    let after_total: usize = result.iter().map(|v| v.count_nodes()).sum();
+pub fn optimize_env_with_stats(
+    heap: &mut Heap,
+    env: &[NodeId],
+    f: &dyn Fn(&mut Heap, NodeId) -> NodeId,
+) -> Vec<NodeId> {
+    let before_total: usize = env
+        .iter()
+        .map(|v| super::mterms::count_nodes_val(heap, *v))
+        .sum();
+    let result: Vec<NodeId> = env.iter().map(|v| f(heap, *v)).collect();
+    let after_total: usize = result
+        .iter()
+        .map(|v| super::mterms::count_nodes_val(heap, *v))
+        .sum();
     eprintln!(
         "[opt] env:   {before_total} -> {after_total} nodes ({:+.1}%)",
         pct(before_total, after_total)
@@ -140,123 +146,238 @@ mod stats {
     }
 }
 
+// --- Structural equality ---
+// Term handles are not pointer-unique, so deep equality must follow the heap.
+
+fn val_eq(heap: &Heap, a: NodeId, b: NodeId) -> bool {
+    match (heap.val(a), heap.val(b)) {
+        (MValue::Var(i), MValue::Var(j)) => i == j,
+        (MValue::Unit, MValue::Unit)
+        | (MValue::Zero, MValue::Zero)
+        | (MValue::Nil, MValue::Nil) => true,
+        (MValue::Nat(i), MValue::Nat(j)) => i == j,
+        (MValue::Succ(x), MValue::Succ(y))
+        | (MValue::Inl(x), MValue::Inl(y))
+        | (MValue::Inr(x), MValue::Inr(y)) => val_eq(heap, x, y),
+        (MValue::Pair(x1, x2), MValue::Pair(y1, y2))
+        | (MValue::Cons(x1, x2), MValue::Cons(y1, y2)) => {
+            val_eq(heap, x1, y1) && val_eq(heap, x2, y2)
+        }
+        (MValue::Thunk(c), MValue::Thunk(d)) => comp_eq(heap, c, d),
+        _ => false,
+    }
+}
+
+fn comp_eq(heap: &Heap, a: CompId, b: CompId) -> bool {
+    match (heap.comp(a), heap.comp(b)) {
+        (MComputation::Return(x), MComputation::Return(y))
+        | (MComputation::Force(x), MComputation::Force(y)) => val_eq(heap, *x, *y),
+        (
+            MComputation::Bind { comp: c1, cont: k1 },
+            MComputation::Bind { comp: c2, cont: k2 },
+        ) => comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2),
+        (MComputation::Lambda { body: b1 }, MComputation::Lambda { body: b2 })
+        | (MComputation::Rec { body: b1 }, MComputation::Rec { body: b2 }) => {
+            comp_eq(heap, *b1, *b2)
+        }
+        (MComputation::App { op: o1, arg: a1 }, MComputation::App { op: o2, arg: a2 }) => {
+            comp_eq(heap, *o1, *o2) && val_eq(heap, *a1, *a2)
+        }
+        (MComputation::Choice(c1), MComputation::Choice(c2)) => {
+            c1.len() == c2.len()
+                && c1.iter().zip(c2.iter()).all(|(x, y)| comp_eq(heap, *x, *y))
+        }
+        (
+            MComputation::Exists { ptype: p1, body: b1 },
+            MComputation::Exists { ptype: p2, body: b2 },
+        ) => p1 == p2 && comp_eq(heap, *b1, *b2),
+        (
+            MComputation::Equate { lhs: l1, rhs: r1, body: b1 },
+            MComputation::Equate { lhs: l2, rhs: r2, body: b2 },
+        ) => val_eq(heap, *l1, *l2) && val_eq(heap, *r1, *r2) && comp_eq(heap, *b1, *b2),
+        (
+            MComputation::Ifz { num: n1, zk: z1, sk: s1 },
+            MComputation::Ifz { num: n2, zk: z2, sk: s2 },
+        ) => val_eq(heap, *n1, *n2) && comp_eq(heap, *z1, *z2) && comp_eq(heap, *s1, *s2),
+        (
+            MComputation::Match { list: l1, nilk: n1, consk: c1 },
+            MComputation::Match { list: l2, nilk: n2, consk: c2 },
+        ) => val_eq(heap, *l1, *l2) && comp_eq(heap, *n1, *n2) && comp_eq(heap, *c1, *c2),
+        (
+            MComputation::Case { sum: s1, inlk: i1, inrk: r1 },
+            MComputation::Case { sum: s2, inlk: i2, inrk: r2 },
+        ) => val_eq(heap, *s1, *s2) && comp_eq(heap, *i1, *i2) && comp_eq(heap, *r1, *r2),
+        _ => false,
+    }
+}
+
 // --- Generic binder-aware traversal ---
 // map_val/map_comp rebuild the term, rewriting each Var leaf via `f`, which is
 // given the number of binders crossed from the traversal root to that leaf.
 // The per-binder depth table (which binders bind, and by how much) lives here once.
 
-fn map_val<'a>(
-    arena: &'a Bump,
-    val: &'a MValue<'a>,
+fn map_val(
+    heap: &mut Heap,
+    val: NodeId,
     binders: usize,
-    f: &dyn Fn(usize, &'a MValue<'a>) -> &'a MValue<'a>,
-) -> &'a MValue<'a> {
-    match val {
-        MValue::Var(_) => f(binders, val),
+    f: &dyn Fn(&mut Heap, usize, NodeId) -> NodeId,
+) -> NodeId {
+    match heap.val(val) {
+        MValue::Var(_) => f(heap, binders, val),
         MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => val,
-        MValue::Succ(v) => arena.alloc(MValue::Succ(map_val(arena, v, binders, f))),
-        MValue::Pair(a, b) => arena.alloc(MValue::Pair(
-            map_val(arena, a, binders, f),
-            map_val(arena, b, binders, f),
-        )),
-        MValue::Inl(v) => arena.alloc(MValue::Inl(map_val(arena, v, binders, f))),
-        MValue::Inr(v) => arena.alloc(MValue::Inr(map_val(arena, v, binders, f))),
-        MValue::Cons(h, t) => arena.alloc(MValue::Cons(
-            map_val(arena, h, binders, f),
-            map_val(arena, t, binders, f),
-        )),
-        MValue::Thunk(c) => arena.alloc(MValue::Thunk(map_comp(arena, c, binders, f))),
+        MValue::Succ(v) => {
+            let nv = map_val(heap, v, binders, f);
+            heap.alloc_imm_val(MValue::Succ(nv))
+        }
+        MValue::Pair(a, b) => {
+            let na = map_val(heap, a, binders, f);
+            let nb = map_val(heap, b, binders, f);
+            heap.alloc_imm_val(MValue::Pair(na, nb))
+        }
+        MValue::Inl(v) => {
+            let nv = map_val(heap, v, binders, f);
+            heap.alloc_imm_val(MValue::Inl(nv))
+        }
+        MValue::Inr(v) => {
+            let nv = map_val(heap, v, binders, f);
+            heap.alloc_imm_val(MValue::Inr(nv))
+        }
+        MValue::Cons(h, t) => {
+            let nh = map_val(heap, h, binders, f);
+            let nt = map_val(heap, t, binders, f);
+            heap.alloc_imm_val(MValue::Cons(nh, nt))
+        }
+        MValue::Thunk(c) => {
+            let nc = map_comp(heap, c, binders, f);
+            heap.alloc_imm_val(MValue::Thunk(nc))
+        }
     }
 }
 
-fn map_comp<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
+fn map_comp(
+    heap: &mut Heap,
+    comp: CompId,
     binders: usize,
-    f: &dyn Fn(usize, &'a MValue<'a>) -> &'a MValue<'a>,
-) -> &'a MComputation<'a> {
-    match comp {
-        MComputation::Return(v) => arena.alloc(MComputation::Return(map_val(arena, v, binders, f))),
-        MComputation::Bind { comp: c, cont } => arena.alloc(MComputation::Bind {
-            comp: map_comp(arena, c, binders, f),
-            cont: map_comp(arena, cont, binders + 1, f),
-        }),
-        MComputation::Force(v) => arena.alloc(MComputation::Force(map_val(arena, v, binders, f))),
-        MComputation::Lambda { body } => arena.alloc(MComputation::Lambda {
-            body: map_comp(arena, body, binders + 1, f),
-        }),
-        MComputation::App { op, arg } => arena.alloc(MComputation::App {
-            op: map_comp(arena, op, binders, f),
-            arg: map_val(arena, arg, binders, f),
-        }),
-        MComputation::Choice(cs) => {
-            let mapped: Vec<&'a MComputation<'a>> =
-                cs.iter().map(|c| map_comp(arena, c, binders, f)).collect();
-            arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&mapped)))
+    f: &dyn Fn(&mut Heap, usize, NodeId) -> NodeId,
+) -> CompId {
+    match heap.comp(comp) {
+        MComputation::Return(v) => {
+            let v = *v;
+            let nv = map_val(heap, v, binders, f);
+            heap.alloc_comp(MComputation::Return(nv))
         }
-        MComputation::Exists { ptype, body } => arena.alloc(MComputation::Exists {
-            ptype: ptype.clone(),
-            body: map_comp(arena, body, binders + 1, f),
-        }),
-        MComputation::Equate { lhs, rhs, body } => arena.alloc(MComputation::Equate {
-            lhs: map_val(arena, lhs, binders, f),
-            rhs: map_val(arena, rhs, binders, f),
-            body: map_comp(arena, body, binders, f),
-        }),
-        MComputation::Ifz { num, zk, sk } => arena.alloc(MComputation::Ifz {
-            num: map_val(arena, num, binders, f),
-            zk: map_comp(arena, zk, binders, f),
-            sk: map_comp(arena, sk, binders + 1, f),
-        }),
-        MComputation::Match { list, nilk, consk } => arena.alloc(MComputation::Match {
-            list: map_val(arena, list, binders, f),
-            nilk: map_comp(arena, nilk, binders, f),
-            consk: map_comp(arena, consk, binders + 2, f),
-        }),
-        MComputation::Case { sum, inlk, inrk } => arena.alloc(MComputation::Case {
-            sum: map_val(arena, sum, binders, f),
-            inlk: map_comp(arena, inlk, binders + 1, f),
-            inrk: map_comp(arena, inrk, binders + 1, f),
-        }),
-        MComputation::Rec { body } => arena.alloc(MComputation::Rec {
-            body: map_comp(arena, body, binders + 1, f),
-        }),
+        MComputation::Bind { comp: c, cont } => {
+            let (c, cont) = (*c, *cont);
+            let nc = map_comp(heap, c, binders, f);
+            let nk = map_comp(heap, cont, binders + 1, f);
+            heap.alloc_comp(MComputation::Bind { comp: nc, cont: nk })
+        }
+        MComputation::Force(v) => {
+            let v = *v;
+            let nv = map_val(heap, v, binders, f);
+            heap.alloc_comp(MComputation::Force(nv))
+        }
+        MComputation::Lambda { body } => {
+            let body = *body;
+            let nb = map_comp(heap, body, binders + 1, f);
+            heap.alloc_comp(MComputation::Lambda { body: nb })
+        }
+        MComputation::App { op, arg } => {
+            let (op, arg) = (*op, *arg);
+            let no = map_comp(heap, op, binders, f);
+            let na = map_val(heap, arg, binders, f);
+            heap.alloc_comp(MComputation::App { op: no, arg: na })
+        }
+        MComputation::Choice(cs) => {
+            let cs: Vec<CompId> = cs.iter().copied().collect();
+            let mapped: Vec<CompId> = cs.iter().map(|c| map_comp(heap, *c, binders, f)).collect();
+            heap.alloc_comp(MComputation::Choice(mapped.into_boxed_slice()))
+        }
+        MComputation::Exists { ptype, body } => {
+            let ptype = ptype.clone();
+            let body = *body;
+            let nb = map_comp(heap, body, binders + 1, f);
+            heap.alloc_comp(MComputation::Exists { ptype, body: nb })
+        }
+        MComputation::Equate { lhs, rhs, body } => {
+            let (lhs, rhs, body) = (*lhs, *rhs, *body);
+            let nl = map_val(heap, lhs, binders, f);
+            let nr = map_val(heap, rhs, binders, f);
+            let nb = map_comp(heap, body, binders, f);
+            heap.alloc_comp(MComputation::Equate {
+                lhs: nl,
+                rhs: nr,
+                body: nb,
+            })
+        }
+        MComputation::Ifz { num, zk, sk } => {
+            let (num, zk, sk) = (*num, *zk, *sk);
+            let nn = map_val(heap, num, binders, f);
+            let nz = map_comp(heap, zk, binders, f);
+            let ns = map_comp(heap, sk, binders + 1, f);
+            heap.alloc_comp(MComputation::Ifz {
+                num: nn,
+                zk: nz,
+                sk: ns,
+            })
+        }
+        MComputation::Match { list, nilk, consk } => {
+            let (list, nilk, consk) = (*list, *nilk, *consk);
+            let nl = map_val(heap, list, binders, f);
+            let nn = map_comp(heap, nilk, binders, f);
+            let nc = map_comp(heap, consk, binders + 2, f);
+            heap.alloc_comp(MComputation::Match {
+                list: nl,
+                nilk: nn,
+                consk: nc,
+            })
+        }
+        MComputation::Case { sum, inlk, inrk } => {
+            let (sum, inlk, inrk) = (*sum, *inlk, *inrk);
+            let ns = map_val(heap, sum, binders, f);
+            let ni = map_comp(heap, inlk, binders + 1, f);
+            let nr = map_comp(heap, inrk, binders + 1, f);
+            heap.alloc_comp(MComputation::Case {
+                sum: ns,
+                inlk: ni,
+                inrk: nr,
+            })
+        }
+        MComputation::Rec { body } => {
+            let body = *body;
+            let nb = map_comp(heap, body, binders + 1, f);
+            heap.alloc_comp(MComputation::Rec { body: nb })
+        }
     }
 }
 
 // --- De Bruijn shifting ---
 
-fn shift_val<'a>(
-    arena: &'a Bump,
-    val: &'a MValue<'a>,
-    delta: isize,
-    cutoff: usize,
-) -> &'a MValue<'a> {
-    map_val(arena, val, cutoff, &move |binders, v| {
-        let MValue::Var(i) = v else { unreachable!() };
-        if *i >= binders {
-            arena.alloc(MValue::Var((*i as isize + delta) as usize))
+fn shift_val(heap: &mut Heap, val: NodeId, delta: isize, cutoff: usize) -> NodeId {
+    map_val(heap, val, cutoff, &move |heap, binders, id| {
+        let MValue::Var(i) = heap.val(id) else {
+            unreachable!()
+        };
+        if i >= binders {
+            heap.alloc_imm_val(MValue::Var((i as isize + delta) as usize))
         } else {
-            v
+            id
         }
     })
 }
 
-fn shift_comp<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
-    delta: isize,
-    cutoff: usize,
-) -> &'a MComputation<'a> {
+fn shift_comp(heap: &mut Heap, comp: CompId, delta: isize, cutoff: usize) -> CompId {
     if delta == 0 {
         return comp;
     }
-    map_comp(arena, comp, cutoff, &move |binders, v| {
-        let MValue::Var(i) = v else { unreachable!() };
-        if *i >= binders {
-            arena.alloc(MValue::Var((*i as isize + delta) as usize))
+    map_comp(heap, comp, cutoff, &move |heap, binders, id| {
+        let MValue::Var(i) = heap.val(id) else {
+            unreachable!()
+        };
+        if i >= binders {
+            heap.alloc_imm_val(MValue::Var((i as isize + delta) as usize))
         } else {
-            v
+            id
         }
     })
 }
@@ -265,121 +386,116 @@ fn shift_comp<'a>(
 // subst_comp replaces Var(depth) with shift(repl, depth, 0),
 // and decrements all Var(i) where i > depth.
 
-fn subst_comp<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
-    repl: &'a MValue<'a>,
-    depth: usize,
-) -> &'a MComputation<'a> {
-    map_comp(arena, comp, depth, &move |binders, v| {
-        let MValue::Var(i) = v else { unreachable!() };
-        if *i == binders {
-            shift_val(arena, repl, binders as isize, 0)
-        } else if *i > binders {
-            arena.alloc(MValue::Var(i - 1))
+fn subst_comp(heap: &mut Heap, comp: CompId, repl: NodeId, depth: usize) -> CompId {
+    map_comp(heap, comp, depth, &move |heap, binders, id| {
+        let MValue::Var(i) = heap.val(id) else {
+            unreachable!()
+        };
+        if i == binders {
+            shift_val(heap, repl, binders as isize, 0)
+        } else if i > binders {
+            heap.alloc_imm_val(MValue::Var(i - 1))
         } else {
-            v
+            id
         }
     })
 }
 
 // --- Helpers ---
 
-/// Check if a value structurally contains `needle` as a strict sub-value.
+/// Check if a value structurally contains `needle` as a sub-value.
 /// Used for cycle detection in equate: `V =:= C[V]` -> fail.
-fn val_contains(needle: &MValue, haystack: &MValue) -> bool {
-    if needle == haystack {
+fn val_contains(heap: &Heap, needle: NodeId, haystack: NodeId) -> bool {
+    if val_eq(heap, needle, haystack) {
         return true;
     }
-    match haystack {
-        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => val_contains(needle, v),
+    match heap.val(haystack) {
+        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => val_contains(heap, needle, v),
         MValue::Pair(a, b) | MValue::Cons(a, b) => {
-            val_contains(needle, a) || val_contains(needle, b)
+            val_contains(heap, needle, a) || val_contains(heap, needle, b)
         }
         _ => false,
     }
 }
 
 /// Check if `target` de Bruijn index appears free in a value.
-fn has_free_var_val(val: &MValue, target: usize) -> bool {
-    match val {
-        MValue::Var(i) => *i == target,
+fn has_free_var_val(heap: &Heap, val: NodeId, target: usize) -> bool {
+    match heap.val(val) {
+        MValue::Var(i) => i == target,
         MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => false,
-        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => has_free_var_val(v, target),
+        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => has_free_var_val(heap, v, target),
         MValue::Pair(a, b) | MValue::Cons(a, b) => {
-            has_free_var_val(a, target) || has_free_var_val(b, target)
+            has_free_var_val(heap, a, target) || has_free_var_val(heap, b, target)
         }
-        MValue::Thunk(c) => has_free_var_comp(c, target),
+        MValue::Thunk(c) => has_free_var_comp(heap, c, target),
     }
 }
 
-fn has_free_var_comp(comp: &MComputation, target: usize) -> bool {
-    match comp {
-        MComputation::Return(v) | MComputation::Force(v) => has_free_var_val(v, target),
+fn has_free_var_comp(heap: &Heap, comp: CompId, target: usize) -> bool {
+    match heap.comp(comp) {
+        MComputation::Return(v) | MComputation::Force(v) => has_free_var_val(heap, *v, target),
         MComputation::Bind { comp: c, cont } => {
-            has_free_var_comp(c, target) || has_free_var_comp(cont, target + 1)
+            has_free_var_comp(heap, *c, target) || has_free_var_comp(heap, *cont, target + 1)
         }
         MComputation::Lambda { body }
         | MComputation::Exists { body, .. }
-        | MComputation::Rec { body } => has_free_var_comp(body, target + 1),
+        | MComputation::Rec { body } => has_free_var_comp(heap, *body, target + 1),
         MComputation::App { op, arg } => {
-            has_free_var_comp(op, target) || has_free_var_val(arg, target)
+            has_free_var_comp(heap, *op, target) || has_free_var_val(heap, *arg, target)
         }
-        MComputation::Choice(cs) => cs.iter().any(|c| has_free_var_comp(c, target)),
+        MComputation::Choice(cs) => cs.iter().any(|c| has_free_var_comp(heap, *c, target)),
         MComputation::Equate { lhs, rhs, body } => {
-            has_free_var_val(lhs, target)
-                || has_free_var_val(rhs, target)
-                || has_free_var_comp(body, target)
+            has_free_var_val(heap, *lhs, target)
+                || has_free_var_val(heap, *rhs, target)
+                || has_free_var_comp(heap, *body, target)
         }
         MComputation::Ifz { num, zk, sk } => {
-            has_free_var_val(num, target)
-                || has_free_var_comp(zk, target)
-                || has_free_var_comp(sk, target + 1)
+            has_free_var_val(heap, *num, target)
+                || has_free_var_comp(heap, *zk, target)
+                || has_free_var_comp(heap, *sk, target + 1)
         }
         MComputation::Match { list, nilk, consk } => {
-            has_free_var_val(list, target)
-                || has_free_var_comp(nilk, target)
-                || has_free_var_comp(consk, target + 2)
+            has_free_var_val(heap, *list, target)
+                || has_free_var_comp(heap, *nilk, target)
+                || has_free_var_comp(heap, *consk, target + 2)
         }
         MComputation::Case { sum, inlk, inrk } => {
-            has_free_var_val(sum, target)
-                || has_free_var_comp(inlk, target + 1)
-                || has_free_var_comp(inrk, target + 1)
+            has_free_var_val(heap, *sum, target)
+                || has_free_var_comp(heap, *inlk, target + 1)
+                || has_free_var_comp(heap, *inrk, target + 1)
         }
     }
 }
 
 /// Swap two adjacent binders at `depth` and `depth+1`.
-fn swap_comp<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
-    depth: usize,
-) -> &'a MComputation<'a> {
-    map_comp(arena, comp, depth, &move |binders, v| {
-        let MValue::Var(i) = v else { unreachable!() };
-        if *i == binders {
-            arena.alloc(MValue::Var(binders + 1))
-        } else if *i == binders + 1 {
-            arena.alloc(MValue::Var(binders))
+fn swap_comp(heap: &mut Heap, comp: CompId, depth: usize) -> CompId {
+    map_comp(heap, comp, depth, &move |heap, binders, id| {
+        let MValue::Var(i) = heap.val(id) else {
+            unreachable!()
+        };
+        if i == binders {
+            heap.alloc_imm_val(MValue::Var(binders + 1))
+        } else if i == binders + 1 {
+            heap.alloc_imm_val(MValue::Var(binders))
         } else {
-            v
+            id
         }
     })
 }
 
 // --- Optimizer ---
 
-fn is_fail(comp: &MComputation) -> bool {
-    matches!(comp, MComputation::Choice(cs) if cs.is_empty())
+fn is_fail(heap: &Heap, comp: CompId) -> bool {
+    matches!(heap.comp(comp), MComputation::Choice(cs) if cs.is_empty())
 }
 
-fn fail<'a>(arena: &'a Bump) -> &'a MComputation<'a> {
-    arena.alloc(MComputation::Choice(&[]))
+fn fail(heap: &mut Heap) -> CompId {
+    heap.alloc_comp(MComputation::Choice(Vec::new().into_boxed_slice()))
 }
 
-type Env<'a> = Vec<Option<&'a MValue<'a>>>;
+type Env = Vec<Option<NodeId>>;
 
-fn push_env<'a>(env: &[Option<&'a MValue<'a>>], entry: Option<&'a MValue<'a>>) -> Env<'a> {
+fn push_env(env: &[Option<NodeId>], entry: Option<NodeId>) -> Env {
     let mut e = Vec::with_capacity(env.len() + 1);
     e.push(entry);
     e.extend_from_slice(env);
@@ -388,139 +504,190 @@ fn push_env<'a>(env: &[Option<&'a MValue<'a>>], entry: Option<&'a MValue<'a>>) -
 
 /// Recursively resolve all variables in a value through the compile-time env.
 /// Used to build fully-concrete env entries for decision-making.
-fn deep_resolve<'a>(
-    arena: &'a Bump,
-    val: &'a MValue<'a>,
-    env: &[Option<&'a MValue<'a>>],
-) -> &'a MValue<'a> {
-    match val {
+fn deep_resolve(heap: &mut Heap, val: NodeId, env: &[Option<NodeId>]) -> NodeId {
+    match heap.val(val) {
         MValue::Var(i) => {
-            if let Some(Some(v)) = env.get(*i) {
-                let shifted = shift_val(arena, v, (*i as isize) + 1, 0);
-                deep_resolve(arena, shifted, env)
+            if let Some(Some(v)) = env.get(i) {
+                let v = *v;
+                let shifted = shift_val(heap, v, (i as isize) + 1, 0);
+                deep_resolve(heap, shifted, env)
             } else {
                 val
             }
         }
         MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => val,
-        MValue::Succ(v) => arena.alloc(MValue::Succ(deep_resolve(arena, v, env))),
-        MValue::Pair(a, b) => arena.alloc(MValue::Pair(
-            deep_resolve(arena, a, env),
-            deep_resolve(arena, b, env),
-        )),
-        MValue::Inl(v) => arena.alloc(MValue::Inl(deep_resolve(arena, v, env))),
-        MValue::Inr(v) => arena.alloc(MValue::Inr(deep_resolve(arena, v, env))),
-        MValue::Cons(h, t) => arena.alloc(MValue::Cons(
-            deep_resolve(arena, h, env),
-            deep_resolve(arena, t, env),
-        )),
+        MValue::Succ(v) => {
+            let nv = deep_resolve(heap, v, env);
+            heap.alloc_imm_val(MValue::Succ(nv))
+        }
+        MValue::Pair(a, b) => {
+            let na = deep_resolve(heap, a, env);
+            let nb = deep_resolve(heap, b, env);
+            heap.alloc_imm_val(MValue::Pair(na, nb))
+        }
+        MValue::Inl(v) => {
+            let nv = deep_resolve(heap, v, env);
+            heap.alloc_imm_val(MValue::Inl(nv))
+        }
+        MValue::Inr(v) => {
+            let nv = deep_resolve(heap, v, env);
+            heap.alloc_imm_val(MValue::Inr(nv))
+        }
+        MValue::Cons(h, t) => {
+            let nh = deep_resolve(heap, h, env);
+            let nt = deep_resolve(heap, t, env);
+            heap.alloc_imm_val(MValue::Cons(nh, nt))
+        }
         MValue::Thunk(_) => val,
     }
 }
 
-fn opt_val<'a>(
-    arena: &'a Bump,
-    val: &'a MValue<'a>,
-    env: &[Option<&'a MValue<'a>>],
-) -> &'a MValue<'a> {
-    match val {
-        MValue::Thunk(c) => arena.alloc(MValue::Thunk(opt_comp_env(arena, c, env))),
-        MValue::Succ(v) => arena.alloc(MValue::Succ(opt_val(arena, v, env))),
-        MValue::Pair(a, b) => {
-            arena.alloc(MValue::Pair(opt_val(arena, a, env), opt_val(arena, b, env)))
+fn opt_val(heap: &mut Heap, val: NodeId, env: &[Option<NodeId>]) -> NodeId {
+    match heap.val(val) {
+        MValue::Thunk(c) => {
+            let nc = opt_comp_env(heap, c, env);
+            heap.alloc_imm_val(MValue::Thunk(nc))
         }
-        MValue::Inl(v) => arena.alloc(MValue::Inl(opt_val(arena, v, env))),
-        MValue::Inr(v) => arena.alloc(MValue::Inr(opt_val(arena, v, env))),
+        MValue::Succ(v) => {
+            let nv = opt_val(heap, v, env);
+            heap.alloc_imm_val(MValue::Succ(nv))
+        }
+        MValue::Pair(a, b) => {
+            let na = opt_val(heap, a, env);
+            let nb = opt_val(heap, b, env);
+            heap.alloc_imm_val(MValue::Pair(na, nb))
+        }
+        MValue::Inl(v) => {
+            let nv = opt_val(heap, v, env);
+            heap.alloc_imm_val(MValue::Inl(nv))
+        }
+        MValue::Inr(v) => {
+            let nv = opt_val(heap, v, env);
+            heap.alloc_imm_val(MValue::Inr(nv))
+        }
         MValue::Cons(h, t) => {
-            arena.alloc(MValue::Cons(opt_val(arena, h, env), opt_val(arena, t, env)))
+            let nh = opt_val(heap, h, env);
+            let nt = opt_val(heap, t, env);
+            heap.alloc_imm_val(MValue::Cons(nh, nt))
         }
         _ => val,
     }
 }
 
-fn opt_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>) -> &'a MComputation<'a> {
-    opt_comp_env(arena, comp, &[])
+fn opt_comp(heap: &mut Heap, comp: CompId) -> CompId {
+    opt_comp_env(heap, comp, &[])
 }
 
-fn opt_comp_env<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
-    env: &[Option<&'a MValue<'a>>],
-) -> &'a MComputation<'a> {
-    let rebuilt = opt_subterms(arena, comp, env);
-    rewrite(arena, rebuilt, env)
+fn opt_comp_env(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId {
+    let rebuilt = opt_subterms(heap, comp, env);
+    rewrite(heap, rebuilt, env)
 }
 
-fn opt_subterms<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
-    env: &[Option<&'a MValue<'a>>],
-) -> &'a MComputation<'a> {
-    match comp {
-        MComputation::Return(v) => arena.alloc(MComputation::Return(opt_val(arena, v, env))),
+fn opt_subterms(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId {
+    match heap.comp(comp) {
+        MComputation::Return(v) => {
+            let v = *v;
+            let nv = opt_val(heap, v, env);
+            heap.alloc_comp(MComputation::Return(nv))
+        }
         MComputation::Bind { comp: c, cont } => {
-            let oc = opt_comp_env(arena, c, env);
-            let entry = if let MComputation::Return(v) = oc {
-                Some(deep_resolve(arena, v, env))
+            let (c, cont) = (*c, *cont);
+            let oc = opt_comp_env(heap, c, env);
+            let entry = if let MComputation::Return(v) = heap.comp(oc) {
+                let v = *v;
+                Some(deep_resolve(heap, v, env))
             } else {
                 None
             };
             let cenv = push_env(env, entry);
-            arena.alloc(MComputation::Bind {
+            let ncont = opt_comp_env(heap, cont, &cenv);
+            heap.alloc_comp(MComputation::Bind {
                 comp: oc,
-                cont: opt_comp_env(arena, cont, &cenv),
+                cont: ncont,
             })
         }
-        MComputation::Force(v) => arena.alloc(MComputation::Force(opt_val(arena, v, env))),
-        MComputation::Lambda { body } => arena.alloc(MComputation::Lambda {
-            body: opt_comp_env(arena, body, &push_env(env, None)),
-        }),
-        MComputation::App { op, arg } => arena.alloc(MComputation::App {
-            op: opt_comp_env(arena, op, env),
-            arg: opt_val(arena, arg, env),
-        }),
-        MComputation::Choice(cs) => {
-            let optimized: Vec<&'a MComputation<'a>> =
-                cs.iter().map(|c| opt_comp_env(arena, c, env)).collect();
-            arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&optimized)))
+        MComputation::Force(v) => {
+            let v = *v;
+            let nv = opt_val(heap, v, env);
+            heap.alloc_comp(MComputation::Force(nv))
         }
-        MComputation::Exists { ptype, body } => arena.alloc(MComputation::Exists {
-            ptype: ptype.clone(),
-            body: opt_comp_env(arena, body, &push_env(env, None)),
-        }),
-        MComputation::Equate { lhs, rhs, body } => arena.alloc(MComputation::Equate {
-            lhs: opt_val(arena, lhs, env),
-            rhs: opt_val(arena, rhs, env),
-            body: opt_comp_env(arena, body, env),
-        }),
-        MComputation::Ifz { num, zk, sk } => arena.alloc(MComputation::Ifz {
-            num: opt_val(arena, num, env),
-            zk: opt_comp_env(arena, zk, env),
-            sk: opt_comp_env(arena, sk, &push_env(env, None)),
-        }),
-        MComputation::Match { list, nilk, consk } => arena.alloc(MComputation::Match {
-            list: opt_val(arena, list, env),
-            nilk: opt_comp_env(arena, nilk, env),
-            consk: opt_comp_env(arena, consk, &push_env(&push_env(env, None), None)),
-        }),
-        MComputation::Case { sum, inlk, inrk } => arena.alloc(MComputation::Case {
-            sum: opt_val(arena, sum, env),
-            inlk: opt_comp_env(arena, inlk, &push_env(env, None)),
-            inrk: opt_comp_env(arena, inrk, &push_env(env, None)),
-        }),
-        MComputation::Rec { body } => arena.alloc(MComputation::Rec {
-            body: opt_comp_env(arena, body, &push_env(env, None)),
-        }),
+        MComputation::Lambda { body } => {
+            let body = *body;
+            let nb = opt_comp_env(heap, body, &push_env(env, None));
+            heap.alloc_comp(MComputation::Lambda { body: nb })
+        }
+        MComputation::App { op, arg } => {
+            let (op, arg) = (*op, *arg);
+            let no = opt_comp_env(heap, op, env);
+            let na = opt_val(heap, arg, env);
+            heap.alloc_comp(MComputation::App { op: no, arg: na })
+        }
+        MComputation::Choice(cs) => {
+            let cs: Vec<CompId> = cs.iter().copied().collect();
+            let optimized: Vec<CompId> = cs.iter().map(|c| opt_comp_env(heap, *c, env)).collect();
+            heap.alloc_comp(MComputation::Choice(optimized.into_boxed_slice()))
+        }
+        MComputation::Exists { ptype, body } => {
+            let ptype = ptype.clone();
+            let body = *body;
+            let nb = opt_comp_env(heap, body, &push_env(env, None));
+            heap.alloc_comp(MComputation::Exists { ptype, body: nb })
+        }
+        MComputation::Equate { lhs, rhs, body } => {
+            let (lhs, rhs, body) = (*lhs, *rhs, *body);
+            let nl = opt_val(heap, lhs, env);
+            let nr = opt_val(heap, rhs, env);
+            let nb = opt_comp_env(heap, body, env);
+            heap.alloc_comp(MComputation::Equate {
+                lhs: nl,
+                rhs: nr,
+                body: nb,
+            })
+        }
+        MComputation::Ifz { num, zk, sk } => {
+            let (num, zk, sk) = (*num, *zk, *sk);
+            let nn = opt_val(heap, num, env);
+            let nz = opt_comp_env(heap, zk, env);
+            let ns = opt_comp_env(heap, sk, &push_env(env, None));
+            heap.alloc_comp(MComputation::Ifz {
+                num: nn,
+                zk: nz,
+                sk: ns,
+            })
+        }
+        MComputation::Match { list, nilk, consk } => {
+            let (list, nilk, consk) = (*list, *nilk, *consk);
+            let nl = opt_val(heap, list, env);
+            let nn = opt_comp_env(heap, nilk, env);
+            let nc = opt_comp_env(heap, consk, &push_env(&push_env(env, None), None));
+            heap.alloc_comp(MComputation::Match {
+                list: nl,
+                nilk: nn,
+                consk: nc,
+            })
+        }
+        MComputation::Case { sum, inlk, inrk } => {
+            let (sum, inlk, inrk) = (*sum, *inlk, *inrk);
+            let ns = opt_val(heap, sum, env);
+            let ni = opt_comp_env(heap, inlk, &push_env(env, None));
+            let nr = opt_comp_env(heap, inrk, &push_env(env, None));
+            heap.alloc_comp(MComputation::Case {
+                sum: ns,
+                inlk: ni,
+                inrk: nr,
+            })
+        }
+        MComputation::Rec { body } => {
+            let body = *body;
+            let nb = opt_comp_env(heap, body, &push_env(env, None));
+            heap.alloc_comp(MComputation::Rec { body: nb })
+        }
     }
 }
 
 /// Try rewrite rules at the top level. If a rewrite fires, re-optimize the result.
-fn rewrite<'a>(
-    arena: &'a Bump,
-    comp: &'a MComputation<'a>,
-    env: &[Option<&'a MValue<'a>>],
-) -> &'a MComputation<'a> {
-    match comp {
+fn rewrite(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId {
+    match heap.comp(comp) {
         // Bind rules:
         // fail to x. M  -->  fail
         // eta: M to x. return x  -->  M
@@ -528,124 +695,121 @@ fn rewrite<'a>(
         // dead-end: M to x. fail  -->  fail
         // bind-assoc, pull-choice, pull-exists, pull-equate
         MComputation::Bind { comp: c, cont } => {
-            if let MComputation::Return(v) = c {
+            let (c, cont) = (*c, *cont);
+            if let MComputation::Return(v) = heap.comp(c) {
+                let v = *v;
                 // eta: return V to x. return x -> return V
-                if let MComputation::Return(rv) = cont {
-                    if matches!(rv, MValue::Var(0)) {
+                if let MComputation::Return(rv) = heap.comp(cont) {
+                    if matches!(heap.val(*rv), MValue::Var(0)) {
                         #[cfg(feature = "opt-stats")]
                         stats::bump("bind-eta");
                         return c;
                     }
                 }
                 // dead-bind: cont doesn't use Var(0) -> drop the bind
-                if !has_free_var_comp(cont, 0) {
+                if !has_free_var_comp(heap, cont, 0) {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("dead-bind");
-                    return shift_comp(arena, cont, -1, 0);
+                    return shift_comp(heap, cont, -1, 0);
                 }
                 // Variable aliasing: Bind { Return(Var(i)), cont } is just renaming
-                if matches!(v, MValue::Var(_)) {
-                    return opt_comp_env(arena, subst_comp(arena, cont, v, 0), env);
+                if matches!(heap.val(v), MValue::Var(_)) {
+                    let s = subst_comp(heap, cont, v, 0);
+                    return opt_comp_env(heap, s, env);
                 }
             }
-            if is_fail(c) {
-                return fail(arena);
+            if is_fail(heap, c) {
+                return fail(heap);
             }
             // eta for non-Return c
-            if let MComputation::Return(v) = cont {
-                if matches!(v, MValue::Var(0)) {
+            if let MComputation::Return(rv) = heap.comp(cont) {
+                if matches!(heap.val(*rv), MValue::Var(0)) {
                     return c;
                 }
             }
             // Dead-End: M to x. fail  -->  fail
-            if is_fail(cont) {
+            if is_fail(heap, cont) {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("dead-end");
-                return fail(arena);
+                return fail(heap);
             }
             // Bind-assoc: (M to x. N) to y. P -> M to x. (N to y'. P')
             if let MComputation::Bind {
                 comp: inner_c,
                 cont: inner_k,
-            } = c
+            } = heap.comp(c)
             {
-                match inner_k {
+                let (inner_c, inner_k) = (*inner_c, *inner_k);
+                let assoc = match heap.comp(inner_k) {
                     MComputation::Return(_)
                     | MComputation::Exists { .. }
-                    | MComputation::Equate { .. } => {
-                        let shifted_cont = shift_comp(arena, cont, 1, 1);
-                        let new_inner = arena.alloc(MComputation::Bind {
-                            comp: inner_k,
-                            cont: shifted_cont,
-                        });
-                        let new_outer = arena.alloc(MComputation::Bind {
-                            comp: inner_c,
-                            cont: new_inner,
-                        });
-                        return opt_comp_env(arena, new_outer, env);
-                    }
-                    MComputation::Choice(branches) if !branches.is_empty() => {
-                        let shifted_cont = shift_comp(arena, cont, 1, 1);
-                        let new_inner = arena.alloc(MComputation::Bind {
-                            comp: inner_k,
-                            cont: shifted_cont,
-                        });
-                        let new_outer = arena.alloc(MComputation::Bind {
-                            comp: inner_c,
-                            cont: new_inner,
-                        });
-                        return opt_comp_env(arena, new_outer, env);
-                    }
-                    _ => {}
+                    | MComputation::Equate { .. } => true,
+                    MComputation::Choice(branches) => !branches.is_empty(),
+                    _ => false,
+                };
+                if assoc {
+                    let shifted_cont = shift_comp(heap, cont, 1, 1);
+                    let new_inner = heap.alloc_comp(MComputation::Bind {
+                        comp: inner_k,
+                        cont: shifted_cont,
+                    });
+                    let new_outer = heap.alloc_comp(MComputation::Bind {
+                        comp: inner_c,
+                        cont: new_inner,
+                    });
+                    return opt_comp_env(heap, new_outer, env);
                 }
             }
             // Pull-Choice
-            if let MComputation::Choice(branches) = c {
+            if let MComputation::Choice(branches) = heap.comp(c) {
                 if !branches.is_empty() {
-                    let new_branches: Vec<&'a MComputation<'a>> = branches
+                    let branches: Vec<CompId> = branches.iter().copied().collect();
+                    let new_branches: Vec<CompId> = branches
                         .iter()
-                        .map(|b| -> &'a MComputation<'a> {
-                            arena.alloc(MComputation::Bind { comp: b, cont })
-                        })
+                        .map(|b| heap.alloc_comp(MComputation::Bind { comp: *b, cont }))
                         .collect();
                     let choice =
-                        arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&new_branches)));
-                    return opt_comp_env(arena, choice, env);
+                        heap.alloc_comp(MComputation::Choice(new_branches.into_boxed_slice()));
+                    return opt_comp_env(heap, choice, env);
                 }
             }
             // Pull-Exists
-            if let MComputation::Exists { ptype, body } = c {
-                let shifted_cont = shift_comp(arena, cont, 1, 1);
-                let new_bind = arena.alloc(MComputation::Bind {
+            if let MComputation::Exists { ptype, body } = heap.comp(c) {
+                let ptype = ptype.clone();
+                let body = *body;
+                let shifted_cont = shift_comp(heap, cont, 1, 1);
+                let new_bind = heap.alloc_comp(MComputation::Bind {
                     comp: body,
                     cont: shifted_cont,
                 });
-                let new_exists = arena.alloc(MComputation::Exists {
-                    ptype: ptype.clone(),
+                let new_exists = heap.alloc_comp(MComputation::Exists {
+                    ptype,
                     body: new_bind,
                 });
-                return opt_comp_env(arena, new_exists, env);
+                return opt_comp_env(heap, new_exists, env);
             }
             // Pull-Equate
-            if let MComputation::Equate { lhs, rhs, body } = c {
-                let new_bind = arena.alloc(MComputation::Bind { comp: body, cont });
-                let new_equate = arena.alloc(MComputation::Equate {
+            if let MComputation::Equate { lhs, rhs, body } = heap.comp(c) {
+                let (lhs, rhs, body) = (*lhs, *rhs, *body);
+                let new_bind = heap.alloc_comp(MComputation::Bind { comp: body, cont });
+                let new_equate = heap.alloc_comp(MComputation::Equate {
                     lhs,
                     rhs,
                     body: new_bind,
                 });
-                return opt_comp_env(arena, new_equate, env);
+                return opt_comp_env(heap, new_equate, env);
             }
             comp
         }
 
         // force(thunk M)  -->  M  (resolve through env)
         MComputation::Force(v) => {
-            let resolved = deep_resolve(arena, v, env);
-            if let MValue::Thunk(c) = resolved {
+            let v = *v;
+            let resolved = deep_resolve(heap, v, env);
+            if let MValue::Thunk(c) = heap.val(resolved) {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("force-beta");
-                return opt_comp_env(arena, c, env);
+                return opt_comp_env(heap, c, env);
             }
             comp
         }
@@ -653,42 +817,49 @@ fn rewrite<'a>(
         // (lam x. M)(V)  -->  M[V/x]
         // app-bind: (M to x. N)(V)  -->  M to x. N(V)
         MComputation::App { op, arg } => {
-            if let MComputation::Lambda { body } = op {
+            let (op, arg) = (*op, *arg);
+            if let MComputation::Lambda { body } = heap.comp(op) {
+                let body = *body;
                 #[cfg(feature = "opt-stats")]
                 stats::bump("lam-beta");
-                return opt_comp_env(arena, subst_comp(arena, body, arg, 0), env);
+                let s = subst_comp(heap, body, arg, 0);
+                return opt_comp_env(heap, s, env);
             }
-            if let MComputation::Bind { comp: c, cont } = op {
+            if let MComputation::Bind { comp: c, cont } = heap.comp(op) {
+                let (c, cont) = (*c, *cont);
                 #[cfg(feature = "opt-stats")]
                 stats::bump("app-bind");
-                let new_app = arena.alloc(MComputation::App {
+                let shifted_arg = shift_val(heap, arg, 1, 0);
+                let new_app = heap.alloc_comp(MComputation::App {
                     op: cont,
-                    arg: shift_val(arena, arg, 1, 0),
+                    arg: shifted_arg,
                 });
-                let new_bind = arena.alloc(MComputation::Bind {
+                let new_bind = heap.alloc_comp(MComputation::Bind {
                     comp: c,
                     cont: new_app,
                 });
-                return opt_comp_env(arena, new_bind, env);
+                return opt_comp_env(heap, new_bind, env);
             }
             comp
         }
 
         // Choice: flatten nested choices, remove fail branches, unwrap singletons
         MComputation::Choice(cs) => {
-            let mut flat: Vec<&'a MComputation<'a>> = Vec::new();
+            let cs: Vec<CompId> = cs.iter().copied().collect();
+            let mut flat: Vec<CompId> = Vec::new();
             let mut changed = false;
-            for c in cs.iter() {
-                match c {
+            for c in cs {
+                match heap.comp(c) {
                     MComputation::Choice(inner) => {
                         changed = true;
-                        for ic in inner.iter() {
-                            if !is_fail(ic) {
+                        let inner: Vec<CompId> = inner.iter().copied().collect();
+                        for ic in inner {
+                            if !is_fail(heap, ic) {
                                 flat.push(ic);
                             }
                         }
                     }
-                    _ if is_fail(c) => {
+                    _ if is_fail(heap, c) => {
                         changed = true;
                     }
                     _ => {
@@ -700,116 +871,121 @@ fn rewrite<'a>(
                 return comp;
             }
             match flat.len() {
-                0 => fail(arena),
+                0 => fail(heap),
                 1 => flat[0],
-                _ => arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&flat))),
+                _ => heap.alloc_comp(MComputation::Choice(flat.into_boxed_slice())),
             }
         }
 
         // exists fail  -->  fail
         MComputation::Exists { body, .. } => {
-            if is_fail(body) {
-                return fail(arena);
+            let body = *body;
+            if is_fail(heap, body) {
+                return fail(heap);
             }
             comp
         }
 
         // equate rules: reflexivity, cycle, parameter laws, etc.
         MComputation::Equate { lhs, rhs, body } => {
-            if is_fail(body) {
-                return fail(arena);
+            let (lhs, rhs, body) = (*lhs, *rhs, *body);
+            if is_fail(heap, body) {
+                return fail(heap);
             }
             // Resolve through env so parameter laws can see constructors
-            let rlhs = deep_resolve(arena, lhs, env);
-            let rrhs = deep_resolve(arena, rhs, env);
-            if rlhs == rrhs {
+            let rlhs = deep_resolve(heap, lhs, env);
+            let rrhs = deep_resolve(heap, rhs, env);
+            if val_eq(heap, rlhs, rrhs) {
                 return body;
             }
-            if val_contains(rlhs, rrhs) || val_contains(rrhs, rlhs) {
+            if val_contains(heap, rlhs, rrhs) || val_contains(heap, rrhs, rlhs) {
                 #[cfg(feature = "opt-stats")]
                 stats::bump("cycle");
-                return fail(arena);
+                return fail(heap);
             }
-            if let MComputation::Exists { ptype, body: ebody } = body {
+            if let MComputation::Exists { ptype, body: ebody } = heap.comp(body) {
+                let ptype = ptype.clone();
+                let ebody = *ebody;
                 #[cfg(feature = "opt-stats")]
                 stats::bump("eq-exists");
-                let new_equate = arena.alloc(MComputation::Equate {
-                    lhs: shift_val(arena, lhs, 1, 0),
-                    rhs: shift_val(arena, rhs, 1, 0),
+                let slhs = shift_val(heap, lhs, 1, 0);
+                let srhs = shift_val(heap, rhs, 1, 0);
+                let new_equate = heap.alloc_comp(MComputation::Equate {
+                    lhs: slhs,
+                    rhs: srhs,
                     body: ebody,
                 });
-                let new_exists = arena.alloc(MComputation::Exists {
-                    ptype: ptype.clone(),
+                let new_exists = heap.alloc_comp(MComputation::Exists {
+                    ptype,
                     body: new_equate,
                 });
-                return opt_comp_env(arena, new_exists, env);
+                return opt_comp_env(heap, new_exists, env);
             }
-            if let MComputation::Choice(branches) = body {
+            if let MComputation::Choice(branches) = heap.comp(body) {
                 if !branches.is_empty() {
+                    let branches: Vec<CompId> = branches.iter().copied().collect();
                     #[cfg(feature = "opt-stats")]
                     stats::bump("eq-choice");
-                    let new_branches: Vec<&'a MComputation<'a>> = branches
+                    let new_branches: Vec<CompId> = branches
                         .iter()
-                        .map(|b| -> &'a MComputation<'a> {
-                            arena.alloc(MComputation::Equate { lhs, rhs, body: b })
-                        })
+                        .map(|b| heap.alloc_comp(MComputation::Equate { lhs, rhs, body: *b }))
                         .collect();
                     let choice =
-                        arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&new_branches)));
-                    return opt_comp_env(arena, choice, env);
+                        heap.alloc_comp(MComputation::Choice(new_branches.into_boxed_slice()));
+                    return opt_comp_env(heap, choice, env);
                 }
             }
-            match (rlhs, rrhs) {
+            match (heap.val(rlhs), heap.val(rrhs)) {
                 (MValue::Succ(v), MValue::Succ(w)) => {
-                    let new_equate = arena.alloc(MComputation::Equate {
+                    let new_equate = heap.alloc_comp(MComputation::Equate {
                         lhs: v,
                         rhs: w,
                         body,
                     });
-                    return opt_comp_env(arena, new_equate, env);
+                    return opt_comp_env(heap, new_equate, env);
                 }
                 (MValue::Succ(_), MValue::Zero) | (MValue::Zero, MValue::Succ(_)) => {
-                    return fail(arena);
+                    return fail(heap);
                 }
                 (MValue::Cons(v1, w1), MValue::Cons(v2, w2)) => {
-                    let inner_equate = arena.alloc(MComputation::Equate {
+                    let inner_equate = heap.alloc_comp(MComputation::Equate {
                         lhs: w1,
                         rhs: w2,
                         body,
                     });
-                    let outer_equate = arena.alloc(MComputation::Equate {
+                    let outer_equate = heap.alloc_comp(MComputation::Equate {
                         lhs: v1,
                         rhs: v2,
                         body: inner_equate,
                     });
-                    return opt_comp_env(arena, outer_equate, env);
+                    return opt_comp_env(heap, outer_equate, env);
                 }
                 (MValue::Cons(..), MValue::Nil) | (MValue::Nil, MValue::Cons(..)) => {
-                    return fail(arena);
+                    return fail(heap);
                 }
                 (MValue::Pair(v1, v2), MValue::Pair(w1, w2)) => {
-                    let inner_equate = arena.alloc(MComputation::Equate {
+                    let inner_equate = heap.alloc_comp(MComputation::Equate {
                         lhs: v2,
                         rhs: w2,
                         body,
                     });
-                    let outer_equate = arena.alloc(MComputation::Equate {
+                    let outer_equate = heap.alloc_comp(MComputation::Equate {
                         lhs: v1,
                         rhs: w1,
                         body: inner_equate,
                     });
-                    return opt_comp_env(arena, outer_equate, env);
+                    return opt_comp_env(heap, outer_equate, env);
                 }
                 (MValue::Inl(v), MValue::Inl(w)) | (MValue::Inr(v), MValue::Inr(w)) => {
-                    let new_equate = arena.alloc(MComputation::Equate {
+                    let new_equate = heap.alloc_comp(MComputation::Equate {
                         lhs: v,
                         rhs: w,
                         body,
                     });
-                    return opt_comp_env(arena, new_equate, env);
+                    return opt_comp_env(heap, new_equate, env);
                 }
                 (MValue::Inl(_), MValue::Inr(_)) | (MValue::Inr(_), MValue::Inl(_)) => {
-                    return fail(arena);
+                    return fail(heap);
                 }
                 _ => {}
             }
@@ -821,52 +997,56 @@ fn rewrite<'a>(
         // lam x. (exists z:s. M)  -->  exists z:s. (lam x. M')  [swap binders]
         // lam x. (V =:= W. M)  -->  V' =:= W'. (lam x. M)  [if V,W don't ref x]
         MComputation::Lambda { body } => {
-            if is_fail(body) {
-                return fail(arena);
+            let body = *body;
+            if is_fail(heap, body) {
+                return fail(heap);
             }
-            if let MComputation::Choice(branches) = body {
+            if let MComputation::Choice(branches) = heap.comp(body) {
                 if !branches.is_empty() {
+                    let branches: Vec<CompId> = branches.iter().copied().collect();
                     #[cfg(feature = "opt-stats")]
                     stats::bump("lam-choice");
-                    let new_branches: Vec<&'a MComputation<'a>> = branches
+                    let new_branches: Vec<CompId> = branches
                         .iter()
-                        .map(|b| -> &'a MComputation<'a> {
-                            arena.alloc(MComputation::Lambda { body: b })
-                        })
+                        .map(|b| heap.alloc_comp(MComputation::Lambda { body: *b }))
                         .collect();
                     let choice =
-                        arena.alloc(MComputation::Choice(arena.alloc_slice_copy(&new_branches)));
-                    return opt_comp_env(arena, choice, env);
+                        heap.alloc_comp(MComputation::Choice(new_branches.into_boxed_slice()));
+                    return opt_comp_env(heap, choice, env);
                 }
             }
-            if let MComputation::Exists { ptype, body: ebody } = body {
+            if let MComputation::Exists { ptype, body: ebody } = heap.comp(body) {
+                let ptype = ptype.clone();
+                let ebody = *ebody;
                 #[cfg(feature = "opt-stats")]
                 stats::bump("lam-exists");
-                let new_lam = arena.alloc(MComputation::Lambda {
-                    body: swap_comp(arena, ebody, 0),
-                });
-                let new_exists = arena.alloc(MComputation::Exists {
-                    ptype: ptype.clone(),
+                let swapped = swap_comp(heap, ebody, 0);
+                let new_lam = heap.alloc_comp(MComputation::Lambda { body: swapped });
+                let new_exists = heap.alloc_comp(MComputation::Exists {
+                    ptype,
                     body: new_lam,
                 });
-                return opt_comp_env(arena, new_exists, env);
+                return opt_comp_env(heap, new_exists, env);
             }
             if let MComputation::Equate {
                 lhs,
                 rhs,
                 body: ebody,
-            } = body
+            } = heap.comp(body)
             {
-                if !has_free_var_val(lhs, 0) && !has_free_var_val(rhs, 0) {
+                let (lhs, rhs, ebody) = (*lhs, *rhs, *ebody);
+                if !has_free_var_val(heap, lhs, 0) && !has_free_var_val(heap, rhs, 0) {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("lam-equate");
-                    let new_lam = arena.alloc(MComputation::Lambda { body: ebody });
-                    let new_equate = arena.alloc(MComputation::Equate {
-                        lhs: shift_val(arena, lhs, -1, 0),
-                        rhs: shift_val(arena, rhs, -1, 0),
+                    let new_lam = heap.alloc_comp(MComputation::Lambda { body: ebody });
+                    let slhs = shift_val(heap, lhs, -1, 0);
+                    let srhs = shift_val(heap, rhs, -1, 0);
+                    let new_equate = heap.alloc_comp(MComputation::Equate {
+                        lhs: slhs,
+                        rhs: srhs,
                         body: new_lam,
                     });
-                    return opt_comp_env(arena, new_equate, env);
+                    return opt_comp_env(heap, new_equate, env);
                 }
             }
             comp
@@ -874,8 +1054,9 @@ fn rewrite<'a>(
 
         // ifz(num, zk, n.sk): resolve num through env, then subst
         MComputation::Ifz { num, zk, sk } => {
-            let resolved = deep_resolve(arena, num, env);
-            match resolved {
+            let (num, zk, sk) = (*num, *zk, *sk);
+            let resolved = deep_resolve(heap, num, env);
+            match heap.val(resolved) {
                 MValue::Zero => {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("ifz-beta");
@@ -884,7 +1065,8 @@ fn rewrite<'a>(
                 MValue::Succ(pred) => {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("ifz-beta");
-                    opt_comp_env(arena, subst_comp(arena, sk, pred, 0), env)
+                    let s = subst_comp(heap, sk, pred, 0);
+                    opt_comp_env(heap, s, env)
                 }
                 _ => comp,
             }
@@ -892,8 +1074,9 @@ fn rewrite<'a>(
 
         // match(list, nilk, x.xs.consk): resolve list through env, then subst
         MComputation::Match { list, nilk, consk } => {
-            let resolved = deep_resolve(arena, list, env);
-            match resolved {
+            let (list, nilk, consk) = (*list, *nilk, *consk);
+            let resolved = deep_resolve(heap, list, env);
+            match heap.val(resolved) {
                 MValue::Nil => {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("match-beta");
@@ -902,9 +1085,9 @@ fn rewrite<'a>(
                 MValue::Cons(head, tail) => {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("match-beta");
-                    let step1 = subst_comp(arena, consk, tail, 0);
-                    let step2 = subst_comp(arena, step1, head, 0);
-                    opt_comp_env(arena, step2, env)
+                    let step1 = subst_comp(heap, consk, tail, 0);
+                    let step2 = subst_comp(heap, step1, head, 0);
+                    opt_comp_env(heap, step2, env)
                 }
                 _ => comp,
             }
@@ -912,17 +1095,20 @@ fn rewrite<'a>(
 
         // case(sum, x.inlk, y.inrk): resolve sum through env, then subst
         MComputation::Case { sum, inlk, inrk } => {
-            let resolved = deep_resolve(arena, sum, env);
-            match resolved {
+            let (sum, inlk, inrk) = (*sum, *inlk, *inrk);
+            let resolved = deep_resolve(heap, sum, env);
+            match heap.val(resolved) {
                 MValue::Inl(v) => {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("case-beta");
-                    opt_comp_env(arena, subst_comp(arena, inlk, v, 0), env)
+                    let s = subst_comp(heap, inlk, v, 0);
+                    opt_comp_env(heap, s, env)
                 }
                 MValue::Inr(v) => {
                     #[cfg(feature = "opt-stats")]
                     stats::bump("case-beta");
-                    opt_comp_env(arena, subst_comp(arena, inrk, v, 0), env)
+                    let s = subst_comp(heap, inrk, v, 0);
+                    opt_comp_env(heap, s, env)
                 }
                 _ => comp,
             }
@@ -935,364 +1121,376 @@ fn rewrite<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::value_type::ValueType;
 
-    fn ret<'a>(arena: &'a Bump, v: MValue<'a>) -> &'a MComputation<'a> {
-        arena.alloc(MComputation::Return(arena.alloc(v)))
+    fn imm(heap: &mut Heap, v: MValue) -> NodeId {
+        heap.alloc_imm_val(v)
     }
 
-    fn bind<'a>(
-        arena: &'a Bump,
-        c: &'a MComputation<'a>,
-        k: &'a MComputation<'a>,
-    ) -> &'a MComputation<'a> {
-        arena.alloc(MComputation::Bind { comp: c, cont: k })
+    fn ret(heap: &mut Heap, v: NodeId) -> CompId {
+        heap.alloc_comp(MComputation::Return(v))
     }
 
-    fn var<'a>(arena: &'a Bump, i: usize) -> &'a MValue<'a> {
-        arena.alloc(MValue::Var(i))
+    fn bind(heap: &mut Heap, c: CompId, k: CompId) -> CompId {
+        heap.alloc_comp(MComputation::Bind { comp: c, cont: k })
+    }
+
+    fn fail_comp(heap: &mut Heap) -> CompId {
+        heap.alloc_comp(MComputation::Choice(Vec::new().into_boxed_slice()))
+    }
+
+    fn choice(heap: &mut Heap, branches: Vec<CompId>) -> CompId {
+        heap.alloc_comp(MComputation::Choice(branches.into_boxed_slice()))
+    }
+
+    /// `return (succ (var i))`.
+    fn ret_succ_var(heap: &mut Heap, i: usize) -> CompId {
+        let v = imm(heap, MValue::Var(i));
+        let s = imm(heap, MValue::Succ(v));
+        ret(heap, s)
+    }
+
+    /// `return (var i)`.
+    fn ret_var(heap: &mut Heap, i: usize) -> CompId {
+        let v = imm(heap, MValue::Var(i));
+        ret(heap, v)
+    }
+
+    /// `return zero`.
+    fn ret_zero(heap: &mut Heap) -> CompId {
+        let z = imm(heap, MValue::Zero);
+        ret(heap, z)
     }
 
     #[test]
     fn bind_return_beta() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (return 0) to x. return (succ x) -- env approach keeps bind
-        let term = bind(
-            &arena,
-            ret(&arena, MValue::Zero),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let result = opt_comp(&arena, term);
-        let expected = bind(
-            &arena,
-            ret(&arena, MValue::Zero),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        assert_eq!(*result, *expected);
+        let z = ret_zero(&mut heap);
+        let s = ret_succ_var(&mut heap, 0);
+        let term = bind(&mut heap, z, s);
+        let result = opt_comp(&mut heap, term);
+        let ez = ret_zero(&mut heap);
+        let es = ret_succ_var(&mut heap, 0);
+        let expected = bind(&mut heap, ez, es);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn bind_return_chain() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (return 0) to x. (return x) to y. return (succ y)
         // var-alias eliminates inner bind: (return 0) to x. return (succ x)
-        let term = bind(
-            &arena,
-            ret(&arena, MValue::Zero),
-            bind(
-                &arena,
-                ret(&arena, MValue::Var(0)),
-                ret(&arena, MValue::Succ(var(&arena, 0))),
-            ),
-        );
-        let result = opt_comp(&arena, term);
-        let expected = bind(
-            &arena,
-            ret(&arena, MValue::Zero),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        assert_eq!(*result, *expected);
+        let z = ret_zero(&mut heap);
+        let inner_ret = ret_var(&mut heap, 0);
+        let inner_succ = ret_succ_var(&mut heap, 0);
+        let inner = bind(&mut heap, inner_ret, inner_succ);
+        let term = bind(&mut heap, z, inner);
+        let result = opt_comp(&mut heap, term);
+        let ez = ret_zero(&mut heap);
+        let es = ret_succ_var(&mut heap, 0);
+        let expected = bind(&mut heap, ez, es);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn force_thunk_beta() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // force(thunk(return 0)) --> return 0
-        let inner = arena.alloc(MComputation::Return(arena.alloc(MValue::Zero)));
-        let term = arena.alloc(MComputation::Force(arena.alloc(MValue::Thunk(inner))));
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *inner);
+        let inner = ret_zero(&mut heap);
+        let thunk = imm(&mut heap, MValue::Thunk(inner));
+        let term = heap.alloc_comp(MComputation::Force(thunk));
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, inner));
     }
 
     #[test]
     fn fail_to_is_fail() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // fail to x. M --> fail
-        let term = bind(
-            &arena,
-            arena.alloc(MComputation::Choice(&[])),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let result = opt_comp(&arena, term);
-        assert!(is_fail(result));
+        let f = fail_comp(&mut heap);
+        let s = ret_succ_var(&mut heap, 0);
+        let term = bind(&mut heap, f, s);
+        let result = opt_comp(&mut heap, term);
+        assert!(is_fail(&heap, result));
     }
 
     #[test]
     fn choice_removes_fail_branches() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (fail [] return 0) --> return 0
-        let fail_branch: &MComputation = arena.alloc(MComputation::Choice(&[]));
-        let ret_branch = ret(&arena, MValue::Zero);
-        let branches = arena.alloc_slice_copy(&[fail_branch, ret_branch]);
-        let term = arena.alloc(MComputation::Choice(branches));
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *ret(&arena, MValue::Zero));
+        let fail_branch = fail_comp(&mut heap);
+        let ret_branch = ret_zero(&mut heap);
+        let term = choice(&mut heap, vec![fail_branch, ret_branch]);
+        let result = opt_comp(&mut heap, term);
+        let expected = ret_zero(&mut heap);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn bind_return_eta() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // M to x. return x --> M
-        let m = ret(&arena, MValue::Zero);
-        let term = bind(&arena, m, ret(&arena, MValue::Var(0)));
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *m);
+        let m = ret_zero(&mut heap);
+        let rv = ret_var(&mut heap, 0);
+        let term = bind(&mut heap, m, rv);
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, m));
     }
 
     #[test]
     fn exists_fail() {
-        let arena = Bump::new();
-        use crate::machine::value_type::ValueType;
-        let term = arena.alloc(MComputation::Exists {
+        let mut heap = Heap::new();
+        let body = fail_comp(&mut heap);
+        let term = heap.alloc_comp(MComputation::Exists {
             ptype: ValueType::Nat,
-            body: arena.alloc(MComputation::Choice(&[])),
+            body,
         });
-        let result = opt_comp(&arena, term);
-        assert!(is_fail(result));
+        let result = opt_comp(&mut heap, term);
+        assert!(is_fail(&heap, result));
     }
 
     #[test]
     fn equate_refl() {
-        let arena = Bump::new();
-        let v = arena.alloc(MValue::Zero);
-        let body = ret(&arena, MValue::Succ(arena.alloc(MValue::Zero)));
-        let term = arena.alloc(MComputation::Equate {
-            lhs: v,
-            rhs: v,
-            body,
-        });
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *body);
+        let mut heap = Heap::new();
+        let v = imm(&mut heap, MValue::Zero);
+        let inner = imm(&mut heap, MValue::Zero);
+        let succ = imm(&mut heap, MValue::Succ(inner));
+        let body = ret(&mut heap, succ);
+        let term = heap.alloc_comp(MComputation::Equate { lhs: v, rhs: v, body });
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, body));
     }
 
     #[test]
     fn ifz_zero_beta() {
-        let arena = Bump::new();
-        let zk = ret(&arena, MValue::Nil);
-        let sk = ret(&arena, MValue::Succ(var(&arena, 0)));
-        let term = arena.alloc(MComputation::Ifz {
-            num: arena.alloc(MValue::Zero),
-            zk,
-            sk,
-        });
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *zk);
+        let mut heap = Heap::new();
+        let nil = imm(&mut heap, MValue::Nil);
+        let zk = ret(&mut heap, nil);
+        let sk = ret_succ_var(&mut heap, 0);
+        let num = imm(&mut heap, MValue::Zero);
+        let term = heap.alloc_comp(MComputation::Ifz { num, zk, sk });
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, zk));
     }
 
     #[test]
     fn ifz_succ_beta() {
-        let arena = Bump::new();
-        // ifz(succ(0), zk, n. return (succ n)) --> return (succ 0)  (subst at eliminator)
-        let term = arena.alloc(MComputation::Ifz {
-            num: arena.alloc(MValue::Succ(arena.alloc(MValue::Zero))),
-            zk: ret(&arena, MValue::Nil),
-            sk: ret(&arena, MValue::Succ(var(&arena, 0))),
-        });
-        let result = opt_comp(&arena, term);
-        let expected = ret(&arena, MValue::Succ(arena.alloc(MValue::Zero)));
-        assert_eq!(*result, *expected);
+        let mut heap = Heap::new();
+        // ifz(succ(0), zk, n. return (succ n)) --> return (succ 0)
+        let zero = imm(&mut heap, MValue::Zero);
+        let num = imm(&mut heap, MValue::Succ(zero));
+        let nil = imm(&mut heap, MValue::Nil);
+        let zk = ret(&mut heap, nil);
+        let sk = ret_succ_var(&mut heap, 0);
+        let term = heap.alloc_comp(MComputation::Ifz { num, zk, sk });
+        let result = opt_comp(&mut heap, term);
+        let ez = imm(&mut heap, MValue::Zero);
+        let es = imm(&mut heap, MValue::Succ(ez));
+        let expected = ret(&mut heap, es);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn match_nil_beta() {
-        let arena = Bump::new();
-        let nilk = ret(&arena, MValue::Zero);
-        let consk = ret(&arena, MValue::Pair(var(&arena, 1), var(&arena, 0)));
-        let term = arena.alloc(MComputation::Match {
-            list: arena.alloc(MValue::Nil),
-            nilk,
-            consk,
-        });
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *nilk);
+        let mut heap = Heap::new();
+        let z = imm(&mut heap, MValue::Zero);
+        let nilk = ret(&mut heap, z);
+        let v1 = imm(&mut heap, MValue::Var(1));
+        let v0 = imm(&mut heap, MValue::Var(0));
+        let pair = imm(&mut heap, MValue::Pair(v1, v0));
+        let consk = ret(&mut heap, pair);
+        let list = imm(&mut heap, MValue::Nil);
+        let term = heap.alloc_comp(MComputation::Match { list, nilk, consk });
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, nilk));
     }
 
     #[test]
     fn match_cons_beta() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // match(cons(0, nil), nilk, x.xs. return (x, xs)) --> return (0, nil)
-        let term = arena.alloc(MComputation::Match {
-            list: arena.alloc(MValue::Cons(
-                arena.alloc(MValue::Zero),
-                arena.alloc(MValue::Nil),
-            )),
-            nilk: ret(&arena, MValue::Nil),
-            consk: ret(&arena, MValue::Pair(var(&arena, 1), var(&arena, 0))),
-        });
-        let result = opt_comp(&arena, term);
-        let expected = ret(
-            &arena,
-            MValue::Pair(arena.alloc(MValue::Zero), arena.alloc(MValue::Nil)),
-        );
-        assert_eq!(*result, *expected);
+        let z = imm(&mut heap, MValue::Zero);
+        let nil = imm(&mut heap, MValue::Nil);
+        let list = imm(&mut heap, MValue::Cons(z, nil));
+        let nz = imm(&mut heap, MValue::Nil);
+        let nilk = ret(&mut heap, nz);
+        let v1 = imm(&mut heap, MValue::Var(1));
+        let v0 = imm(&mut heap, MValue::Var(0));
+        let pair = imm(&mut heap, MValue::Pair(v1, v0));
+        let consk = ret(&mut heap, pair);
+        let term = heap.alloc_comp(MComputation::Match { list, nilk, consk });
+        let result = opt_comp(&mut heap, term);
+        let ez = imm(&mut heap, MValue::Zero);
+        let enil = imm(&mut heap, MValue::Nil);
+        let epair = imm(&mut heap, MValue::Pair(ez, enil));
+        let expected = ret(&mut heap, epair);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn nested_bind_return_succ_succ() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (return x) to a. (return (succ a)) to b. return (succ b)
         // var-alias eliminates outer bind: (return (succ x)) to b. return (succ b)
-        let term = bind(
-            &arena,
-            ret(&arena, MValue::Var(0)),
-            bind(
-                &arena,
-                ret(&arena, MValue::Succ(var(&arena, 0))),
-                ret(&arena, MValue::Succ(var(&arena, 0))),
-            ),
-        );
-        let result = opt_comp(&arena, term);
-        let expected = bind(
-            &arena,
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        assert_eq!(*result, *expected);
+        let rv = ret_var(&mut heap, 0);
+        let s1 = ret_succ_var(&mut heap, 0);
+        let s2 = ret_succ_var(&mut heap, 0);
+        let inner = bind(&mut heap, s1, s2);
+        let term = bind(&mut heap, rv, inner);
+        let result = opt_comp(&mut heap, term);
+        let es1 = ret_succ_var(&mut heap, 0);
+        let es2 = ret_succ_var(&mut heap, 0);
+        let expected = bind(&mut heap, es1, es2);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn pull_choice() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (return 0 [] return 1) to x. return (succ x)
-        // --> (return 0 to x. return (succ x)) [] (return 1 to x. return (succ x))
-        let b1 = ret(&arena, MValue::Zero);
-        let b2 = ret(&arena, MValue::Succ(arena.alloc(MValue::Zero)));
-        let branches = arena.alloc_slice_copy(&[b1, b2]);
-        let term = bind(
-            &arena,
-            arena.alloc(MComputation::Choice(branches)),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let result = opt_comp(&arena, term);
-        let eb1 = bind(
-            &arena,
-            ret(&arena, MValue::Zero),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let eb2 = bind(
-            &arena,
-            ret(&arena, MValue::Succ(arena.alloc(MValue::Zero))),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let expected_branches = arena.alloc_slice_copy(&[eb1, eb2]);
-        let expected = arena.alloc(MComputation::Choice(expected_branches));
-        assert_eq!(*result, *expected);
+        let b1 = ret_zero(&mut heap);
+        let z = imm(&mut heap, MValue::Zero);
+        let one = imm(&mut heap, MValue::Succ(z));
+        let b2 = ret(&mut heap, one);
+        let ch = choice(&mut heap, vec![b1, b2]);
+        let s = ret_succ_var(&mut heap, 0);
+        let term = bind(&mut heap, ch, s);
+        let result = opt_comp(&mut heap, term);
+        // expected: (return 0 to x. return (succ x)) [] (return 1 to x. return (succ x))
+        let eb1a = ret_zero(&mut heap);
+        let eb1b = ret_succ_var(&mut heap, 0);
+        let eb1 = bind(&mut heap, eb1a, eb1b);
+        let ez = imm(&mut heap, MValue::Zero);
+        let eone = imm(&mut heap, MValue::Succ(ez));
+        let eb2a = ret(&mut heap, eone);
+        let eb2b = ret_succ_var(&mut heap, 0);
+        let eb2 = bind(&mut heap, eb2a, eb2b);
+        let expected = choice(&mut heap, vec![eb1, eb2]);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn pull_choice_eliminates_fail_branch() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (return 0 [] fail) to x. return x --> return 0
-        let b1 = ret(&arena, MValue::Zero);
-        let b2: &MComputation = arena.alloc(MComputation::Choice(&[]));
-        let branches = arena.alloc_slice_copy(&[b1, b2]);
-        let term = bind(
-            &arena,
-            arena.alloc(MComputation::Choice(branches)),
-            ret(&arena, MValue::Var(0)),
-        );
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *ret(&arena, MValue::Zero));
+        let b1 = ret_zero(&mut heap);
+        let b2 = fail_comp(&mut heap);
+        let ch = choice(&mut heap, vec![b1, b2]);
+        let rv = ret_var(&mut heap, 0);
+        let term = bind(&mut heap, ch, rv);
+        let result = opt_comp(&mut heap, term);
+        let expected = ret_zero(&mut heap);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn pull_exists() {
-        let arena = Bump::new();
-        use crate::machine::value_type::ValueType;
+        let mut heap = Heap::new();
         // (exists z:Nat. return z) to x. return (succ x)
-        // --> exists z:Nat. return (succ z)  (pull-exists + var-alias elimination)
-        let term = bind(
-            &arena,
-            arena.alloc(MComputation::Exists {
-                ptype: ValueType::Nat,
-                body: ret(&arena, MValue::Var(0)),
-            }),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let result = opt_comp(&arena, term);
-        let expected = arena.alloc(MComputation::Exists {
+        // --> exists z:Nat. return (succ z)
+        let body = ret_var(&mut heap, 0);
+        let ex = heap.alloc_comp(MComputation::Exists {
             ptype: ValueType::Nat,
-            body: ret(&arena, MValue::Succ(var(&arena, 0))),
+            body,
         });
-        assert_eq!(*result, *expected);
+        let s = ret_succ_var(&mut heap, 0);
+        let term = bind(&mut heap, ex, s);
+        let result = opt_comp(&mut heap, term);
+        let ebody = ret_succ_var(&mut heap, 0);
+        let expected = heap.alloc_comp(MComputation::Exists {
+            ptype: ValueType::Nat,
+            body: ebody,
+        });
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn pull_equate() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (0 =:= 0. return 1) to x. return (succ x)
         // equate-refl fires -> (return 1) to x. return (succ x) -- bind kept
-        let one = arena.alloc(MValue::Succ(arena.alloc(MValue::Zero)));
-        let term = bind(
-            &arena,
-            arena.alloc(MComputation::Equate {
-                lhs: arena.alloc(MValue::Zero),
-                rhs: arena.alloc(MValue::Zero),
-                body: arena.alloc(MComputation::Return(one)),
-            }),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        let result = opt_comp(&arena, term);
-        let expected = bind(
-            &arena,
-            arena.alloc(MComputation::Return(one)),
-            ret(&arena, MValue::Succ(var(&arena, 0))),
-        );
-        assert_eq!(*result, *expected);
+        let z1 = imm(&mut heap, MValue::Zero);
+        let one_inner = imm(&mut heap, MValue::Zero);
+        let one = imm(&mut heap, MValue::Succ(one_inner));
+        let eq_body = ret(&mut heap, one);
+        let lhs = imm(&mut heap, MValue::Zero);
+        let rhs = imm(&mut heap, MValue::Zero);
+        let eq = heap.alloc_comp(MComputation::Equate {
+            lhs,
+            rhs,
+            body: eq_body,
+        });
+        let s = ret_succ_var(&mut heap, 0);
+        let term = bind(&mut heap, eq, s);
+        let _ = z1;
+        let result = opt_comp(&mut heap, term);
+        let eone_inner = imm(&mut heap, MValue::Zero);
+        let eone = imm(&mut heap, MValue::Succ(eone_inner));
+        let ebody = ret(&mut heap, eone);
+        let es = ret_succ_var(&mut heap, 0);
+        let expected = bind(&mut heap, ebody, es);
+        assert!(comp_eq(&heap, result, expected));
     }
 
     #[test]
     fn equate_succ_succ_decompose() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // succ(0) =:= succ(0). M --> M
-        let body = ret(&arena, MValue::Nil);
-        let term = arena.alloc(MComputation::Equate {
-            lhs: arena.alloc(MValue::Succ(arena.alloc(MValue::Zero))),
-            rhs: arena.alloc(MValue::Succ(arena.alloc(MValue::Zero))),
-            body,
-        });
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *body);
+        let nil = imm(&mut heap, MValue::Nil);
+        let body = ret(&mut heap, nil);
+        let z1 = imm(&mut heap, MValue::Zero);
+        let lhs = imm(&mut heap, MValue::Succ(z1));
+        let z2 = imm(&mut heap, MValue::Zero);
+        let rhs = imm(&mut heap, MValue::Succ(z2));
+        let term = heap.alloc_comp(MComputation::Equate { lhs, rhs, body });
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, body));
     }
 
     #[test]
     fn equate_succ_zero_fail() {
-        let arena = Bump::new();
-        let term = arena.alloc(MComputation::Equate {
-            lhs: arena.alloc(MValue::Succ(arena.alloc(MValue::Zero))),
-            rhs: arena.alloc(MValue::Zero),
-            body: ret(&arena, MValue::Nil),
-        });
-        let result = opt_comp(&arena, term);
-        assert!(is_fail(result));
+        let mut heap = Heap::new();
+        let z1 = imm(&mut heap, MValue::Zero);
+        let lhs = imm(&mut heap, MValue::Succ(z1));
+        let rhs = imm(&mut heap, MValue::Zero);
+        let nil = imm(&mut heap, MValue::Nil);
+        let body = ret(&mut heap, nil);
+        let term = heap.alloc_comp(MComputation::Equate { lhs, rhs, body });
+        let result = opt_comp(&mut heap, term);
+        assert!(is_fail(&heap, result));
     }
 
     #[test]
     fn equate_cons_nil_fail() {
-        let arena = Bump::new();
-        let term = arena.alloc(MComputation::Equate {
-            lhs: arena.alloc(MValue::Cons(
-                arena.alloc(MValue::Zero),
-                arena.alloc(MValue::Nil),
-            )),
-            rhs: arena.alloc(MValue::Nil),
-            body: ret(&arena, MValue::Nil),
-        });
-        let result = opt_comp(&arena, term);
-        assert!(is_fail(result));
+        let mut heap = Heap::new();
+        let z = imm(&mut heap, MValue::Zero);
+        let n = imm(&mut heap, MValue::Nil);
+        let lhs = imm(&mut heap, MValue::Cons(z, n));
+        let rhs = imm(&mut heap, MValue::Nil);
+        let nil = imm(&mut heap, MValue::Nil);
+        let body = ret(&mut heap, nil);
+        let term = heap.alloc_comp(MComputation::Equate { lhs, rhs, body });
+        let result = opt_comp(&mut heap, term);
+        assert!(is_fail(&heap, result));
     }
 
     #[test]
     fn equate_pair_decompose() {
-        let arena = Bump::new();
+        let mut heap = Heap::new();
         // (0, 1) =:= (0, 1). M --> M
-        let one = arena.alloc(MValue::Succ(arena.alloc(MValue::Zero)));
-        let body = ret(&arena, MValue::Nil);
-        let term = arena.alloc(MComputation::Equate {
-            lhs: arena.alloc(MValue::Pair(arena.alloc(MValue::Zero), one)),
-            rhs: arena.alloc(MValue::Pair(arena.alloc(MValue::Zero), one)),
-            body,
-        });
-        let result = opt_comp(&arena, term);
-        assert_eq!(*result, *body);
+        let nil = imm(&mut heap, MValue::Nil);
+        let body = ret(&mut heap, nil);
+        let lz = imm(&mut heap, MValue::Zero);
+        let lo_inner = imm(&mut heap, MValue::Zero);
+        let lo = imm(&mut heap, MValue::Succ(lo_inner));
+        let lhs = imm(&mut heap, MValue::Pair(lz, lo));
+        let rz = imm(&mut heap, MValue::Zero);
+        let ro_inner = imm(&mut heap, MValue::Zero);
+        let ro = imm(&mut heap, MValue::Succ(ro_inner));
+        let rhs = imm(&mut heap, MValue::Pair(rz, ro));
+        let term = heap.alloc_comp(MComputation::Equate { lhs, rhs, body });
+        let result = opt_comp(&mut heap, term);
+        assert!(comp_eq(&heap, result, body));
     }
 }

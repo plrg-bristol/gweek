@@ -1,212 +1,126 @@
 //! # The CBPV IR
-
-use std::fmt::{self, Display};
-
-use bumpalo::Bump;
+//!
+//! The machine's term language: values ([`MValue`]) and computations ([`MComputation`]) in
+//! Call-By-Push-Value. Every child is a heap handle — a [`NodeId`] for values, a [`CompId`] for
+//! computations — so the terms are `Copy` and a clone of a machine moves only integers.
 
 use crate::machine::value_type::ValueType;
 
-#[derive(PartialEq, Clone, Copy, Debug)]
-pub enum MValue<'a> {
+use super::{CompId, NodeId};
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum MValue {
     Var(usize),
     Unit,
     Nat(u64),
     Zero,
-    Succ(&'a MValue<'a>),
-    Pair(&'a MValue<'a>, &'a MValue<'a>),
-    Inl(&'a MValue<'a>),
-    Inr(&'a MValue<'a>),
+    Succ(NodeId),
+    Pair(NodeId, NodeId),
+    Inl(NodeId),
+    Inr(NodeId),
     Nil,
-    Cons(&'a MValue<'a>, &'a MValue<'a>),
-    Thunk(&'a MComputation<'a>),
-}
-
-impl<'a> Display for MValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MValue::Var(i) => write!(f, "idx {}", i),
-            MValue::Unit => write!(f, "()"),
-            MValue::Nat(n) => write!(f, "{}", n),
-            MValue::Zero => write!(f, "{}", 0),
-            MValue::Succ(v) => match to_nat(self) {
-                Some(s) => write!(f, "{}", s),
-                None => write!(f, "S ({})", v)
-            },
-            MValue::Nil | MValue::Cons(..) => match to_list(self) {
-                Some(items) => write!(f, "[{}]", items.join(", ")),
-                None => match self {
-                    MValue::Nil => write!(f, "[]"),
-                    MValue::Cons(v, w) => write!(f, "({} : {})", v, w),
-                    _ => unreachable!(),
-                },
-            },
-            MValue::Thunk(t) => write!(f, "Thunk({})", t),
-            MValue::Pair(v, w) => write!(f, "({}, {})", v, w),
-            MValue::Inl(v) => match v {
-                MValue::Unit => write!(f, "true"),
-                _ => write!(f, "inl({})", v),
-            },
-            MValue::Inr(w) => match w {
-                MValue::Unit => write!(f, "false"),
-                _ => write!(f, "inr({})", w),
-            },
-        }
-    }
-}
-
-fn to_nat(v: &MValue) -> Option<u64> {
-    let mut n: u64 = 0;
-    let mut cur = v;
-    loop {
-        match cur {
-            MValue::Nat(k) => return Some(n + k),
-            MValue::Zero => return Some(n),
-            MValue::Succ(v) => {
-                n += 1;
-                cur = v;
-            }
-            _ => return None,
-        }
-    }
-}
-
-fn to_list(v: &MValue) -> Option<Vec<String>> {
-    let mut items = Vec::new();
-    let mut cur = v;
-    loop {
-        match cur {
-            MValue::Nil => return Some(items),
-            MValue::Cons(head, tail) => {
-                items.push(head.to_string());
-                cur = tail;
-            }
-            _ => return None,
-        }
-    }
+    Cons(NodeId, NodeId),
+    Thunk(CompId),
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum MComputation<'a> {
+pub enum MComputation {
     // Value eliminators
     Ifz {
-        num: &'a MValue<'a>,
-        zk: &'a MComputation<'a>,
-        sk: &'a MComputation<'a>,
+        num: NodeId,
+        zk: CompId,
+        sk: CompId,
     },
     Match {
-        list: &'a MValue<'a>,
-        nilk: &'a MComputation<'a>,
-        consk: &'a MComputation<'a>,
+        list: NodeId,
+        nilk: CompId,
+        consk: CompId,
     },
     Case {
-        sum: &'a MValue<'a>,
-        inlk: &'a MComputation<'a>,
-        inrk: &'a MComputation<'a>,
+        sum: NodeId,
+        inlk: CompId,
+        inrk: CompId,
     },
     // CBPV primitives
-    Return(&'a MValue<'a>),
+    Return(NodeId),
     Bind {
-        comp: &'a MComputation<'a>,
-        cont: &'a MComputation<'a>,
+        comp: CompId,
+        cont: CompId,
     },
-    Force(&'a MValue<'a>),
+    Force(NodeId),
     Lambda {
-        body: &'a MComputation<'a>,
+        body: CompId,
     },
     App {
-        op: &'a MComputation<'a>,
-        arg: &'a MValue<'a>,
+        op: CompId,
+        arg: NodeId,
     },
     // FLP
-    Choice(&'a [&'a MComputation<'a>]),
+    Choice(Box<[CompId]>),
     Exists {
         ptype: ValueType,
-        body: &'a MComputation<'a>,
+        body: CompId,
     },
     Equate {
-        lhs: &'a MValue<'a>,
-        rhs: &'a MValue<'a>,
-        body: &'a MComputation<'a>,
+        lhs: NodeId,
+        rhs: NodeId,
+        body: CompId,
     },
     // Recursion
     Rec {
-        body: &'a MComputation<'a>,
+        body: CompId,
     },
 }
 
-impl<'a> MComputation<'a> {
-    pub fn thunk(&'a self, arena: &'a Bump) -> &'a MValue<'a> {
-        arena.alloc(MValue::Thunk(self))
-    }
+#[cfg(feature = "opt-stats")]
+use super::heap::Heap;
 
-    #[cfg(feature = "opt-stats")]
-    pub fn count_nodes(&self) -> usize {
-        match self {
-            MComputation::Return(v) => 1 + v.count_nodes(),
-            MComputation::Bind { comp, cont } => 1 + comp.count_nodes() + cont.count_nodes(),
-            MComputation::Force(v) => 1 + v.count_nodes(),
-            MComputation::Lambda { body } => 1 + body.count_nodes(),
-            MComputation::App { op, arg } => 1 + op.count_nodes() + arg.count_nodes(),
-            MComputation::Choice(cs) => 1 + cs.iter().map(|c| c.count_nodes()).sum::<usize>(),
-            MComputation::Exists { body, .. } => 1 + body.count_nodes(),
-            MComputation::Equate { lhs, rhs, body } => {
-                1 + lhs.count_nodes() + rhs.count_nodes() + body.count_nodes()
-            }
-            MComputation::Ifz { num, zk, sk } => {
-                1 + num.count_nodes() + zk.count_nodes() + sk.count_nodes()
-            }
-            MComputation::Match { list, nilk, consk } => {
-                1 + list.count_nodes() + nilk.count_nodes() + consk.count_nodes()
-            }
-            MComputation::Case { sum, inlk, inrk } => {
-                1 + sum.count_nodes() + inlk.count_nodes() + inrk.count_nodes()
-            }
-            MComputation::Rec { body } => 1 + body.count_nodes(),
+#[cfg(feature = "opt-stats")]
+pub fn count_nodes_comp(heap: &Heap, id: CompId) -> usize {
+    match heap.comp(id) {
+        MComputation::Return(v) => 1 + count_nodes_val(heap, *v),
+        MComputation::Bind { comp, cont } => {
+            1 + count_nodes_comp(heap, *comp) + count_nodes_comp(heap, *cont)
         }
-    }
-}
-
-impl<'a> MValue<'a> {
-    #[cfg(feature = "opt-stats")]
-    pub fn count_nodes(&self) -> usize {
-        match self {
-            MValue::Var(_) | MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => 1,
-            MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => 1 + v.count_nodes(),
-            MValue::Pair(a, b) | MValue::Cons(a, b) => 1 + a.count_nodes() + b.count_nodes(),
-            MValue::Thunk(c) => 1 + c.count_nodes(),
+        MComputation::Force(v) => 1 + count_nodes_val(heap, *v),
+        MComputation::Lambda { body } => 1 + count_nodes_comp(heap, *body),
+        MComputation::App { op, arg } => {
+            1 + count_nodes_comp(heap, *op) + count_nodes_val(heap, *arg)
         }
+        MComputation::Choice(cs) => 1 + cs.iter().map(|c| count_nodes_comp(heap, *c)).sum::<usize>(),
+        MComputation::Exists { body, .. } => 1 + count_nodes_comp(heap, *body),
+        MComputation::Equate { lhs, rhs, body } => {
+            1 + count_nodes_val(heap, *lhs)
+                + count_nodes_val(heap, *rhs)
+                + count_nodes_comp(heap, *body)
+        }
+        MComputation::Ifz { num, zk, sk } => {
+            1 + count_nodes_val(heap, *num)
+                + count_nodes_comp(heap, *zk)
+                + count_nodes_comp(heap, *sk)
+        }
+        MComputation::Match { list, nilk, consk } => {
+            1 + count_nodes_val(heap, *list)
+                + count_nodes_comp(heap, *nilk)
+                + count_nodes_comp(heap, *consk)
+        }
+        MComputation::Case { sum, inlk, inrk } => {
+            1 + count_nodes_val(heap, *sum)
+                + count_nodes_comp(heap, *inlk)
+                + count_nodes_comp(heap, *inrk)
+        }
+        MComputation::Rec { body } => 1 + count_nodes_comp(heap, *body),
     }
 }
 
-impl<'a> Display for MComputation<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MComputation::Return(v) => write!(f, "return({})", v),
-            MComputation::Bind { comp, cont } => write!(f, "{} to {}", comp, cont),
-            MComputation::Force(v) => write!(f, "force({})", v),
-            MComputation::Lambda { body } => write!(f, "λ({})", body),
-            MComputation::App { op, arg } => write!(f, "{}({})", op, arg),
-            MComputation::Choice(vec) => {
-                for (i, c) in vec.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " [] ")?;
-                    }
-                    write!(f, "{}", c)?;
-                }
-                Ok(())
-            }
-            MComputation::Exists { ptype, body } => write!(f, "exists {}. {}", ptype, body),
-            MComputation::Equate { lhs, rhs, body } => {
-                write!(f, "{} =:= {}. {}", lhs, rhs, body)
-            }
-            MComputation::Ifz { num, zk, sk } => write!(f, "ifz({}, {}, {})", num, zk, sk),
-            MComputation::Match { list, nilk, consk } => {
-                write!(f, "match({}, {}, {})", list, nilk, consk)
-            }
-            MComputation::Case { sum, inlk, inrk } => {
-                write!(f, "case({}, {}, {})", sum, inlk, inrk)
-            }
-            MComputation::Rec { body } => write!(f, "rec({})", body),
+#[cfg(feature = "opt-stats")]
+pub fn count_nodes_val(heap: &Heap, id: NodeId) -> usize {
+    match heap.val(id) {
+        MValue::Var(_) | MValue::Unit | MValue::Zero | MValue::Nil | MValue::Nat(_) => 1,
+        MValue::Succ(v) | MValue::Inl(v) | MValue::Inr(v) => 1 + count_nodes_val(heap, v),
+        MValue::Pair(a, b) | MValue::Cons(a, b) => {
+            1 + count_nodes_val(heap, a) + count_nodes_val(heap, b)
         }
+        MValue::Thunk(c) => 1 + count_nodes_comp(heap, c),
     }
 }

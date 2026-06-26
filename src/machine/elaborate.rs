@@ -10,12 +10,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bumpalo::Bump;
-
 use crate::machine::value_type::ValueType;
 use crate::parser::ast::{Arg, BExpr, CasesType, Decl, Expr, Type};
 
+use super::heap::{CompId, Heap};
 use super::mterms::{MComputation, MValue};
+use super::NodeId;
 
 struct TEnv {
     env: Vec<String>,
@@ -62,10 +62,7 @@ impl TEnv {
     }
 }
 
-pub fn elaborate<'a>(
-    arena: &'a Bump,
-    ast: Vec<Decl>,
-) -> (&'a MComputation<'a>, Vec<&'a MValue<'a>>) {
+pub fn elaborate(heap: &mut Heap, ast: Vec<Decl>) -> (CompId, Vec<NodeId>) {
     let sigs: HashMap<String, Type> = ast
         .iter()
         .filter_map(|d| match d {
@@ -85,7 +82,7 @@ pub fn elaborate<'a>(
             let Func { name, args, body } = group.into_iter().next().unwrap();
             let nullary = args.is_empty();
             let arg_types = arg_types(sigs.get(&name), args.len());
-            let result = elaborate_func(arena, &name, args, &arg_types, body, &mut tenv);
+            let result = elaborate_func(heap, &name, args, &arg_types, body, &mut tenv);
             if nullary {
                 tenv.bind_nullary(&name);
             } else {
@@ -93,14 +90,14 @@ pub fn elaborate<'a>(
             }
             env.push(result);
         } else {
-            let result = elaborate_group(arena, group, &sigs, &mut tenv);
+            let result = elaborate_group(heap, group, &sigs, &mut tenv);
             env.push(result);
         }
     }
 
     for decl in stmts {
         if let Decl::Expr(expr) = decl {
-            main = Some(elaborate_expr(arena, expr, &mut tenv));
+            main = Some(elaborate_expr(heap, expr, &mut tenv));
         }
     }
 
@@ -335,23 +332,23 @@ fn walk_bexpr(bexpr: &BExpr, names: &HashSet<String>, refs: &mut HashSet<String>
 
 // --- Elaboration ---
 
-fn elaborate_func<'a>(
-    arena: &'a Bump,
+fn elaborate_func(
+    heap: &mut Heap,
     name: &str,
     args: Vec<Arg>,
     arg_types: &[Option<Type>],
     body: Expr,
     tenv: &mut TEnv,
-) -> &'a MValue<'a> {
+) -> NodeId {
     tenv.bind(name);
     let comp = if args.is_empty() {
-        elaborate_expr(arena, body, tenv)
+        elaborate_expr(heap, body, tenv)
     } else {
-        build_args(arena, &args, arg_types, &body, tenv)
+        build_args(heap, &args, arg_types, &body, tenv)
     };
     tenv.unbind();
-    let rec = arena.alloc(MComputation::Rec { body: comp });
-    arena.alloc(MValue::Thunk(rec))
+    let rec = heap.alloc_comp(MComputation::Rec { body: comp });
+    heap.alloc_imm_val(MValue::Thunk(rec))
 }
 
 /// Elaborates a mutually-recursive group of functions to a single fixpoint.
@@ -371,19 +368,19 @@ fn elaborate_func<'a>(
 /// `ifz` chain binds one predecessor per step, so in branch `i` the bundle
 /// (`self`) sits at de Bruijn index `i + 1`. Each member body is elaborated
 /// with `tenv` set up to match exactly that layout.
-fn elaborate_group<'a>(
-    arena: &'a Bump,
+fn elaborate_group(
+    heap: &mut Heap,
     group: Vec<Func>,
     sigs: &HashMap<String, Type>,
     tenv: &mut TEnv,
-) -> &'a MValue<'a> {
+) -> NodeId {
     let bundle = format!("$group${}", group[0].name);
 
     for (i, f) in group.iter().enumerate() {
         tenv.members.insert(f.name.clone(), (bundle.clone(), i));
     }
 
-    let mut thunks: Vec<&MValue> = Vec::with_capacity(group.len());
+    let mut thunks: Vec<NodeId> = Vec::with_capacity(group.len());
     for (i, f) in group.iter().enumerate() {
         // Model the captured environment of branch `i`: the bundle (`self`)
         // sits below `sel` and the `i` predecessors bound by the `ifz` chain.
@@ -393,56 +390,57 @@ fn elaborate_group<'a>(
         }
         let arg_types = arg_types(sigs.get(&f.name), f.args.len());
         let comp = if f.args.is_empty() {
-            elaborate_expr(arena, f.body.clone(), tenv)
+            elaborate_expr(heap, f.body.clone(), tenv)
         } else {
-            build_args(arena, &f.args, &arg_types, &f.body, tenv)
+            build_args(heap, &f.args, &arg_types, &f.body, tenv)
         };
         for _ in 0..=i {
             tenv.unbind();
         }
         tenv.unbind();
-        thunks.push(arena.alloc(MValue::Thunk(comp)));
+        thunks.push(heap.alloc_imm_val(MValue::Thunk(comp)));
     }
 
     // Dispatch: ifz sel { return thunk0 } { _. ifz pred { return thunk1 } ... }.
     // The scrutinee is always the most recently bound variable (sel, then each
     // predecessor), i.e. de Bruijn index 0.
-    let mut dispatch: &MComputation = arena.alloc(MComputation::Return(thunks[group.len() - 1]));
+    let mut dispatch = heap.alloc_comp(MComputation::Return(thunks[group.len() - 1]));
     for thunk in thunks[..group.len() - 1].iter().rev() {
-        let zk = arena.alloc(MComputation::Return(thunk));
-        dispatch = arena.alloc(MComputation::Ifz {
-            num: arena.alloc(MValue::Var(0)),
+        let zk = heap.alloc_comp(MComputation::Return(*thunk));
+        let num = heap.alloc_imm_val(MValue::Var(0));
+        dispatch = heap.alloc_comp(MComputation::Ifz {
+            num,
             zk,
             sk: dispatch,
         });
     }
 
-    let lam = arena.alloc(MComputation::Lambda { body: dispatch });
-    let rec = arena.alloc(MComputation::Rec { body: lam });
+    let lam = heap.alloc_comp(MComputation::Lambda { body: dispatch });
+    let rec = heap.alloc_comp(MComputation::Rec { body: lam });
 
     tenv.bind(&bundle);
 
-    arena.alloc(MValue::Thunk(rec))
+    heap.alloc_imm_val(MValue::Thunk(rec))
 }
 
 /// Builds the curried lambda chain for the remaining `args`, binding each
 /// argument pattern and emitting the function `body` once all are consumed.
 /// Returns the body of the lambda for the first remaining argument.
-fn build_args<'a>(
-    arena: &'a Bump,
+fn build_args(
+    heap: &mut Heap,
     args: &[Arg],
     arg_types: &[Option<Type>],
     body: &Expr,
     tenv: &mut TEnv,
-) -> &'a MComputation<'a> {
+) -> CompId {
     match args {
-        [] => elaborate_expr(arena, body.clone(), tenv),
+        [] => elaborate_expr(heap, body.clone(), tenv),
         [arg, rest @ ..] => {
             let rest_types = &arg_types[1..];
             let lam_body = match arg {
                 Arg::Ident(var) => {
                     tenv.bind(var);
-                    let inner = curry(arena, rest, rest_types, body, tenv);
+                    let inner = curry(heap, rest, rest_types, body, tenv);
                     tenv.unbind();
                     inner
                 }
@@ -451,33 +449,33 @@ fn build_args<'a>(
                         .as_ref()
                         .expect("pair argument needs a declared product type");
                     tenv.bind("_");
-                    let body_comp = bind_pattern(arena, arg, ty, 0, tenv, &mut |tenv| {
-                        curry(arena, rest, rest_types, body, tenv)
+                    let body_comp = bind_pattern(heap, arg, ty, 0, tenv, &mut |heap, tenv| {
+                        curry(heap, rest, rest_types, body, tenv)
                     });
                     tenv.unbind();
                     body_comp
                 }
             };
-            arena.alloc(MComputation::Lambda { body: lam_body })
+            heap.alloc_comp(MComputation::Lambda { body: lam_body })
         }
     }
 }
 
 /// Wraps the lambda chain for `rest` so that, when more arguments remain, the
 /// inner chain is returned as a thunk (CBPV currying).
-fn curry<'a>(
-    arena: &'a Bump,
+fn curry(
+    heap: &mut Heap,
     rest: &[Arg],
     rest_types: &[Option<Type>],
     body: &Expr,
     tenv: &mut TEnv,
-) -> &'a MComputation<'a> {
+) -> CompId {
     if rest.is_empty() {
-        build_args(arena, rest, rest_types, body, tenv)
+        build_args(heap, rest, rest_types, body, tenv)
     } else {
-        let inner = build_args(arena, rest, rest_types, body, tenv);
-        let thunk = arena.alloc(MValue::Thunk(inner));
-        arena.alloc(MComputation::Return(thunk))
+        let inner = build_args(heap, rest, rest_types, body, tenv);
+        let thunk = heap.alloc_imm_val(MValue::Thunk(inner));
+        heap.alloc_comp(MComputation::Return(thunk))
     }
 }
 
@@ -499,22 +497,17 @@ fn collect_leaves(pattern: &Arg, ty: &Type, out: &mut Vec<(String, ValueType)>) 
 /// Rebuilds the value matching `pattern`, addressing the leaf logic variables
 /// by their de Bruijn index. With `m` leaves bound in left-to-right order, the
 /// `j`-th leaf sits at index `(m - 1) - j`.
-fn rebuild_pattern<'a>(
-    arena: &'a Bump,
-    pattern: &Arg,
-    m: usize,
-    next: &mut usize,
-) -> &'a MValue<'a> {
+fn rebuild_pattern(heap: &mut Heap, pattern: &Arg, m: usize, next: &mut usize) -> NodeId {
     match pattern {
         Arg::Ident(_) => {
             let idx = (m - 1) - *next;
             *next += 1;
-            arena.alloc(MValue::Var(idx))
+            heap.alloc_imm_val(MValue::Var(idx))
         }
         Arg::Pair(a, b) => {
-            let av = rebuild_pattern(arena, a, m, next);
-            let bv = rebuild_pattern(arena, b, m, next);
-            arena.alloc(MValue::Pair(av, bv))
+            let av = rebuild_pattern(heap, a, m, next);
+            let bv = rebuild_pattern(heap, b, m, next);
+            heap.alloc_imm_val(MValue::Pair(av, bv))
         }
     }
 }
@@ -522,14 +515,14 @@ fn rebuild_pattern<'a>(
 /// Destructures the pair value at de Bruijn index `pair_idx` against `pattern`.
 /// Introduces one fresh logic variable per leaf, unifies the reconstructed
 /// pattern with the pair, then runs the continuation `k` with the leaves bound.
-fn bind_pattern<'a>(
-    arena: &'a Bump,
+fn bind_pattern(
+    heap: &mut Heap,
     pattern: &Arg,
     ty: &Type,
     pair_idx: usize,
     tenv: &mut TEnv,
-    k: &mut dyn FnMut(&mut TEnv) -> &'a MComputation<'a>,
-) -> &'a MComputation<'a> {
+    k: &mut dyn FnMut(&mut Heap, &mut TEnv) -> CompId,
+) -> CompId {
     let mut leaves = Vec::new();
     collect_leaves(pattern, ty, &mut leaves);
     let m = leaves.len();
@@ -537,17 +530,17 @@ fn bind_pattern<'a>(
     for (name, _) in &leaves {
         tenv.bind(name);
     }
-    let body = k(tenv);
+    let body = k(heap, tenv);
     for _ in &leaves {
         tenv.unbind();
     }
 
     let mut next = 0;
-    let lhs = rebuild_pattern(arena, pattern, m, &mut next);
-    let rhs = arena.alloc(MValue::Var(pair_idx + m));
-    let mut comp: &MComputation = arena.alloc(MComputation::Equate { lhs, rhs, body });
+    let lhs = rebuild_pattern(heap, pattern, m, &mut next);
+    let rhs = heap.alloc_imm_val(MValue::Var(pair_idx + m));
+    let mut comp = heap.alloc_comp(MComputation::Equate { lhs, rhs, body });
     for (_, vty) in leaves.into_iter().rev() {
-        comp = arena.alloc(MComputation::Exists {
+        comp = heap.alloc_comp(MComputation::Exists {
             ptype: vty,
             body: comp,
         });
@@ -572,100 +565,99 @@ fn elaborate_vtype(ptype: Type) -> ValueType {
     }
 }
 
-fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
     match expr {
         Expr::If { cond, then, r#else } => {
-            let comp = elaborate_expr(arena, *cond, tenv);
+            let comp = elaborate_expr(heap, *cond, tenv);
             tenv.bind("_");
-            let var0 = arena.alloc(MValue::Var(0));
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
             // Inl = true → then branch (bind unit, discard it)
             tenv.bind("_");
-            let then_comp = elaborate_expr(arena, *then, tenv);
+            let then_comp = elaborate_expr(heap, *then, tenv);
             tenv.unbind();
             // Inr = false → else branch (bind unit, discard it)
             tenv.bind("_");
-            let else_comp = elaborate_expr(arena, *r#else, tenv);
+            let else_comp = elaborate_expr(heap, *r#else, tenv);
             tenv.unbind();
-            let case = arena.alloc(MComputation::Case {
+            let case = heap.alloc_comp(MComputation::Case {
                 sum: var0,
                 inlk: then_comp,
                 inrk: else_comp,
             });
             tenv.unbind();
-            arena.alloc(MComputation::Bind { comp, cont: case })
+            heap.alloc_comp(MComputation::Bind { comp, cont: case })
         }
         Expr::Let { var, val, body } => {
-            let comp = elaborate_expr(arena, *val, tenv);
+            let comp = elaborate_expr(heap, *val, tenv);
             tenv.bind(&var);
-            let cont = elaborate_expr(arena, *body, tenv);
+            let cont = elaborate_expr(heap, *body, tenv);
             tenv.unbind();
-            arena.alloc(MComputation::Bind { comp, cont })
+            heap.alloc_comp(MComputation::Bind { comp, cont })
         }
         Expr::Exists { var, r#type, body } => {
             tenv.bind(&var);
-            let body = elaborate_expr(arena, *body, tenv);
+            let body = elaborate_expr(heap, *body, tenv);
             tenv.unbind();
-            arena.alloc(MComputation::Exists {
+            heap.alloc_comp(MComputation::Exists {
                 ptype: elaborate_vtype(r#type),
                 body,
             })
         }
         Expr::Equate { lhs, rhs, body } => {
-            let lhs_comp = elaborate_expr(arena, *lhs, tenv);
+            let lhs_comp = elaborate_expr(heap, *lhs, tenv);
             tenv.bind("_");
-            let rhs_comp = elaborate_expr(arena, *rhs, tenv);
+            let rhs_comp = elaborate_expr(heap, *rhs, tenv);
             tenv.bind("_");
-            let body_comp = elaborate_expr(arena, *body, tenv);
+            let body_comp = elaborate_expr(heap, *body, tenv);
             tenv.unbind();
             tenv.unbind();
-            let var0 = arena.alloc(MValue::Var(0));
-            let var1 = arena.alloc(MValue::Var(1));
-            let equate = arena.alloc(MComputation::Equate {
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
+            let var1 = heap.alloc_imm_val(MValue::Var(1));
+            let equate = heap.alloc_comp(MComputation::Equate {
                 lhs: var0,
                 rhs: var1,
                 body: body_comp,
             });
-            let inner_bind = arena.alloc(MComputation::Bind {
+            let inner_bind = heap.alloc_comp(MComputation::Bind {
                 comp: rhs_comp,
                 cont: equate,
             });
-            arena.alloc(MComputation::Bind {
+            heap.alloc_comp(MComputation::Bind {
                 comp: lhs_comp,
                 cont: inner_bind,
             })
         }
-        Expr::Fail => arena.alloc(MComputation::Choice(&[])),
+        Expr::Fail => heap.alloc_comp(MComputation::Choice(Vec::new().into_boxed_slice())),
         Expr::Choice(exprs) => {
-            let choices: Vec<_> = exprs
+            let choices: Vec<CompId> = exprs
                 .into_iter()
-                .map(|e| elaborate_expr(arena, e, tenv))
+                .map(|e| elaborate_expr(heap, e, tenv))
                 .collect();
-            let slice = arena.alloc_slice_copy(&choices);
-            arena.alloc(MComputation::Choice(slice))
+            heap.alloc_comp(MComputation::Choice(choices.into_boxed_slice()))
         }
         Expr::Case { expr, cases } => {
             tenv.bind("_");
-            let var0 = arena.alloc(MValue::Var(0));
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
             let cont = match cases.r#type.unwrap() {
                 CasesType::Nat => {
                     let nat_case = cases.nat_case.unwrap();
-                    let zk = elaborate_expr(arena, *nat_case.zk.unwrap(), tenv);
+                    let zk = elaborate_expr(heap, *nat_case.zk.unwrap(), tenv);
                     let succ_case = nat_case.sk.unwrap();
                     tenv.bind(&succ_case.var);
-                    let sk = elaborate_expr(arena, *succ_case.body, tenv);
+                    let sk = elaborate_expr(heap, *succ_case.body, tenv);
                     tenv.unbind();
-                    arena.alloc(MComputation::Ifz { num: var0, zk, sk })
+                    heap.alloc_comp(MComputation::Ifz { num: var0, zk, sk })
                 }
                 CasesType::List => {
                     let list_case = cases.list_case.unwrap();
-                    let nilk = elaborate_expr(arena, *list_case.nilk.unwrap(), tenv);
+                    let nilk = elaborate_expr(heap, *list_case.nilk.unwrap(), tenv);
                     let cons_case = list_case.consk.unwrap();
                     tenv.bind(&cons_case.x);
                     tenv.bind(&cons_case.xs);
-                    let consk = elaborate_expr(arena, *cons_case.body, tenv);
+                    let consk = elaborate_expr(heap, *cons_case.body, tenv);
                     tenv.unbind();
                     tenv.unbind();
-                    arena.alloc(MComputation::Match {
+                    heap.alloc_comp(MComputation::Match {
                         list: var0,
                         nilk,
                         consk,
@@ -673,38 +665,38 @@ fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
                 }
             };
             tenv.unbind();
-            let comp = elaborate_expr(arena, *expr, tenv);
-            arena.alloc(MComputation::Bind { comp, cont })
+            let comp = elaborate_expr(heap, *expr, tenv);
+            heap.alloc_comp(MComputation::Bind { comp, cont })
         }
         Expr::Zero => {
-            let zero = arena.alloc(MValue::Nat(0));
-            arena.alloc(MComputation::Return(zero))
+            let zero = heap.alloc_imm_val(MValue::Nat(0));
+            heap.alloc_comp(MComputation::Return(zero))
         }
         Expr::Succ(body) => {
-            let comp = elaborate_expr(arena, *body, tenv);
-            let var0 = arena.alloc(MValue::Var(0));
-            let succ = arena.alloc(MValue::Succ(var0));
-            let ret = arena.alloc(MComputation::Return(succ));
-            arena.alloc(MComputation::Bind { comp, cont: ret })
+            let comp = elaborate_expr(heap, *body, tenv);
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
+            let succ = heap.alloc_imm_val(MValue::Succ(var0));
+            let ret = heap.alloc_comp(MComputation::Return(succ));
+            heap.alloc_comp(MComputation::Bind { comp, cont: ret })
         }
         Expr::Nil => {
-            let nil = arena.alloc(MValue::Nil);
-            arena.alloc(MComputation::Return(nil))
+            let nil = heap.alloc_imm_val(MValue::Nil);
+            heap.alloc_comp(MComputation::Return(nil))
         }
         Expr::Cons(x, xs) => {
-            let comp_head = elaborate_expr(arena, *x, tenv);
+            let comp_head = elaborate_expr(heap, *x, tenv);
             tenv.bind("_");
-            let comp_tail = elaborate_expr(arena, *xs, tenv);
+            let comp_tail = elaborate_expr(heap, *xs, tenv);
             tenv.unbind();
-            let var1 = arena.alloc(MValue::Var(1));
-            let var0 = arena.alloc(MValue::Var(0));
-            let cons = arena.alloc(MValue::Cons(var1, var0));
-            let ret = arena.alloc(MComputation::Return(cons));
-            let inner = arena.alloc(MComputation::Bind {
+            let var1 = heap.alloc_imm_val(MValue::Var(1));
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
+            let cons = heap.alloc_imm_val(MValue::Cons(var1, var0));
+            let ret = heap.alloc_comp(MComputation::Return(cons));
+            let inner = heap.alloc_comp(MComputation::Bind {
                 comp: comp_tail,
                 cont: ret,
             });
-            arena.alloc(MComputation::Bind {
+            heap.alloc_comp(MComputation::Bind {
                 comp: comp_head,
                 cont: inner,
             })
@@ -712,11 +704,11 @@ fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
                 tenv.bind(&var);
-                let body = elaborate_expr(arena, *body, tenv);
+                let body = elaborate_expr(heap, *body, tenv);
                 tenv.unbind();
-                let lam = arena.alloc(MComputation::Lambda { body });
-                let thunk = arena.alloc(MValue::Thunk(lam));
-                arena.alloc(MComputation::Return(thunk))
+                let lam = heap.alloc_comp(MComputation::Lambda { body });
+                let thunk = heap.alloc_imm_val(MValue::Thunk(lam));
+                heap.alloc_comp(MComputation::Return(thunk))
             }
             // Destructuring a pair needs the component types to annotate the
             // fresh logic variables (the machine has no product eliminator, so
@@ -730,91 +722,91 @@ fn elaborate_expr<'a>(arena: &'a Bump, expr: Expr, tenv: &mut TEnv) -> &'a MComp
             ),
         },
         Expr::App(op, arg) => {
-            let comp_op = elaborate_expr(arena, *op, tenv);
+            let comp_op = elaborate_expr(heap, *op, tenv);
             tenv.bind("_");
-            let comp_arg = elaborate_expr(arena, *arg, tenv);
+            let comp_arg = elaborate_expr(heap, *arg, tenv);
             tenv.unbind();
-            let var1 = arena.alloc(MValue::Var(1));
-            let var0 = arena.alloc(MValue::Var(0));
-            let force = arena.alloc(MComputation::Force(var1));
-            let app = arena.alloc(MComputation::App {
+            let var1 = heap.alloc_imm_val(MValue::Var(1));
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
+            let force = heap.alloc_comp(MComputation::Force(var1));
+            let app = heap.alloc_comp(MComputation::App {
                 op: force,
                 arg: var0,
             });
-            let inner = arena.alloc(MComputation::Bind {
+            let inner = heap.alloc_comp(MComputation::Bind {
                 comp: comp_arg,
                 cont: app,
             });
-            arena.alloc(MComputation::Bind {
+            heap.alloc_comp(MComputation::Bind {
                 comp: comp_op,
                 cont: inner,
             })
         }
-        Expr::BExpr(bexpr) => elaborate_bexpr(arena, bexpr, tenv),
-        Expr::List(elems) => elaborate_list(arena, &elems, tenv),
+        Expr::BExpr(bexpr) => elaborate_bexpr(heap, bexpr, tenv),
+        Expr::List(elems) => elaborate_list(heap, &elems, tenv),
         Expr::Ident(s) => {
             // A member of a mutually-recursive group is obtained by applying
             // the group's selector function to the member's index, which
             // returns the member's thunk.
             let comp = if let Some((bundle, sel)) = tenv.members.get(&s).cloned() {
-                let force = arena.alloc(MComputation::Force(
-                    arena.alloc(MValue::Var(tenv.find(&bundle))),
-                ));
-                let selector = arena.alloc(MValue::Nat(sel as u64));
-                arena.alloc(MComputation::App {
+                let bundle_var = heap.alloc_imm_val(MValue::Var(tenv.find(&bundle)));
+                let force = heap.alloc_comp(MComputation::Force(bundle_var));
+                let selector = heap.alloc_imm_val(MValue::Nat(sel as u64));
+                heap.alloc_comp(MComputation::App {
                     op: force,
                     arg: selector,
                 })
             } else {
-                let var = arena.alloc(MValue::Var(tenv.find(&s)));
-                arena.alloc(MComputation::Return(var))
+                let var = heap.alloc_imm_val(MValue::Var(tenv.find(&s)));
+                heap.alloc_comp(MComputation::Return(var))
             };
             if tenv.is_nullary(&s) {
-                let var0 = arena.alloc(MValue::Var(0));
-                let force = arena.alloc(MComputation::Force(var0));
-                arena.alloc(MComputation::Bind { comp, cont: force })
+                let var0 = heap.alloc_imm_val(MValue::Var(0));
+                let force = heap.alloc_comp(MComputation::Force(var0));
+                heap.alloc_comp(MComputation::Bind { comp, cont: force })
             } else {
                 comp
             }
         }
-        Expr::Nat(n) => elaborate_nat(arena, n),
+        Expr::Nat(n) => elaborate_nat(heap, n),
         Expr::Bool(b) => {
-            let unit = arena.alloc(MValue::Unit);
+            let unit = heap.alloc_imm_val(MValue::Unit);
             let val = if b {
-                arena.alloc(MValue::Inl(unit))
+                heap.alloc_imm_val(MValue::Inl(unit))
             } else {
-                arena.alloc(MValue::Inr(unit))
+                heap.alloc_imm_val(MValue::Inr(unit))
             };
-            arena.alloc(MComputation::Return(val))
+            heap.alloc_comp(MComputation::Return(val))
         }
-        Expr::Pair(lhs, rhs) => elaborate_pair(arena, *lhs, *rhs, tenv),
+        Expr::Pair(lhs, rhs) => elaborate_pair(heap, *lhs, *rhs, tenv),
     }
 }
 
 /// Returns a computation that produces the `Bool` value `b`
 /// (`Sum(Unit, Unit)`, `Inl` = true, `Inr` = false).
-fn return_bool<'a>(arena: &'a Bump, b: bool) -> &'a MComputation<'a> {
-    let unit = arena.alloc(MValue::Unit);
+fn return_bool(heap: &mut Heap, b: bool) -> CompId {
+    let unit = heap.alloc_imm_val(MValue::Unit);
     let val = if b {
-        arena.alloc(MValue::Inl(unit))
+        heap.alloc_imm_val(MValue::Inl(unit))
     } else {
-        arena.alloc(MValue::Inr(unit))
+        heap.alloc_imm_val(MValue::Inr(unit))
     };
-    arena.alloc(MComputation::Return(val))
+    heap.alloc_comp(MComputation::Return(val))
 }
 
 /// Builds the closed, curried recursive equality function on `Nat`,
 /// returned as a thunk. Forcing it yields `λa. return (thunk (λb. a == b))`,
 /// where `a == b` evaluates to the `Bool` representation of their equality.
-fn nat_eq_thunk<'a>(arena: &'a Bump) -> &'a MValue<'a> {
-    let var = |i| -> &'a MValue<'a> { arena.alloc(MValue::Var(i)) };
-    let ifz =
-        |num, zk, sk| -> &'a MComputation<'a> { arena.alloc(MComputation::Ifz { num, zk, sk }) };
-
+fn nat_eq_thunk(heap: &mut Heap) -> NodeId {
     // Innermost comparison; environment is [b = 0, a = 1, self = 2].
 
     // a = 0: equal iff b = 0.
-    let azero = ifz(var(0), return_bool(arena, true), return_bool(arena, false));
+    let azero = {
+        let b = heap.alloc_imm_val(MValue::Var(0));
+        let zk = return_bool(heap, true);
+        let sk = return_bool(heap, false);
+        heap.alloc_comp(MComputation::Ifz { num: b, zk, sk })
+    };
 
     // a = succ a' (env [a' = 0, b = 1, a = 2, self = 3]):
     //   b = 0   -> false
@@ -822,70 +814,100 @@ fn nat_eq_thunk<'a>(arena: &'a Bump) -> &'a MValue<'a> {
     let recurse = {
         // env [a' = 0, b = 1, a = 2, self = 3]; ifz on b binds b' giving
         // env [b' = 0, a' = 1, b = 2, a = 3, self = 4].
-        let apply_a = arena.alloc(MComputation::App {
-            op: arena.alloc(MComputation::Force(var(4))),
-            arg: var(1), // a'
+        let self_var = heap.alloc_imm_val(MValue::Var(4));
+        let force_self = heap.alloc_comp(MComputation::Force(self_var));
+        let a_pred = heap.alloc_imm_val(MValue::Var(1)); // a'
+        let apply_a = heap.alloc_comp(MComputation::App {
+            op: force_self,
+            arg: a_pred,
         });
         // First application returns a thunk bound at 0; b' shifts to 1.
-        let apply_b = arena.alloc(MComputation::App {
-            op: arena.alloc(MComputation::Force(var(0))),
-            arg: var(1), // b'
+        let thunk_var = heap.alloc_imm_val(MValue::Var(0));
+        let force_thunk = heap.alloc_comp(MComputation::Force(thunk_var));
+        let b_pred = heap.alloc_imm_val(MValue::Var(1)); // b'
+        let apply_b = heap.alloc_comp(MComputation::App {
+            op: force_thunk,
+            arg: b_pred,
         });
-        arena.alloc(MComputation::Bind {
+        heap.alloc_comp(MComputation::Bind {
             comp: apply_a,
             cont: apply_b,
         })
     };
-    let asucc = ifz(var(1), return_bool(arena, false), recurse);
+    let asucc = {
+        let b = heap.alloc_imm_val(MValue::Var(1));
+        let zk = return_bool(heap, false);
+        heap.alloc_comp(MComputation::Ifz {
+            num: b,
+            zk,
+            sk: recurse,
+        })
+    };
 
-    let compare = ifz(var(1), azero, asucc);
-    let lam_b = arena.alloc(MComputation::Lambda { body: compare });
-    let ret_lam_b = arena.alloc(MComputation::Return(arena.alloc(MValue::Thunk(lam_b))));
-    let lam_a = arena.alloc(MComputation::Lambda { body: ret_lam_b });
-    let rec = arena.alloc(MComputation::Rec { body: lam_a });
-    arena.alloc(MValue::Thunk(rec))
+    let compare = {
+        let a = heap.alloc_imm_val(MValue::Var(1));
+        heap.alloc_comp(MComputation::Ifz {
+            num: a,
+            zk: azero,
+            sk: asucc,
+        })
+    };
+    let lam_b = heap.alloc_comp(MComputation::Lambda { body: compare });
+    let thunk_b = heap.alloc_imm_val(MValue::Thunk(lam_b));
+    let ret_lam_b = heap.alloc_comp(MComputation::Return(thunk_b));
+    let lam_a = heap.alloc_comp(MComputation::Lambda { body: ret_lam_b });
+    let rec = heap.alloc_comp(MComputation::Rec { body: lam_a });
+    heap.alloc_imm_val(MValue::Thunk(rec))
 }
 
 /// Applies the curried `Nat` equality function (a thunk) to two argument
 /// computations, yielding a computation that returns their equality `Bool`.
-fn nat_eq_comp<'a>(arena: &'a Bump, lhs: Expr, rhs: Expr, tenv: &mut TEnv) -> &'a MComputation<'a> {
-    let lhs_comp = elaborate_expr(arena, lhs, tenv);
+fn nat_eq_comp(heap: &mut Heap, lhs: Expr, rhs: Expr, tenv: &mut TEnv) -> CompId {
+    let lhs_comp = elaborate_expr(heap, lhs, tenv);
     tenv.bind("_");
-    let rhs_comp = elaborate_expr(arena, rhs, tenv);
+    let rhs_comp = elaborate_expr(heap, rhs, tenv);
     tenv.unbind();
     // Environment at the application: [b = 0, a = 1].
-    let eq = nat_eq_thunk(arena);
-    let apply_a = arena.alloc(MComputation::App {
-        op: arena.alloc(MComputation::Force(eq)),
-        arg: arena.alloc(MValue::Var(1)),
+    let eq = nat_eq_thunk(heap);
+    let force_eq = heap.alloc_comp(MComputation::Force(eq));
+    let a = heap.alloc_imm_val(MValue::Var(1));
+    let apply_a = heap.alloc_comp(MComputation::App {
+        op: force_eq,
+        arg: a,
     });
     // The first application returns a thunk, bound at 0; b shifts to 1.
-    let apply_b = arena.alloc(MComputation::App {
-        op: arena.alloc(MComputation::Force(arena.alloc(MValue::Var(0)))),
-        arg: arena.alloc(MValue::Var(1)),
+    let thunk_var = heap.alloc_imm_val(MValue::Var(0));
+    let force_thunk = heap.alloc_comp(MComputation::Force(thunk_var));
+    let b = heap.alloc_imm_val(MValue::Var(1));
+    let apply_b = heap.alloc_comp(MComputation::App {
+        op: force_thunk,
+        arg: b,
     });
-    let recurse = arena.alloc(MComputation::Bind {
+    let recurse = heap.alloc_comp(MComputation::Bind {
         comp: apply_a,
         cont: apply_b,
     });
-    let inner = arena.alloc(MComputation::Bind {
+    let inner = heap.alloc_comp(MComputation::Bind {
         comp: rhs_comp,
         cont: recurse,
     });
-    arena.alloc(MComputation::Bind {
+    heap.alloc_comp(MComputation::Bind {
         comp: lhs_comp,
         cont: inner,
     })
 }
 
 /// Negates a computation producing a `Bool` by swapping `Inl`/`Inr`.
-fn negate_comp<'a>(arena: &'a Bump, comp: &'a MComputation<'a>) -> &'a MComputation<'a> {
-    let case = arena.alloc(MComputation::Case {
-        sum: arena.alloc(MValue::Var(0)),
-        inlk: return_bool(arena, false),
-        inrk: return_bool(arena, true),
+fn negate_comp(heap: &mut Heap, comp: CompId) -> CompId {
+    let var0 = heap.alloc_imm_val(MValue::Var(0));
+    let inlk = return_bool(heap, false);
+    let inrk = return_bool(heap, true);
+    let case = heap.alloc_comp(MComputation::Case {
+        sum: var0,
+        inlk,
+        inrk,
     });
-    arena.alloc(MComputation::Bind { comp, cont: case })
+    heap.alloc_comp(MComputation::Bind { comp, cont: case })
 }
 
 /// Constant-folds a `Bool`-valued expression when it is fully literal.
@@ -919,18 +941,21 @@ fn const_nat(expr: &Expr) -> Option<u64> {
     }
 }
 
-fn elaborate_bexpr<'a>(arena: &'a Bump, bexpr: BExpr, tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_bexpr(heap: &mut Heap, bexpr: BExpr, tenv: &mut TEnv) -> CompId {
     if let Some(b) = const_bool(&Expr::BExpr(bexpr.clone())) {
-        return return_bool(arena, b);
+        return return_bool(heap, b);
     }
     match bexpr {
-        BExpr::Eq(lhs, rhs) => nat_eq_comp(arena, *lhs, *rhs, tenv),
-        BExpr::NEq(lhs, rhs) => negate_comp(arena, nat_eq_comp(arena, *lhs, *rhs, tenv)),
-        BExpr::And(lhs, rhs) => elaborate_connective(arena, *lhs, *rhs, true, tenv),
-        BExpr::Or(lhs, rhs) => elaborate_connective(arena, *lhs, *rhs, false, tenv),
+        BExpr::Eq(lhs, rhs) => nat_eq_comp(heap, *lhs, *rhs, tenv),
+        BExpr::NEq(lhs, rhs) => {
+            let comp = nat_eq_comp(heap, *lhs, *rhs, tenv);
+            negate_comp(heap, comp)
+        }
+        BExpr::And(lhs, rhs) => elaborate_connective(heap, *lhs, *rhs, true, tenv),
+        BExpr::Or(lhs, rhs) => elaborate_connective(heap, *lhs, *rhs, false, tenv),
         BExpr::Not(e) => {
-            let comp = elaborate_expr(arena, *e, tenv);
-            negate_comp(arena, comp)
+            let comp = elaborate_expr(heap, *e, tenv);
+            negate_comp(heap, comp)
         }
     }
 }
@@ -940,55 +965,58 @@ fn elaborate_bexpr<'a>(arena: &'a Bump, bexpr: BExpr, tenv: &mut TEnv) -> &'a MC
 /// For `||`: true short-circuits to true, false evaluates the right operand.
 /// The left operand binds at index 0, then the `Case` payload binds at index 0,
 /// so the right operand is elaborated under two extra binders.
-fn elaborate_connective<'a>(
-    arena: &'a Bump,
+fn elaborate_connective(
+    heap: &mut Heap,
     lhs: Expr,
     rhs: Expr,
     and: bool,
     tenv: &mut TEnv,
-) -> &'a MComputation<'a> {
-    let lhs_comp = elaborate_expr(arena, lhs, tenv);
+) -> CompId {
+    let lhs_comp = elaborate_expr(heap, lhs, tenv);
     tenv.bind("_");
     tenv.bind("_");
-    let rhs_comp = elaborate_expr(arena, rhs, tenv);
+    let rhs_comp = elaborate_expr(heap, rhs, tenv);
     tenv.unbind();
     tenv.unbind();
     let (inlk, inrk) = if and {
-        (rhs_comp, return_bool(arena, false))
+        let f = return_bool(heap, false);
+        (rhs_comp, f)
     } else {
-        (return_bool(arena, true), rhs_comp)
+        let t = return_bool(heap, true);
+        (t, rhs_comp)
     };
-    let case = arena.alloc(MComputation::Case {
-        sum: arena.alloc(MValue::Var(0)),
+    let var0 = heap.alloc_imm_val(MValue::Var(0));
+    let case = heap.alloc_comp(MComputation::Case {
+        sum: var0,
         inlk,
         inrk,
     });
-    arena.alloc(MComputation::Bind {
+    heap.alloc_comp(MComputation::Bind {
         comp: lhs_comp,
         cont: case,
     })
 }
 
-fn elaborate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a MComputation<'a> {
+fn elaborate_list(heap: &mut Heap, elems: &[Expr], tenv: &mut TEnv) -> CompId {
     match elems {
         [] => {
-            let nil = arena.alloc(MValue::Nil);
-            arena.alloc(MComputation::Return(nil))
+            let nil = heap.alloc_imm_val(MValue::Nil);
+            heap.alloc_comp(MComputation::Return(nil))
         }
         [head, tail @ ..] => {
-            let chead = elaborate_expr(arena, head.clone(), tenv);
+            let chead = elaborate_expr(heap, head.clone(), tenv);
             tenv.bind("_");
-            let ctail = elaborate_list(arena, tail, tenv);
+            let ctail = elaborate_list(heap, tail, tenv);
             tenv.unbind();
-            let var1 = arena.alloc(MValue::Var(1));
-            let var0 = arena.alloc(MValue::Var(0));
-            let cons = arena.alloc(MValue::Cons(var1, var0));
-            let ret = arena.alloc(MComputation::Return(cons));
-            let inner = arena.alloc(MComputation::Bind {
+            let var1 = heap.alloc_imm_val(MValue::Var(1));
+            let var0 = heap.alloc_imm_val(MValue::Var(0));
+            let cons = heap.alloc_imm_val(MValue::Cons(var1, var0));
+            let ret = heap.alloc_comp(MComputation::Return(cons));
+            let inner = heap.alloc_comp(MComputation::Bind {
                 comp: ctail,
                 cont: ret,
             });
-            arena.alloc(MComputation::Bind {
+            heap.alloc_comp(MComputation::Bind {
                 comp: chead,
                 cont: inner,
             })
@@ -996,30 +1024,25 @@ fn elaborate_list<'a>(arena: &'a Bump, elems: &[Expr], tenv: &mut TEnv) -> &'a M
     }
 }
 
-fn elaborate_nat<'a>(arena: &'a Bump, n: usize) -> &'a MComputation<'a> {
-    let val = arena.alloc(MValue::Nat(n as u64));
-    arena.alloc(MComputation::Return(val))
+fn elaborate_nat(heap: &mut Heap, n: usize) -> CompId {
+    let val = heap.alloc_imm_val(MValue::Nat(n as u64));
+    heap.alloc_comp(MComputation::Return(val))
 }
 
-fn elaborate_pair<'a>(
-    arena: &'a Bump,
-    fst: Expr,
-    snd: Expr,
-    tenv: &mut TEnv,
-) -> &'a MComputation<'a> {
-    let fst_comp = elaborate_expr(arena, fst, tenv);
+fn elaborate_pair(heap: &mut Heap, fst: Expr, snd: Expr, tenv: &mut TEnv) -> CompId {
+    let fst_comp = elaborate_expr(heap, fst, tenv);
     tenv.bind("_");
-    let snd_comp = elaborate_expr(arena, snd, tenv);
+    let snd_comp = elaborate_expr(heap, snd, tenv);
     tenv.unbind();
-    let var1 = arena.alloc(MValue::Var(1));
-    let var0 = arena.alloc(MValue::Var(0));
-    let pair = arena.alloc(MValue::Pair(var1, var0));
-    let ret = arena.alloc(MComputation::Return(pair));
-    let inner = arena.alloc(MComputation::Bind {
+    let var1 = heap.alloc_imm_val(MValue::Var(1));
+    let var0 = heap.alloc_imm_val(MValue::Var(0));
+    let pair = heap.alloc_imm_val(MValue::Pair(var1, var0));
+    let ret = heap.alloc_comp(MComputation::Return(pair));
+    let inner = heap.alloc_comp(MComputation::Bind {
         comp: snd_comp,
         cont: ret,
     });
-    arena.alloc(MComputation::Bind {
+    heap.alloc_comp(MComputation::Bind {
         comp: fst_comp,
         cont: inner,
     })
