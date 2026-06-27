@@ -70,5 +70,5 @@ a term language where the next step is always determined by the head constructor
 hidden control flow — so the machine state ([[step]]) can be made fully explicit and cloned.
 A direct recursive evaluator could not be snapshotted this way.
 
-Related: [[mterms]] (the term types), [[step]] (how each form steps), [[elaborate]] (how
+Related: [[mterms]] (the term types), [[step]] (how each form steps), [[translation]] (how
 surface syntax becomes CBPV), [[de-bruijn]] (variable representation).

@@ -94,3 +94,15 @@ Rewrote [[AGENTS]]: the wiki no longer mirrors source module-by-module; dropped 
 `commit:` pins and the `file:line` anchor discipline in favour of a **no line citations** rule
 (names, not line numbers — they drift the instant code moves, as adding the rustdoc just proved).
 [[deep-review]] stays pinned as a historical snapshot, exempt from that rule.
+
+## [2026-06-27] document | new page [[translation]] (source → CBPV)
+
+Wrote [[translation]], the rule-by-rule elaboration of the surface AST into CBPV (`⟦e⟧ = …`,
+Levy style), grounded in `elaborate_expr` / `elaborate_func` / `elaborate_group`. Covers the
+value/data/application/control/logic/boolean rules, top-level functions and the mutual-group
+selector bundle, the type translation `(A→B)ᵛ = U(Aᵛ → F Bᵛ)`, and two framing points: that the
+translation is the **call-by-value** skeleton with `to := need` (not call-by-name made lazy —
+forced by narrowing needing first-order [[logic-variables|values]] to unify), and that the
+`to`-vs-`need` choice is precisely the [[powerdomains-and-binding]] trade-off. Linked inbound from
+[[cbpv]] (replacing the stale `[[elaborate]]` component-page link in its Related line, "how surface
+syntax becomes CBPV"). Pure-concept page, no pin.
