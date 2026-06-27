@@ -33,7 +33,6 @@ use super::{CClosure, Env, NodeId, SuspId, VClosure};
 pub(crate) enum StkFrame {
     Value(NodeId),
     To(CompId),
-    Set(SuspId, CompId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -116,6 +115,11 @@ pub enum StepOutcome {
         susp: SuspAt,
         resume: Machine,
     },
+    /// Continue with an obligation registered (Need creates a concurrent obligation).
+    ContinueWithObligation {
+        machine: Machine,
+        obligation: SuspId,
+    },
     /// The machine failed (e.g. unification failure, empty Choice).
     Failed,
     /// The heap is over its watermark and wants collection.
@@ -126,22 +130,6 @@ pub enum StepOutcome {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-/// Inline suspension evaluation (Phase 1–2 behaviour): push a Set frame
-/// and switch to the suspension's closure.
-fn reschedule(
-    heap: &mut Heap,
-    stack: Stack,
-    comp_id: CompId,
-    env: Env,
-    a: SuspAt,
-) -> Machine {
-    let new_stack = stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-    Machine {
-        cclos: a.cclos,
-        stack: new_stack,
-        done: false,
-    }
-}
 
 
 // ── run_to_event ───────────────────────────────────────────────────
@@ -205,14 +193,6 @@ impl Machine {
                                 done: false,
                             })
                         }
-                        StkFrame::Set(ident, cont) => {
-                            senv.set(&ident, val, env);
-                            StepOutcome::Continue(Machine {
-                                cclos: (cont, sc.env),
-                                stack: tail,
-                                done: false,
-                            })
-                        }
                     },
                 }
             }
@@ -267,11 +247,14 @@ impl Machine {
                     None => {
                         let ident = senv.fresh((inner, env));
                         let new_env = env.extend_susp(heap, ident);
-                        StepOutcome::Continue(Machine {
-                            cclos: (cont, new_env),
-                            stack,
-                            done: false,
-                        })
+                        StepOutcome::ContinueWithObligation {
+                            machine: Machine {
+                                cclos: (cont, new_env),
+                                stack,
+                                done: false,
+                            },
+                            obligation: ident,
+                        }
                     }
                 }
             }
@@ -362,7 +345,7 @@ impl Machine {
                         done: false,
                     }),
                     Err(UnifyError::Susp(a)) => {
-                        StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a))
+                        StepOutcome::BlockedOn { susp: a, resume: Machine { cclos: (comp_id, env), stack, done: false } }
                     }
                     Err(_) => StepOutcome::Failed,
                 }
@@ -383,7 +366,7 @@ impl Machine {
                     },
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
-                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
+                    Err(a) => StepOutcome::BlockedOn { susp: a, resume: Machine { cclos: (comp_id, env), stack, done: false } },
                 }
             }
 
@@ -394,7 +377,7 @@ impl Machine {
                 let sk = *sk;
                 let vclos = VClosure::mk_clos(num, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
+                    Err(a) => StepOutcome::BlockedOn { susp: a, resume: Machine { cclos: (comp_id, env), stack, done: false } },
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Zero | MValue::Nat(0) => StepOutcome::Continue(Machine {
                             cclos: (zk, env),
@@ -478,7 +461,7 @@ impl Machine {
                 let consk = *consk;
                 let vclos = VClosure::mk_clos(list, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
+                    Err(a) => StepOutcome::BlockedOn { susp: a, resume: Machine { cclos: (comp_id, env), stack, done: false } },
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Nil => StepOutcome::Continue(Machine {
                             cclos: (nilk, env),
@@ -553,7 +536,7 @@ impl Machine {
                 let inrk = *inrk;
                 let vclos = VClosure::mk_clos(sum, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
+                    Err(a) => StepOutcome::BlockedOn { susp: a, resume: Machine { cclos: (comp_id, env), stack, done: false } },
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Inl(v) => {
                             let new_env = env.extend_val(heap, v, cenv);

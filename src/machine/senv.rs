@@ -80,6 +80,25 @@ impl SuspEnv {
         Rc::make_mut(&mut self.entries)[ident.0] = SuspState::Done(vclos);
     }
 
+    /// Get a reference to the state of a suspension entry.
+    pub(crate) fn get(&self, ident: SuspId) -> SuspState {
+        self.entries[ident.0]
+    }
+
+    /// Get the CClosure for a suspension that is not yet done.
+    pub fn get_suspension(&self, ident: SuspId) -> CClosure {
+        match &self.entries[ident.0] {
+            SuspState::Suspended(cclos) | SuspState::Running(cclos) => *cclos,
+            SuspState::Done(_) => panic!("get_suspension on done entry"),
+        }
+    }
+
+    /// Reset a Running suspension back to Suspended (used when forking branches).
+    pub fn reset_to_suspended(&mut self, ident: SuspId, cclos: CClosure) {
+        let entries = Rc::make_mut(&mut self.entries);
+        entries[ident.0] = SuspState::Suspended(cclos);
+    }
+
     /// Mark a suspension as running (being evaluated by a thread).
     pub fn mark_running(&mut self, ident: SuspId) {
         let entries = Rc::make_mut(&mut self.entries);

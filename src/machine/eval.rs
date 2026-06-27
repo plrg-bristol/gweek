@@ -186,7 +186,11 @@ enum BranchStep {
 fn step_branch(cfg: &Config, heap: &mut Heap, mut branch: Branch, deadline: Instant) -> BranchStep {
     let (mid, thread) = match branch.pop_ready() {
         Some(pair) => pair,
-        None => return if branch.ready_to_emit() { BranchStep::Emitted(branch) } else { BranchStep::Dead },
+        None => {
+            if branch.ready_to_emit() { return BranchStep::Emitted(branch); }
+            if branch.start_pending_obligation(heap) { return BranchStep::Continue(branch); }
+            return BranchStep::Dead;
+        }
     };
     let role = thread.role;
     let machine = thread.machine;
@@ -196,21 +200,49 @@ fn step_branch(cfg: &Config, heap: &mut Heap, mut branch: Branch, deadline: Inst
             branch.thread_returned(mid, role, vclos, heap);
             if branch.ready_to_emit() { BranchStep::Emitted(branch) }
             else if branch.has_runnable() { BranchStep::Continue(branch) }
+            else if branch.start_pending_obligation(heap) { BranchStep::Continue(branch) }
             else { BranchStep::Dead }
         }
         StepOutcome::Fork(alternatives) => {
+            let parent_obligations = branch.obligations.clone();
             let new_branches: Vec<Branch> = alternatives.into_iter()
-                .map(|alt| Branch::new(heap, alt.lenv, alt.senv, alt.machine))
+                .map(|alt| {
+                    let mut b = Branch::new(heap, alt.lenv, alt.senv, alt.machine);
+                    for &sid in &parent_obligations {
+                        if let super::senv::SuspState::Running(cclos) = b.senv.get(sid) {
+                            b.senv.reset_to_suspended(sid, cclos);
+                        }
+                    }
+                    b.obligations = parent_obligations.clone();
+                    b
+                })
                 .collect();
             BranchStep::Forked(new_branches)
         }
         StepOutcome::BlockedOn { susp, resume } => {
+            let need_eval = matches!(branch.senv.get(susp.ident), super::senv::SuspState::Suspended(_));
             branch.block_on(mid, role, resume, susp);
-            let owner_id = branch.insert_thread(Thread::new(
-                Machine { cclos: susp.cclos, stack: Stack::empty(heap), done: false },
-                MachineRole::SuspEval { target: susp.ident },
-            ));
+            if need_eval {
+                let owner_id = branch.insert_thread(Thread::new(
+                    Machine { cclos: susp.cclos, stack: Stack::empty(heap), done: false },
+                    MachineRole::SuspEval { target: susp.ident },
+                ));
+                branch.ready.push_back(owner_id);
+            }
+            BranchStep::Continue(branch)
+        }
+        StepOutcome::ContinueWithObligation { machine, obligation } => {
+            branch.obligations.push(obligation);
+            let susp_cclos = branch.senv.get_suspension(obligation);
+            let susp_machine = Machine {
+                cclos: susp_cclos,
+                stack: Stack::empty(heap),
+                done: false,
+            };
+            let owner_id = branch.insert_thread(Thread::new(susp_machine, MachineRole::SuspEval { target: obligation }));
             branch.ready.push_back(owner_id);
+            branch.senv.mark_running(obligation);
+            branch.put_runnable(mid, role, machine);
             BranchStep::Continue(branch)
         }
         StepOutcome::Failed => BranchStep::Dead,

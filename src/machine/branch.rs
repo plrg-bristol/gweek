@@ -14,7 +14,7 @@ use std::fmt;
 
 use super::heap::Heap;
 use super::lvar::LogicEnv;
-use super::senv::{SuspAt, SuspEnv};
+use super::senv::{SuspAt, SuspEnv, SuspState};
 use super::step::{Machine, Stack};
 use super::vclosure::VClosure;
 
@@ -116,12 +116,8 @@ impl Branch {
     }
 
     pub fn insert_thread(&mut self, thread: Thread) -> MachineId {
-        for (i, slot) in self.machines.iter_mut().enumerate() {
-            if slot.is_none() {
-                *slot = Some(thread);
-                return MachineId(i);
-            }
-        }
+        // Never reuse slots; always append to avoid mid collisions
+        // with threads that have been popped but will be re-queued.
         let id = MachineId(self.machines.len());
         self.machines.push(Some(thread));
         id
@@ -179,47 +175,50 @@ impl Branch {
 
     pub fn thread_returned(
         &mut self,
-        mid: MachineId,
+        _mid: MachineId,
         role: MachineRole,
         vclos: VClosure,
-        heap: &mut Heap,
+        _heap: &mut Heap,
     ) {
         match role {
             MachineRole::Main => {
                 self.candidate_answer = Some(vclos);
-                if let Some(a) = self.senv.next() {
-                    let susp_machine = Machine {
-                        cclos: a.cclos,
-                        stack: Stack::empty(heap),
-                        done: false,
-                    };
-                    self.machines[mid.0] = Some(Thread::new(
-                        susp_machine,
-                        MachineRole::SuspEval { target: a.ident },
-                    ));
-                    self.ready.push_back(mid);
-                }
             }
             MachineRole::SuspEval { target } => {
                 self.set_done(target, vclos);
-                if let Some(a) = self.senv.next() {
-                    let susp_machine = Machine {
-                        cclos: a.cclos,
-                        stack: Stack::empty(heap),
-                        done: false,
-                    };
-                    self.machines[mid.0] = Some(Thread::new(
-                        susp_machine,
-                        MachineRole::SuspEval { target: a.ident },
-                    ));
-                    self.ready.push_back(mid);
-                }
             }
         }
     }
 
     pub fn ready_to_emit(&self) -> bool {
-        self.candidate_answer.is_some() && self.senv.all_done()
+        self.candidate_answer.is_some() && self.obligations_done()
+    }
+
+    fn obligations_done(&self) -> bool {
+        self.obligations.iter().all(|sid| matches!(self.senv.get(*sid), SuspState::Done(_)))
+    }
+
+    /// Start a thread for a pending obligation, if any remain.
+    /// Returns true if a thread was started and pushed to the ready queue.
+    pub fn start_pending_obligation(&mut self, heap: &mut Heap) -> bool {
+        for &sid in &self.obligations {
+            match self.senv.get(sid) {
+                SuspState::Suspended(cclos) => {
+                    self.senv.mark_running(sid);
+                    let machine = Machine {
+                        cclos,
+                        stack: Stack::empty(heap),
+                        done: false,
+                    };
+                    let thread = Thread::new(machine, MachineRole::SuspEval { target: sid });
+                    let mid = self.insert_thread(thread);
+                    self.ready.push_back(mid);
+                    return true;
+                }
+                SuspState::Running(_) | SuspState::Done(_) => {}
+            }
+        }
+        false
     }
 
     pub fn has_runnable(&self) -> bool {
