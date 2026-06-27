@@ -17,6 +17,14 @@ tags: [concept]
 > programs. The sole strict binding is `let strict x = e`, which elaborates to [[step|`Bind`]]
 > (`step.rs:228-258`) and runs `e` before binding. See also [[nondeterminism]] on why early
 > pruning is decisive.
+>
+> **Conjunctive semantics.**  Since the `need` refactor (2026), a `Need`-created suspension is also
+> registered as a *residual obligation* of the current search branch.  The suspension may start
+> evaluating immediately (concurrently with the main computation), and the branch cannot emit an
+> answer until every registered obligation has succeeded.  If any required obligation fails, the
+> whole branch is killed.  This makes `need` a fair delayed conjunction rather than a sequential
+> drain mechanism; the old demand-driven forcing behaviour is preserved for suspensions that are
+> not obligations (those created by `Force`, `Ifz`, `Match`, `Case`, and `Equate`).
 
 Gweek suspends non-trivial computations in `let` bindings. The suspension is
 forced when the bound variable is used in a position that inspects its value

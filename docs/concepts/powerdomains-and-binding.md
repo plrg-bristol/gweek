@@ -15,6 +15,12 @@ tags: [concept]
 > Both hold in the **lower (Hoare) powerdomain**. The catch is that you cannot also be
 > *termination-sensitive* — distinguish a divergent search `Ω` from `fail` — while keeping
 > both, under any sequential evaluator. This note records why, and what gweek does about it.
+>
+> **Note (2026).**  The `need` refactor changes `need` from a lazy-binding-plus-sequential-drain
+> construct into a fair delayed conjunction.  Residual obligations are scheduled concurrently
+> with the main computation, so `fail need x. M` now fails promptly even when `M` diverges,
+> and the left-zero law `fail need x. M = fail` holds observationally without needing to
+> distinguish divergence.  See [[suspensions-and-forcing]] for details.
 
 ## The collapse theorem
 
