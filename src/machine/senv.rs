@@ -1,10 +1,11 @@
 //! # The suspension environment
 //!
-//! [`SuspEnv`] holds *suspensions* — `let`-bound computations that have not yet run. An entry is
-//! `Err(cclos)` while it remains a frozen computation and becomes `Ok(vclos)` once forced; the
-//! entries sit behind an `Rc`, so backtracking clones them copy-on-write. The signal that matters
-//! is [`lookup`](SuspEnv::lookup): it returns the value, or an [`SuspAt`] meaning *not yet — force
-//! it and come back*.
+//! [`SuspEnv`] holds *suspensions* — `let`-bound computations that have not yet run.
+//! Each entry is one of three states: [`SuspState::Suspended`] (a frozen computation),
+//! [`SuspState::Running`] (currently being forced by a thread), or [`SuspState::Done`]
+//! (fully evaluated and memoized). Entries sit behind an `Rc`, so backtracking clones
+//! them copy-on-write. The signal that matters is [`lookup`](SuspEnv::lookup): it returns
+//! the value, or an [`SuspAt`] meaning *not yet — force it and come back*.
 
 use std::rc::Rc;
 
@@ -12,9 +13,20 @@ use super::env::Env;
 use super::heap::{CompId, Heap};
 use super::{CClosure, NodeId, SuspId, VClosure};
 
+/// The three states a suspension can be in.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SuspState {
+    /// Not yet evaluated — the frozen computation.
+    Suspended(CClosure),
+    /// Currently being evaluated by some thread.
+    Running(CClosure),
+    /// Evaluation complete, value memoized.
+    Done(VClosure),
+}
+
 #[derive(Clone)]
 pub struct SuspEnv {
-    entries: Rc<Vec<Result<VClosure, CClosure>>>,
+    entries: Rc<Vec<SuspState>>,
     next_pending: usize,
 }
 
@@ -45,14 +57,14 @@ impl SuspEnv {
     pub fn fresh(&mut self, cclos: CClosure) -> SuspId {
         let entries = Rc::make_mut(&mut self.entries);
         let next = entries.len();
-        entries.push(Err(cclos));
+        entries.push(SuspState::Suspended(cclos));
         SuspId(next)
     }
 
     pub fn lookup(&self, ident: &SuspId) -> Result<VClosure, SuspAt> {
         match &self.entries[ident.0] {
-            Ok(vclos) => Ok(*vclos),
-            Err(cclos) => Err(SuspAt {
+            SuspState::Done(vclos) => Ok(*vclos),
+            SuspState::Suspended(cclos) | SuspState::Running(cclos) => Err(SuspAt {
                 ident: *ident,
                 cclos: *cclos,
             }),
@@ -60,19 +72,27 @@ impl SuspEnv {
     }
 
     pub fn set(&mut self, ident: &SuspId, val: NodeId, env: Env) {
-        Rc::make_mut(&mut self.entries)[ident.0] = Ok(VClosure::mk_clos(val, env));
+        Rc::make_mut(&mut self.entries)[ident.0] = SuspState::Done(VClosure::mk_clos(val, env));
     }
 
     /// Set a suspension entry directly from a VClosure (for branch-level use).
     pub fn set_done(&mut self, ident: SuspId, vclos: VClosure) {
-        Rc::make_mut(&mut self.entries)[ident.0] = Ok(vclos);
+        Rc::make_mut(&mut self.entries)[ident.0] = SuspState::Done(vclos);
+    }
+
+    /// Mark a suspension as running (being evaluated by a thread).
+    pub fn mark_running(&mut self, ident: SuspId) {
+        let entries = Rc::make_mut(&mut self.entries);
+        if let SuspState::Suspended(cclos) = entries[ident.0] {
+            entries[ident.0] = SuspState::Running(cclos);
+        }
     }
 
     pub fn next(&mut self) -> Option<SuspAt> {
         while self.next_pending < self.entries.len() {
             match &self.entries[self.next_pending] {
-                Ok(_) => self.next_pending += 1,
-                Err(cclos) => {
+                SuspState::Done(_) | SuspState::Running(_) => self.next_pending += 1,
+                SuspState::Suspended(cclos) => {
                     return Some(SuspAt {
                         ident: SuspId(self.next_pending),
                         cclos: *cclos,
@@ -83,9 +103,9 @@ impl SuspEnv {
         None
     }
 
-    /// Returns true when all entries are done (no pending suspensions).
+    /// Returns true when all entries are done (no pending or running suspensions).
     pub fn all_done(&self) -> bool {
-        self.entries.iter().all(|e| matches!(e, Ok(_)))
+        self.entries.iter().all(|e| matches!(e, SuspState::Done(_)))
     }
 
     /// Identity of the shared store, so a collection can rebuild each distinct
@@ -100,8 +120,10 @@ impl SuspEnv {
         let mut entries = (*self.entries).clone();
         for entry in entries.iter_mut() {
             match entry {
-                Ok(vc) => *vc = (*vc).forward(heap),
-                Err((_, env)) => *env = heap.forward_env(*env),
+                SuspState::Done(vc) => *vc = (*vc).forward(heap),
+                SuspState::Suspended((_, env)) | SuspState::Running((_, env)) => {
+                    *env = heap.forward_env(*env)
+                }
             }
         }
         SuspEnv {
@@ -110,4 +132,3 @@ impl SuspEnv {
         }
     }
 }
-

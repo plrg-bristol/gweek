@@ -158,6 +158,7 @@ impl Branch {
         };
         self.machines[mid.0] = Some(thread);
         self.waiters.entry(sid).or_default().push(mid);
+        self.senv.mark_running(sid);
     }
 
     pub fn set_done(&mut self, sid: super::SuspId, vclos: VClosure) {
