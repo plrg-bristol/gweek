@@ -410,5 +410,27 @@ mod tests {
         assert_eq!(solns.len(), 1);
         assert!(solns[0].starts_with('_'), "expected a free-variable placeholder, got {:?}", solns[0]);
     }
+    #[test]
+    fn need_fail_absorbs_body() {
+        // fail need x. 0  ≃  fail
+        let solns = solutions("let x = (0 =:= 1. 0) in 1.", Strategy::Bfs);
+        assert_eq!(solns.len(), 0);
+    }
+
+    #[test]
+    fn need_associativity() {
+        // M need x. (N need y. P)  ≃  (M need x. N) need y. P
+        let left = solutions("let x = 1 in let y = 2 in 3.", Strategy::Bfs);
+        let right = solutions("let y = (let x = 1 in 2) in 3.", Strategy::Bfs);
+        assert_eq!(left.len(), right.len());
+    }
+
+    #[test]
+    fn need_obligation_runs_before_main_diverges() {
+        // fail need x. loop  should fail, not diverge.
+        let src = "loop n = loop n.\ngo = loop Z.\nlet x = (0 =:= 1. 0) in go.";
+        let solns = solutions(src, Strategy::Fair);
+        assert!(solns.is_empty());
+    }
 }
 
