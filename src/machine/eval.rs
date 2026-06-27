@@ -204,18 +204,8 @@ fn step_branch(cfg: &Config, heap: &mut Heap, mut branch: Branch, deadline: Inst
             else { BranchStep::Dead }
         }
         StepOutcome::Fork(alternatives) => {
-            let parent_obligations = branch.obligations.clone();
             let new_branches: Vec<Branch> = alternatives.into_iter()
-                .map(|alt| {
-                    let mut b = Branch::new(heap, alt.lenv, alt.senv, alt.machine);
-                    for &sid in &parent_obligations {
-                        if let super::senv::SuspState::Running(cclos) = b.senv.get(sid) {
-                            b.senv.reset_to_suspended(sid, cclos);
-                        }
-                    }
-                    b.obligations = parent_obligations.clone();
-                    b
-                })
+                .map(|alt| branch.clone_with_thread(mid, role, alt.machine, alt.lenv, alt.senv))
                 .collect();
             BranchStep::Forked(new_branches)
         }

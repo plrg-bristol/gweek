@@ -236,5 +236,18 @@ impl Branch {
         }
         None
     }
+    /// Clone the branch, replacing the thread at `mid` with a new one.
+    /// The original thread should have been taken out (its slot is `None`).
+    /// The new thread gets the given `machine` and `role`, and is added to ready.
+    /// The branch's `lenv` and `senv` are replaced with the given ones.
+    pub fn clone_with_thread(&self, mid: MachineId, role: MachineRole, machine: Machine, lenv: LogicEnv, senv: SuspEnv) -> Branch {
+        let mut cloned = self.clone();
+        let new_thread = Thread::new(machine, role);
+        cloned.machines[mid.0] = Some(new_thread);
+        cloned.lenv = lenv;
+        cloned.senv = senv;
+        cloned.ready.push_back(mid);
+        cloned
+    }
 }
 
