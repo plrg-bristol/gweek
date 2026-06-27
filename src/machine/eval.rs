@@ -422,5 +422,19 @@ mod tests {
         let solns = solutions(src, Strategy::Fair);
         assert!(solns.is_empty());
     }
+    #[test]
+    fn need_choice_residual() {
+        // (fail <> 1) need x. 0  →  one solution: 0
+        let solns = solutions("let x = ((0 =:= 1. 0) <> 1) in 0.", Strategy::Bfs);
+        assert_eq!(solns.len(), 1);
+        assert_eq!(solns[0], "0");
+    }
+
+    #[test]
+    fn need_multi_residual() {
+        // (1 <> 2) need x. 0  →  two solutions: 0, 0
+        let solns = solutions("let x = (1 <> 2) in 0.", Strategy::Bfs);
+        assert_eq!(solns.len(), 2);
+    }
 }
 
