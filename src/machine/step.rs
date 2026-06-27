@@ -10,7 +10,7 @@
 //! the eliminators (which *case-split* on an unbound logic variable), and `Rec` — and reads the
 //! deadline through a `Clock` only once every 1024 ticks, lest a divergent loop never look at it.
 
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -143,24 +143,6 @@ fn reschedule(
     }
 }
 
-/// Helper to build a Fork with one alternative reusing the current stores
-/// and others carrying clones.
-fn fork_alternatives(
-    machines: Vec<(Machine, LogicEnv)>,
-    current_lenv: &LogicEnv,
-    current_senv: &SuspEnv,
-) -> StepOutcome {
-    let mut alternatives: Vec<BranchAlternative> = machines
-        .into_iter()
-        .map(|(m, lenv)| BranchAlternative {
-            machine: m,
-            lenv,
-            senv: current_senv.clone(),
-        })
-        .collect();
-    // Last alternative reuses the original stores (already cloned).
-    StepOutcome::Fork(alternatives)
-}
 
 // ── run_to_event ───────────────────────────────────────────────────
 
