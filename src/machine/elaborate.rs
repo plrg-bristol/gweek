@@ -281,7 +281,7 @@ fn walk_expr(expr: &Expr, names: &HashSet<String>, refs: &mut HashSet<String>) {
             walk_expr(val, names, refs);
             walk_expr(body, names, refs);
         }
-        Expr::LetNeed { val, body, .. } => {
+        Expr::LetStrict { val, body, .. } => {
             walk_expr(val, names, refs);
             walk_expr(body, names, refs);
         }
@@ -569,12 +569,14 @@ fn elaborate_vtype(ptype: Type) -> ValueType {
     }
 }
 
-/// Compiler-introduced sequencing of a sub-expression's value into the term
-/// that surrounds it (the tail of a cons, a function argument, an equation
-/// operand, a case scrutinee, ...). gweek is lazy by default, so these implicit
-/// binds are by-need: `comp` is suspended and forced only on demand, which is
-/// what lets narrowing prune an otherwise unbounded search. Only the surface
-/// `let x = e` ([`Expr::Let`]) sequences strictly, via [`MComputation::Bind`].
+/// Sequences a sub-expression's value into the term that surrounds it. gweek is
+/// lazy by default, so this is by-need: `comp` is suspended and forced only on
+/// demand, which is what lets narrowing prune an otherwise unbounded search.
+/// Every binding goes through here — both the compiler-introduced ones (the tail
+/// of a cons, a function argument, an equation operand, a case scrutinee, ...)
+/// and the surface `let x = e` ([`Expr::Let`]). The sole strict construct is
+/// `let strict x = e` ([`Expr::LetStrict`]), which runs `comp` to a value first
+/// via [`MComputation::Bind`].
 fn seq(heap: &mut Heap, comp: CompId, cont: CompId) -> CompId {
     heap.alloc_comp(MComputation::Need { comp, cont })
 }
@@ -606,14 +608,14 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
             tenv.bind(&var);
             let cont = elaborate_expr(heap, *body, tenv);
             tenv.unbind();
-            heap.alloc_comp(MComputation::Bind { comp, cont })
+            seq(heap, comp, cont)
         }
-        Expr::LetNeed { var, val, body } => {
+        Expr::LetStrict { var, val, body } => {
             let comp = elaborate_expr(heap, *val, tenv);
             tenv.bind(&var);
             let cont = elaborate_expr(heap, *body, tenv);
             tenv.unbind();
-            heap.alloc_comp(MComputation::Need { comp, cont })
+            heap.alloc_comp(MComputation::Bind { comp, cont })
         }
         Expr::Exists { var, r#type, body } => {
             tenv.bind(&var);

@@ -50,7 +50,7 @@ pub enum Expr {
         val: Box<Expr>,
         body: Box<Expr>,
     },
-    LetNeed {
+    LetStrict {
         var: String,
         val: Box<Expr>,
         body: Box<Expr>,

@@ -135,9 +135,9 @@ fn expression() -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
                 then: Box::new(then),
                 r#else: Box::new(else_),
             });
-        let let_need = keyword("let")
+        let let_ = keyword("let")
             .ignore_then(
-                keyword("need")
+                keyword("strict")
                     .ignore_then(ident().map(|var| (true, var)))
                     .or(ident().map(|var| (false, var)))
             )
@@ -145,9 +145,9 @@ fn expression() -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
             .then(expr.clone())
             .then_ignore(keyword("in"))
             .then(expr.clone())
-            .map(|(((is_need, var), val), body)| {
-                if is_need {
-                    Expr::LetNeed { var, val: Box::new(val), body: Box::new(body) }
+            .map(|(((is_strict, var), val), body)| {
+                if is_strict {
+                    Expr::LetStrict { var, val: Box::new(val), body: Box::new(body) }
                 } else {
                     Expr::Let { var, val: Box::new(val), body: Box::new(body) }
                 }
@@ -209,7 +209,7 @@ fn expression() -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
                 None => e,
             });
 
-        choice((if_, let_need, exists, case, fail, app_expr))
+        choice((if_, let_, exists, case, fail, app_expr))
     })
 }
 

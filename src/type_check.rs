@@ -462,7 +462,7 @@ fn synth_expr(ctx: &mut Ctx, expr: &Expr) -> TResult {
             ctx.unbind();
             Ok(body_type)
         }
-        Expr::LetNeed { var, val, body } => {
+        Expr::LetStrict { var, val, body } => {
             let val_type = synth_expr(ctx, val)?;
             ctx.bind(var, val_type);
             let body_type = synth_expr(ctx, body)?;

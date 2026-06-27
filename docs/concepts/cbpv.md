@@ -15,7 +15,7 @@ The two categories are defined in [[mterms]] (`mterms.rs`):
   `Inl`/`Inr`, `Nil`/`Cons`, de Bruijn `Var`, and `Thunk` (a frozen computation). Naturals
   have two representations — a packed `Nat(u64)` literal and the unary `Zero`/`Succ` spine that
   pattern-matching and unification build incrementally; both render via `to_nat` (`mterms.rs:55`).
-- **Computations** (`MComputation`, `mterms.rs:87`) are things that run: `Return`, `Bind`,
+- **Computations** (`MComputation`, `mterms.rs:87`) are things that run: `Return`, `Bind`, `Need`,
   `Force`, `Lambda`, `App`, `Choice`, `Exists`, `Equate`, `Rec`, and the eliminators
   `Ifz` / `Match` / `Case`.
 
@@ -31,19 +31,24 @@ Values and computations are bridged by a dual pair:
 So a gweek function is a **thunk of a `Lambda`** ([[elaborate|`elaborate_func`]],
 `elaborate.rs:342`): calling it means `Force`-ing the thunk and then `App`-lying arguments.
 
-## Sequencing is explicit: `Return` / `Bind`
+## Sequencing is explicit: `Return` / `Need` / `Bind`
 
 There is no implicit "evaluate this sub-expression first." A computation that produces a
-value uses `Return(v)` (`mterms.rs:105`); to use that value you must `Bind` it:
+value uses `Return(v)` (`mterms.rs:105`); to use that value you must sequence it into a
+continuation, and gweek has two ways to do so:
 
 ```
-Bind { comp, cont }     -- run comp; bind its returned value at index 0 of cont's env
+Need { comp, cont }     -- by-need: suspend comp; bind a thunk for it at index 0 of cont's env
+Bind { comp, cont }     -- strict:  run comp to a value now; bind that value at index 0
 ```
 
-`Bind` (`step.rs:201`) is the workhorse: the surface language's nested data constructors all
-compile to chains of `Bind … Return` so that each sub-result is named before it is used
-([[elaborate]]). It is also where **laziness** enters: a non-`Return` `comp` is *suspended*
-rather than run, unless `--strict` is set ([[suspensions-and-forcing]]).
+`Need` (`step.rs:259`) is the workhorse. gweek is lazy, so the surface language's nested data
+constructors — and the bare surface `let x = e` — all compile to chains of `Need … Return` via
+[[elaborate|`seq`]], so that each sub-result is named before it is used. This is where
+**laziness** enters: a non-`Return` `comp` is *suspended* rather than run, and forced only on
+demand ([[suspensions-and-forcing]]) — which is what lets narrowing prune the search. Its
+strict counterpart `Bind` (`step.rs:228`) runs `comp` eagerly and is reached only by the
+explicit `let strict x = e`.
 
 ## Eliminators
 
