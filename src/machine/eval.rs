@@ -14,7 +14,7 @@
 //! `run_to_branch` calls are natural safe points: when the heap asks to be collected, the scheduler
 //! hands every live machine to [`collect`], which forwards their roots and reclaims the rest.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -49,7 +49,9 @@ pub fn eval(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId]) {
     let env = import_env(heap, vals);
     let deadline = deadline_from(cfg);
     let mut on_solution = |s: &str| println!("> {}", s);
-    let (solns, timed_out) = run_internal(cfg, heap, comp, env, deadline, &mut on_solution);
+    let mut sink = Sink::new(cfg, &mut on_solution);
+    let timed_out = run_internal(cfg, heap, comp, env, deadline, &mut sink);
+    let solns = sink.count;
     if timed_out {
         println!(
             ">>> timed out after {}s, {} solutions found",
@@ -67,7 +69,9 @@ pub fn eval_collect(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId]
     let mut solutions = Vec::new();
     let (solns, timed_out) = {
         let mut on_solution = |s: &str| solutions.push(format!("> {}", s));
-        run_internal(cfg, heap, comp, env, deadline, &mut on_solution)
+        let mut sink = Sink::new(cfg, &mut on_solution);
+        let timed_out = run_internal(cfg, heap, comp, env, deadline, &mut sink);
+        (sink.count, timed_out)
     };
     if timed_out {
         solutions.push(format!(
@@ -91,7 +95,9 @@ pub fn eval_streaming(
     let env = import_env(heap, vals);
     let deadline = deadline_from(cfg);
     let mut cb = |s: &str| on_solution(&format!("> {}", s));
-    let (solns, timed_out) = run_internal(cfg, heap, comp, env, deadline, &mut cb);
+    let mut sink = Sink::new(cfg, &mut cb);
+    let timed_out = run_internal(cfg, heap, comp, env, deadline, &mut sink);
+    let solns = sink.count;
     if timed_out {
         format!(
             ">>> timed out after {}s, {} solutions found",
@@ -108,10 +114,14 @@ pub fn run(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId], print: 
     let deadline = deadline_from(cfg);
     if print {
         let mut on_solution = |s: &str| println!("> {}", s);
-        run_internal(cfg, heap, comp, env, deadline, &mut on_solution).0
+        let mut sink = Sink::new(cfg, &mut on_solution);
+        run_internal(cfg, heap, comp, env, deadline, &mut sink);
+        sink.count
     } else {
         let mut on_solution = |_: &str| {};
-        run_internal(cfg, heap, comp, env, deadline, &mut on_solution).0
+        let mut sink = Sink::new(cfg, &mut on_solution);
+        run_internal(cfg, heap, comp, env, deadline, &mut sink);
+        sink.count
     }
 }
 
@@ -138,13 +148,13 @@ fn run_internal(
     comp: CompId,
     env: Env,
     deadline: Instant,
-    on_solution: &mut dyn FnMut(&str),
-) -> (usize, bool) {
+    sink: &mut Sink,
+) -> bool {
     match cfg.strategy {
-        Strategy::Bfs => eval_bfs(cfg, heap, comp, env, deadline, on_solution),
-        Strategy::Dfs => eval_dfs(cfg, heap, comp, env, deadline, on_solution),
-        Strategy::Iddfs => eval_iddfs(cfg, heap, comp, env, deadline, on_solution),
-        Strategy::Fair => eval_fair(cfg, heap, comp, env, deadline, on_solution),
+        Strategy::Bfs => eval_bfs(cfg, heap, comp, env, deadline, sink),
+        Strategy::Dfs => eval_dfs(cfg, heap, comp, env, deadline, sink),
+        Strategy::Iddfs => eval_iddfs(cfg, heap, comp, env, deadline, sink),
+        Strategy::Fair => eval_fair(cfg, heap, comp, env, deadline, sink),
     }
 }
 
@@ -212,20 +222,48 @@ fn forward_roots(heap: &mut Heap, machines: &mut [&mut Machine]) {
 }
 
 /// Record a solution; returns true if we should stop (--first mode).
-fn record_solution(
-    cfg: &Config,
-    heap: &Heap,
-    m: &Machine,
-    solns: &mut usize,
-    on_solution: &mut dyn FnMut(&str),
-) -> bool {
+/// The destination for solutions: it counts them, optionally deduplicates them
+/// (set vs multiset — see [`Config::distinct`] and
+/// `docs/concepts/powerdomains-and-binding.md`), and forwards each kept one to
+/// the caller's callback. Bundling the count, the seen-set, and the callback
+/// here keeps the set-vs-multiset decision in one place rather than threaded
+/// through every scheduler.
+struct Sink<'a> {
+    count: usize,
+    seen: Option<HashSet<String>>,
+    first_only: bool,
+    on_solution: &'a mut dyn FnMut(&str),
+}
+
+impl<'a> Sink<'a> {
+    fn new(cfg: &Config, on_solution: &'a mut dyn FnMut(&str)) -> Self {
+        Sink {
+            count: 0,
+            seen: cfg.distinct.then(HashSet::new),
+            first_only: cfg.first_only,
+            on_solution,
+        }
+    }
+
+    /// Record one rendered solution. A duplicate under `--distinct` is dropped
+    /// (not counted, not emitted). Returns `true` when the search should stop —
+    /// i.e. a fresh solution was recorded under `--first`.
+    fn record(&mut self, rendered: String) -> bool {
+        if let Some(seen) = &mut self.seen {
+            if !seen.insert(rendered.clone()) {
+                return false;
+            }
+        }
+        (self.on_solution)(&rendered);
+        self.count += 1;
+        self.first_only
+    }
+}
+
+fn record_solution(heap: &Heap, m: &Machine, sink: &mut Sink) -> bool {
     if let MComputation::Return(v) = heap.comp(m.cclos.0) {
         let v = *v;
-        on_solution(&output(heap, v, m.cclos.1, &m.lenv, &m.senv));
-        *solns += 1;
-        if cfg.first_only {
-            return true;
-        }
+        return sink.record(output(heap, v, m.cclos.1, &m.lenv, &m.senv));
     }
     false
 }
@@ -236,30 +274,29 @@ fn eval_bfs(
     comp: CompId,
     env: Env,
     deadline: Instant,
-    on_solution: &mut dyn FnMut(&str),
-) -> (usize, bool) {
+    sink: &mut Sink,
+) -> bool {
     let mut machines = vec![fresh_machine(heap, comp, env)];
     let mut next = Vec::new();
-    let mut solns = 0;
     let mut clock = Clock::new(deadline);
     while !machines.is_empty() {
         while let Some(m) = machines.pop() {
             if clock.expired() {
-                return (solns, true);
+                return true;
             }
             match m.run_to_branch(cfg, heap, deadline) {
                 RunResult::Yield(results) => {
                     for m in results {
                         if m.done {
-                            if record_solution(cfg, heap, &m, &mut solns, on_solution) {
-                                return (solns, false);
+                            if record_solution(heap, &m, sink) {
+                                return false;
                             }
                         } else {
                             next.push(m);
                         }
                     }
                 }
-                RunResult::TimedOut => return (solns, true),
+                RunResult::TimedOut => return true,
                 RunResult::NeedGc(m) => {
                     machines.push(m);
                     collect(heap, machines.iter_mut().chain(next.iter_mut()));
@@ -268,7 +305,7 @@ fn eval_bfs(
         }
         std::mem::swap(&mut machines, &mut next);
     }
-    (solns, false)
+    false
 }
 
 fn eval_dfs(
@@ -277,35 +314,34 @@ fn eval_dfs(
     comp: CompId,
     env: Env,
     deadline: Instant,
-    on_solution: &mut dyn FnMut(&str),
-) -> (usize, bool) {
+    sink: &mut Sink,
+) -> bool {
     let mut stack = vec![fresh_machine(heap, comp, env)];
-    let mut solns = 0;
     let mut clock = Clock::new(deadline);
     while let Some(m) = stack.pop() {
         if clock.expired() {
-            return (solns, true);
+            return true;
         }
         match m.run_to_branch(cfg, heap, deadline) {
             RunResult::Yield(results) => {
                 for m in results.into_iter().rev() {
                     if m.done {
-                        if record_solution(cfg, heap, &m, &mut solns, on_solution) {
-                            return (solns, false);
+                        if record_solution(heap, &m, sink) {
+                            return false;
                         }
                     } else {
                         stack.push(m);
                     }
                 }
             }
-            RunResult::TimedOut => return (solns, true),
+            RunResult::TimedOut => return true,
             RunResult::NeedGc(m) => {
                 stack.push(m);
                 collect(heap, stack.iter_mut());
             }
         }
     }
-    (solns, false)
+    false
 }
 
 fn eval_iddfs(
@@ -314,9 +350,8 @@ fn eval_iddfs(
     comp: CompId,
     env: Env,
     deadline: Instant,
-    on_solution: &mut dyn FnMut(&str),
-) -> (usize, bool) {
-    let mut solns = 0;
+    sink: &mut Sink,
+) -> bool {
     let mut depth_limit: usize = 1;
     let mut clock = Clock::new(deadline);
     loop {
@@ -327,7 +362,7 @@ fn eval_iddfs(
         let mut cutoff = false;
         while let Some((m, depth)) = stack.pop() {
             if clock.expired() {
-                return (solns, true);
+                return true;
             }
             if depth >= depth_limit {
                 cutoff = true;
@@ -346,16 +381,16 @@ fn eval_iddfs(
                             // to print identically are no longer collapsed.
                             if next_depth >= depth_limit / 2
                                 && next_depth < depth_limit
-                                && record_solution(cfg, heap, &m, &mut solns, on_solution)
+                                && record_solution(heap, &m, sink)
                             {
-                                return (solns, false);
+                                return false;
                             }
                         } else {
                             stack.push((m, next_depth));
                         }
                     }
                 }
-                RunResult::TimedOut => return (solns, true),
+                RunResult::TimedOut => return true,
                 RunResult::NeedGc(m) => {
                     stack.push((m, depth));
                     collect(heap, stack.iter_mut().map(|(m, _)| m));
@@ -367,7 +402,7 @@ fn eval_iddfs(
         }
         depth_limit *= 2;
     }
-    (solns, false)
+    false
 }
 
 fn eval_fair(
@@ -376,19 +411,18 @@ fn eval_fair(
     comp: CompId,
     env: Env,
     deadline: Instant,
-    on_solution: &mut dyn FnMut(&str),
-) -> (usize, bool) {
+    sink: &mut Sink,
+) -> bool {
     const QUOTA: usize = 10000;
     const MAX_THREADS: usize = 10000;
     let mut queue: VecDeque<Vec<Machine>> = VecDeque::new();
     queue.push_back(vec![fresh_machine(heap, comp, env)]);
-    let mut solns = 0;
     let mut clock = Clock::new(deadline);
     while let Some(mut local) = queue.pop_front() {
         let mut steps = 0;
         while let Some(m) = local.pop() {
             if clock.expired() {
-                return (solns, true);
+                return true;
             }
             if steps >= QUOTA {
                 local.push(m);
@@ -397,7 +431,7 @@ fn eval_fair(
             steps += 1;
             let results = match m.run_to_branch(cfg, heap, deadline) {
                 RunResult::Yield(ms) => ms,
-                RunResult::TimedOut => return (solns, true),
+                RunResult::TimedOut => return true,
                 RunResult::NeedGc(m) => {
                     local.push(m);
                     collect(heap, queue.iter_mut().flatten().chain(local.iter_mut()));
@@ -411,8 +445,8 @@ fn eval_fair(
                 let mut first = true;
                 for m in results {
                     if m.done {
-                        if record_solution(cfg, heap, &m, &mut solns, on_solution) {
-                            return (solns, false);
+                        if record_solution(heap, &m, sink) {
+                            return false;
                         }
                     } else if first {
                         local.push(m);
@@ -424,8 +458,8 @@ fn eval_fair(
             } else {
                 for m in results.into_iter().rev() {
                     if m.done {
-                        if record_solution(cfg, heap, &m, &mut solns, on_solution) {
-                            return (solns, false);
+                        if record_solution(heap, &m, sink) {
+                            return false;
                         }
                     } else {
                         local.push(m);
@@ -437,7 +471,7 @@ fn eval_fair(
             queue.push_back(local);
         }
     }
-    (solns, false)
+    false
 }
 
 fn output(heap: &Heap, val: NodeId, env: Env, lenv: &LogicEnv, senv: &SuspEnv) -> String {
@@ -460,6 +494,7 @@ mod tests {
             timeout_secs: 60,
             occurs_check: true,
             first_only: false,
+            distinct: false,
         }
     }
 
@@ -472,9 +507,10 @@ mod tests {
         let cfg = test_config(strategy);
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
         let mut out = Vec::new();
-        let (_, timed_out) = {
+        let timed_out = {
             let mut on_solution = |s: &str| out.push(s.to_string());
-            run_internal(&cfg, &mut heap, comp, env, deadline, &mut on_solution)
+            let mut sink = Sink::new(&cfg, &mut on_solution);
+            run_internal(&cfg, &mut heap, comp, env, deadline, &mut sink)
         };
         assert!(!timed_out, "test program timed out");
         out
@@ -490,9 +526,10 @@ mod tests {
         let cfg = test_config(strategy);
         let deadline = Instant::now() + std::time::Duration::from_secs(120);
         let mut out = Vec::new();
-        let (_, timed_out) = {
+        let timed_out = {
             let mut on_solution = |s: &str| out.push(s.to_string());
-            run_internal(&cfg, &mut heap, comp, env, deadline, &mut on_solution)
+            let mut sink = Sink::new(&cfg, &mut on_solution);
+            run_internal(&cfg, &mut heap, comp, env, deadline, &mut sink)
         };
         assert!(!timed_out, "test program timed out");
         out

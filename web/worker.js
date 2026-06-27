@@ -32,6 +32,7 @@ self.onmessage = (e) => {
                     e.data.optimize,
                     e.data.noOccursCheck,
                     e.data.firstOnly,
+                    e.data.distinct,
                     BigInt(e.data.timeoutSecs)
                 );
                 self.postMessage({ type: 'result', result });
@@ -45,6 +46,7 @@ self.onmessage = (e) => {
                     e.data.optimize,
                     e.data.noOccursCheck,
                     e.data.firstOnly,
+                    e.data.distinct,
                     BigInt(e.data.timeoutSecs),
                     onLine
                 );

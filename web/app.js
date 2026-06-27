@@ -373,6 +373,7 @@ function sendRun(batch) {
         optimize: document.getElementById('flag-optimize').checked,
         noOccursCheck: document.getElementById('flag-no-occurs').checked,
         firstOnly: document.getElementById('flag-first').checked,
+        distinct: document.getElementById('flag-distinct').checked,
         timeoutSecs: parseInt(document.getElementById('flag-timeout').value, 10) || 30,
     });
 }

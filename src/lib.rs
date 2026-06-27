@@ -30,6 +30,7 @@ fn run_with<F>(
     optimize: bool,
     no_occurs_check: bool,
     first_only: bool,
+    distinct: bool,
     timeout_secs: u64,
     eval: F,
 ) -> String
@@ -51,6 +52,7 @@ where
         timeout_secs,
         occurs_check: !no_occurs_check,
         first_only,
+        distinct,
     };
 
     let ast = match parser::parse(source) {
@@ -118,6 +120,7 @@ pub fn run_gweek(
     optimize: bool,
     no_occurs_check: bool,
     first_only: bool,
+    distinct: bool,
     timeout_secs: u64,
     on_line: &js_sys::Function,
 ) -> String {
@@ -127,6 +130,7 @@ pub fn run_gweek(
         optimize,
         no_occurs_check,
         first_only,
+        distinct,
         timeout_secs,
         |cfg, heap, comp, env| {
             machine::eval_streaming(cfg, heap, comp, env, |line| {
@@ -144,6 +148,7 @@ pub fn run_gweek_batch(
     optimize: bool,
     no_occurs_check: bool,
     first_only: bool,
+    distinct: bool,
     timeout_secs: u64,
 ) -> String {
     run_with(
@@ -152,6 +157,7 @@ pub fn run_gweek_batch(
         optimize,
         no_occurs_check,
         first_only,
+        distinct,
         timeout_secs,
         |cfg, heap, comp, env| machine::eval_collect(cfg, heap, comp, env),
     )

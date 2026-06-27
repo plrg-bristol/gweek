@@ -30,6 +30,7 @@ Options:
   --timeout <N>      Wall-clock timeout in seconds (default: 60).
   -o                 Enable peephole optimizer.
   --no-occurs-check  Skip occurs check in unification (unsound but faster).
+  --distinct         Deduplicate solutions (set / lower-powerdomain semantics).
   --help             Show this help message.
 
 Output:
@@ -53,6 +54,7 @@ fn main() {
     let mut timeout_secs: u64 = 60;
     let mut occurs_check = true;
     let mut first_only = false;
+    let mut distinct = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -64,6 +66,7 @@ fn main() {
             "-o" => optimize = true,
             "--no-occurs-check" => occurs_check = false,
             "--first" => first_only = true,
+            "--distinct" => distinct = true,
             "--timeout" => {
                 timeout_secs = args
                     .next()
@@ -106,6 +109,7 @@ fn main() {
         timeout_secs,
         occurs_check,
         first_only,
+        distinct,
     };
 
     let src = fs::read_to_string(&file_path).unwrap_or_else(|e| {
@@ -201,6 +205,7 @@ mod tests {
             timeout_secs: 60,
             occurs_check: true,
             first_only: false,
+            distinct: false,
         }
     }
 
