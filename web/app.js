@@ -372,7 +372,6 @@ function sendRun(batch) {
         strategy: getStrategy(),
         optimize: document.getElementById('flag-optimize').checked,
         noOccursCheck: document.getElementById('flag-no-occurs').checked,
-        strict: document.getElementById('flag-strict').checked,
         firstOnly: document.getElementById('flag-first').checked,
         timeoutSecs: parseInt(document.getElementById('flag-timeout').value, 10) || 30,
     });

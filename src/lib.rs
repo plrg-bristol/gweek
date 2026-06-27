@@ -29,7 +29,6 @@ fn run_with<F>(
     strategy: &str,
     optimize: bool,
     no_occurs_check: bool,
-    strict: bool,
     first_only: bool,
     timeout_secs: u64,
     eval: F,
@@ -51,7 +50,6 @@ where
         optimize,
         timeout_secs,
         occurs_check: !no_occurs_check,
-        strict,
         first_only,
     };
 
@@ -119,7 +117,6 @@ pub fn run_gweek(
     strategy: &str,
     optimize: bool,
     no_occurs_check: bool,
-    strict: bool,
     first_only: bool,
     timeout_secs: u64,
     on_line: &js_sys::Function,
@@ -129,7 +126,6 @@ pub fn run_gweek(
         strategy,
         optimize,
         no_occurs_check,
-        strict,
         first_only,
         timeout_secs,
         |cfg, heap, comp, env| {
@@ -147,7 +143,6 @@ pub fn run_gweek_batch(
     strategy: &str,
     optimize: bool,
     no_occurs_check: bool,
-    strict: bool,
     first_only: bool,
     timeout_secs: u64,
 ) -> String {
@@ -156,7 +151,6 @@ pub fn run_gweek_batch(
         strategy,
         optimize,
         no_occurs_check,
-        strict,
         first_only,
         timeout_secs,
         |cfg, heap, comp, env| machine::eval_collect(cfg, heap, comp, env),

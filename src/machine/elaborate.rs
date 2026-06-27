@@ -569,6 +569,16 @@ fn elaborate_vtype(ptype: Type) -> ValueType {
     }
 }
 
+/// Compiler-introduced sequencing of a sub-expression's value into the term
+/// that surrounds it (the tail of a cons, a function argument, an equation
+/// operand, a case scrutinee, ...). gweek is lazy by default, so these implicit
+/// binds are by-need: `comp` is suspended and forced only on demand, which is
+/// what lets narrowing prune an otherwise unbounded search. Only the surface
+/// `let x = e` ([`Expr::Let`]) sequences strictly, via [`MComputation::Bind`].
+fn seq(heap: &mut Heap, comp: CompId, cont: CompId) -> CompId {
+    heap.alloc_comp(MComputation::Need { comp, cont })
+}
+
 fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
     match expr {
         Expr::If { cond, then, r#else } => {
@@ -589,7 +599,7 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
                 inrk: else_comp,
             });
             tenv.unbind();
-            heap.alloc_comp(MComputation::Bind { comp, cont: case })
+            seq(heap, comp, case)
         }
         Expr::Let { var, val, body } => {
             let comp = elaborate_expr(heap, *val, tenv);
@@ -629,14 +639,8 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
                 rhs: var1,
                 body: body_comp,
             });
-            let inner_bind = heap.alloc_comp(MComputation::Bind {
-                comp: rhs_comp,
-                cont: equate,
-            });
-            heap.alloc_comp(MComputation::Bind {
-                comp: lhs_comp,
-                cont: inner_bind,
-            })
+            let inner_bind = seq(heap, rhs_comp, equate);
+            seq(heap, lhs_comp, inner_bind)
         }
         Expr::Fail => heap.alloc_comp(MComputation::Choice(Vec::new().into_boxed_slice())),
         Expr::Choice(exprs) => {
@@ -677,7 +681,7 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
             };
             tenv.unbind();
             let comp = elaborate_expr(heap, *expr, tenv);
-            heap.alloc_comp(MComputation::Bind { comp, cont })
+            seq(heap, comp, cont)
         }
         Expr::Zero => {
             let zero = heap.alloc_imm_val(MValue::Nat(0));
@@ -688,7 +692,7 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
             let var0 = heap.alloc_imm_val(MValue::Var(0));
             let succ = heap.alloc_imm_val(MValue::Succ(var0));
             let ret = heap.alloc_comp(MComputation::Return(succ));
-            heap.alloc_comp(MComputation::Bind { comp, cont: ret })
+            seq(heap, comp, ret)
         }
         Expr::Nil => {
             let nil = heap.alloc_imm_val(MValue::Nil);
@@ -703,14 +707,8 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
             let var0 = heap.alloc_imm_val(MValue::Var(0));
             let cons = heap.alloc_imm_val(MValue::Cons(var1, var0));
             let ret = heap.alloc_comp(MComputation::Return(cons));
-            let inner = heap.alloc_comp(MComputation::Bind {
-                comp: comp_tail,
-                cont: ret,
-            });
-            heap.alloc_comp(MComputation::Bind {
-                comp: comp_head,
-                cont: inner,
-            })
+            let inner = seq(heap, comp_tail, ret);
+            seq(heap, comp_head, inner)
         }
         Expr::Lambda(arg, body) => match arg {
             Arg::Ident(var) => {
@@ -744,14 +742,8 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
                 op: force,
                 arg: var0,
             });
-            let inner = heap.alloc_comp(MComputation::Bind {
-                comp: comp_arg,
-                cont: app,
-            });
-            heap.alloc_comp(MComputation::Bind {
-                comp: comp_op,
-                cont: inner,
-            })
+            let inner = seq(heap, comp_arg, app);
+            seq(heap, comp_op, inner)
         }
         Expr::BExpr(bexpr) => elaborate_bexpr(heap, bexpr, tenv),
         Expr::List(elems) => elaborate_list(heap, &elems, tenv),
@@ -774,7 +766,7 @@ fn elaborate_expr(heap: &mut Heap, expr: Expr, tenv: &mut TEnv) -> CompId {
             if tenv.is_nullary(&s) {
                 let var0 = heap.alloc_imm_val(MValue::Var(0));
                 let force = heap.alloc_comp(MComputation::Force(var0));
-                heap.alloc_comp(MComputation::Bind { comp, cont: force })
+                seq(heap, comp, force)
             } else {
                 comp
             }
@@ -840,10 +832,7 @@ fn nat_eq_thunk(heap: &mut Heap) -> NodeId {
             op: force_thunk,
             arg: b_pred,
         });
-        heap.alloc_comp(MComputation::Bind {
-            comp: apply_a,
-            cont: apply_b,
-        })
+        seq(heap, apply_a, apply_b)
     };
     let asucc = {
         let b = heap.alloc_imm_val(MValue::Var(1));
@@ -894,18 +883,9 @@ fn nat_eq_comp(heap: &mut Heap, lhs: Expr, rhs: Expr, tenv: &mut TEnv) -> CompId
         op: force_thunk,
         arg: b,
     });
-    let recurse = heap.alloc_comp(MComputation::Bind {
-        comp: apply_a,
-        cont: apply_b,
-    });
-    let inner = heap.alloc_comp(MComputation::Bind {
-        comp: rhs_comp,
-        cont: recurse,
-    });
-    heap.alloc_comp(MComputation::Bind {
-        comp: lhs_comp,
-        cont: inner,
-    })
+    let recurse = seq(heap, apply_a, apply_b);
+    let inner = seq(heap, rhs_comp, recurse);
+    seq(heap, lhs_comp, inner)
 }
 
 /// Negates a computation producing a `Bool` by swapping `Inl`/`Inr`.
@@ -918,7 +898,7 @@ fn negate_comp(heap: &mut Heap, comp: CompId) -> CompId {
         inlk,
         inrk,
     });
-    heap.alloc_comp(MComputation::Bind { comp, cont: case })
+    seq(heap, comp, case)
 }
 
 /// Constant-folds a `Bool`-valued expression when it is fully literal.
@@ -1002,10 +982,7 @@ fn elaborate_connective(
         inlk,
         inrk,
     });
-    heap.alloc_comp(MComputation::Bind {
-        comp: lhs_comp,
-        cont: case,
-    })
+    seq(heap, lhs_comp, case)
 }
 
 fn elaborate_list(heap: &mut Heap, elems: &[Expr], tenv: &mut TEnv) -> CompId {
@@ -1023,14 +1000,8 @@ fn elaborate_list(heap: &mut Heap, elems: &[Expr], tenv: &mut TEnv) -> CompId {
             let var0 = heap.alloc_imm_val(MValue::Var(0));
             let cons = heap.alloc_imm_val(MValue::Cons(var1, var0));
             let ret = heap.alloc_comp(MComputation::Return(cons));
-            let inner = heap.alloc_comp(MComputation::Bind {
-                comp: ctail,
-                cont: ret,
-            });
-            heap.alloc_comp(MComputation::Bind {
-                comp: chead,
-                cont: inner,
-            })
+            let inner = seq(heap, ctail, ret);
+            seq(heap, chead, inner)
         }
     }
 }
@@ -1049,12 +1020,6 @@ fn elaborate_pair(heap: &mut Heap, fst: Expr, snd: Expr, tenv: &mut TEnv) -> Com
     let var0 = heap.alloc_imm_val(MValue::Var(0));
     let pair = heap.alloc_imm_val(MValue::Pair(var1, var0));
     let ret = heap.alloc_comp(MComputation::Return(pair));
-    let inner = heap.alloc_comp(MComputation::Bind {
-        comp: snd_comp,
-        cont: ret,
-    });
-    heap.alloc_comp(MComputation::Bind {
-        comp: fst_comp,
-        cont: inner,
-    })
+    let inner = seq(heap, snd_comp, ret);
+    seq(heap, fst_comp, inner)
 }

@@ -459,7 +459,6 @@ mod tests {
             optimize: false,
             timeout_secs: 60,
             occurs_check: true,
-            strict: false,
             first_only: false,
         }
     }

@@ -836,8 +836,7 @@ fn rewrite(heap: &mut Heap, comp: CompId, env: &[Option<NodeId>]) -> CompId {
         // dead-end: M need x. fail  -->  fail
         MComputation::Need { comp: c, cont } => {
             let (c, cont) = (*c, *cont);
-            if let MComputation::Return(v) = heap.comp(c) {
-                let v = *v;
+            if let MComputation::Return(_) = heap.comp(c) {
                 // dead-bind: cont doesn't use Var(0) -> drop the need
                 if !has_free_var_comp(heap, cont, 0) {
                     #[cfg(feature = "opt-stats")]

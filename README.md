@@ -35,7 +35,6 @@ gweek [OPTIONS] <source_file>
 | `-o` | Enable peephole optimizer |
 | `--timeout <N>` | Timeout in seconds (default: 60) |
 | `--first` | Stop after the first solution |
-| `--strict` | Strict bind: evaluate RHS before binding (no suspensions) |
 | `--no-occurs-check` | Skip occurs check in unification (unsound but faster) |
 
 ## Example

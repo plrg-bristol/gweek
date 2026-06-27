@@ -29,7 +29,6 @@ Options:
   --first            Stop after finding the first solution.
   --timeout <N>      Wall-clock timeout in seconds (default: 60).
   -o                 Enable peephole optimizer.
-  --strict           Strict bind: evaluate RHS before binding (no suspensions).
   --no-occurs-check  Skip occurs check in unification (unsound but faster).
   --help             Show this help message.
 
@@ -53,7 +52,6 @@ fn main() {
     let mut optimize = false;
     let mut timeout_secs: u64 = 60;
     let mut occurs_check = true;
-    let mut strict = false;
     let mut first_only = false;
 
     let mut args = std::env::args().skip(1);
@@ -65,7 +63,6 @@ fn main() {
             "--fair" => strategy = Strategy::Fair,
             "-o" => optimize = true,
             "--no-occurs-check" => occurs_check = false,
-            "--strict" => strict = true,
             "--first" => first_only = true,
             "--timeout" => {
                 timeout_secs = args
@@ -108,7 +105,6 @@ fn main() {
         optimize,
         timeout_secs,
         occurs_check,
-        strict,
         first_only,
     };
 
@@ -204,7 +200,6 @@ mod tests {
             optimize: false,
             timeout_secs: 60,
             occurs_check: true,
-            strict: false,
             first_only: false,
         }
     }

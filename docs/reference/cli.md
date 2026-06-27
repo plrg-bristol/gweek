@@ -35,7 +35,6 @@ which is also what `--help` labels "(default)". The trade-offs are explained in
 | `-o` | Enable the peephole [[optimizer]] | `main.rs` → [[pipeline]] step 4 |
 | `--timeout <N>` | Wall-clock timeout in seconds (default 60) | checked inside [[step|`run_to_branch`]] too, so divergent loops honour it (§B9 fixed) |
 | `--first` | Stop after the first solution | [[eval|`record_solution`]] / `cfg.first_only` |
-| `--strict` | Evaluate `let` RHS before binding (no [[suspensions-and-forcing|suspensions]]) | [[step|`Bind`]] `step.rs:201` |
 | `--no-occurs-check` | Skip the [[unification#occurs-check|occurs check]] (faster, unsound) | `unify.rs:37,45`; a resulting cyclic term is reported, not crashed (§B13 fixed) |
 | `--help` / `-h` | Usage | |
 

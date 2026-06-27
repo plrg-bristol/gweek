@@ -1,16 +1,17 @@
 add :: Nat -> Nat -> Nat
 add n m = case m of
               Z -> n
-            | S z -> S (add n z).
+            | S z -> let need x = add n z in S x.
             
 sum :: [Nat] -> Nat
 sum xs = case xs of 
               [] -> 0
-            | (z:zs) -> add z (sum zs).
+            | (z:zs) -> let need s = sum zs in add z s.
             
 length :: [Nat] -> Nat
 length xs = case xs of
               [] -> 0
-            | (z:zs) -> S (length zs).
+            | (z:zs) -> let need n = length zs in S n.
             
-exists xs :: [Nat]. length xs =:= 7. sum xs =:= 5. xs.
+exists xs :: [Nat]. 
+  length xs =:= 7. sum xs =:= 5. xs.
