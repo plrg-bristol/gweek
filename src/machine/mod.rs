@@ -9,6 +9,7 @@
 //! logic engine is `unify`/`lvar`/`union_find`, laziness is `senv`/`vclosure`/`env`, and
 //! [`Config`] is threaded by reference throughout.
 
+pub mod branch;
 pub mod config;
 pub mod elaborate;
 mod env;
@@ -18,7 +19,7 @@ mod lvar;
 pub mod mterms;
 pub mod optimize;
 mod senv;
-mod step;
+pub mod step;
 mod unify;
 mod union_find;
 mod value_type;
@@ -38,3 +39,4 @@ pub struct SuspId(pub usize);
 
 /// A computation closure: a computation paired with its environment.
 pub type CClosure = (CompId, env::Env);
+

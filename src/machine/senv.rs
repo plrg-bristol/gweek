@@ -63,6 +63,11 @@ impl SuspEnv {
         Rc::make_mut(&mut self.entries)[ident.0] = Ok(VClosure::mk_clos(val, env));
     }
 
+    /// Set a suspension entry directly from a VClosure (for branch-level use).
+    pub fn set_done(&mut self, ident: SuspId, vclos: VClosure) {
+        Rc::make_mut(&mut self.entries)[ident.0] = Ok(vclos);
+    }
+
     pub fn next(&mut self) -> Option<SuspAt> {
         while self.next_pending < self.entries.len() {
             match &self.entries[self.next_pending] {
@@ -76,6 +81,11 @@ impl SuspEnv {
             }
         }
         None
+    }
+
+    /// Returns true when all entries are done (no pending suspensions).
+    pub fn all_done(&self) -> bool {
+        self.entries.iter().all(|e| matches!(e, Ok(_)))
     }
 
     /// Identity of the shared store, so a collection can rebuild each distinct
@@ -100,3 +110,4 @@ impl SuspEnv {
         }
     }
 }
+

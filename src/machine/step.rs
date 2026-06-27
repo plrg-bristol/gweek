@@ -1,13 +1,13 @@
 //! # The transition function
 //!
 //! The heart of the interpreter: a single machine state ([`Machine`]) and the transition that
-//! advances it. A [`Machine`] bundles the running computation closure, a [`Stack`] of continuation
-//! frames, and the logic and suspension environments; the stack is a persistent heap cons-list, so
-//! cloning it is one handle copy. The scheduler never calls `step` directly — it calls
-//! [`run_to_branch`](Machine::run_to_branch), which runs `step` tight and yields a [`RunResult`] at
-//! the next branch, at completion, on timeout, or when the heap asks to be collected. Each `step`
-//! matches on the head computation — sequencing, functions, the functional-logic forms, the
-//! eliminators (which *case-split* on an unbound logic variable), and `Rec` — and reads the
+//! advances it. A [`Machine`] bundles the running computation closure and a [`Stack`] of continuation
+//! frames; the logic and suspension environments are now owned by the [`Branch`](super::branch::Branch)
+//! and passed in by mutable reference. The stack is a persistent heap cons-list, so
+//! cloning it is one handle copy.
+//!
+//! Each `step` matches on the head computation — sequencing, functions, the functional-logic forms,
+//! the eliminators (which *case-split* on an unbound logic variable), and `Rec` — and reads the
 //! deadline through a `Clock` only once every 1024 ticks, lest a divergent loop never look at it.
 
 use smallvec::{smallvec, SmallVec};
@@ -17,6 +17,7 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
+use super::branch::BranchAlternative;
 use super::config::Config;
 use super::heap::{CompId, Heap};
 use super::lvar::LogicEnv;
@@ -26,25 +27,7 @@ use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
 use super::{CClosure, Env, NodeId, SuspId, VClosure};
 
-pub type StepResult = SmallVec<[Machine; 2]>;
-
-/// Outcome of driving a machine to its next branch point.
-pub enum RunResult {
-    /// Reached a branch point or completion; the machines to schedule next.
-    Yield(StepResult),
-    /// The deadline elapsed mid-computation (e.g. a divergent deterministic loop).
-    TimedOut,
-    /// The heap is over its watermark; the machine is handed back so the
-    /// scheduler can collect at the safe point and resume it.
-    NeedGc(Machine),
-}
-
-enum Step {
-    Continue(Machine),
-    Done(Machine),
-    Branch(StepResult),
-    Fail,
-}
+// ── Stack ──────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum StkFrame {
@@ -80,47 +63,23 @@ impl Stack {
         heap.alloc_stack(StackInner::Nil)
     }
 
-    fn push(&self, heap: &mut Heap, frame: StkFrame, env: Env) -> Stack {
+    pub(crate) fn push(&self, heap: &mut Heap, frame: StkFrame, env: Env) -> Stack {
         heap.alloc_stack(StackInner::Cons(StkClosure { frame, env }, *self))
     }
 }
 
-#[derive(Clone)]
+// ── Machine ────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug)]
 pub struct Machine {
     pub cclos: CClosure,
     pub stack: Stack,
-    pub lenv: LogicEnv,
-    pub senv: SuspEnv,
     pub done: bool,
 }
 
-/// Suspend the current computation `comp` on the suspension `a.ident` and resume
-/// at the suspension's closure. Shared by the Force/Equate/Ifz/Match/Case arms,
-/// which reschedule identically when `close_head` blocks on an unevaluated
-/// suspension.
-fn reschedule(
-    heap: &mut Heap,
-    lenv: LogicEnv,
-    senv: SuspEnv,
-    stack: Stack,
-    comp: CompId,
-    env: Env,
-    a: SuspAt,
-) -> Step {
-    let new_stack = stack.push(heap, StkFrame::Set(a.ident, comp), env);
-    Step::Continue(Machine {
-        cclos: a.cclos,
-        stack: new_stack,
-        lenv,
-        senv,
-        done: false,
-    })
-}
+// ── Clock ──────────────────────────────────────────────────────────
 
-/// Polls a deadline cheaply from a hot loop: an actual `Instant::now()` is read
-/// only once every `POLL_INTERVAL` ticks, so `--timeout` is honoured without
-/// timing every iteration. Shared by `run_to_branch` (the inner step loop) and
-/// the scheduler loops in `eval`.
+/// Polls a deadline cheaply from a hot loop.
 pub(super) struct Clock {
     iters: u32,
     deadline: Instant,
@@ -133,91 +92,142 @@ impl Clock {
         Clock { iters: 0, deadline }
     }
 
-    /// Advance one tick; returns `true` once the deadline has passed, checked
-    /// only every `POLL_INTERVAL` ticks.
     pub(super) fn expired(&mut self) -> bool {
         self.iters = self.iters.wrapping_add(1);
         self.iters & (Self::POLL_INTERVAL - 1) == 0 && Instant::now() >= self.deadline
     }
 }
 
+// ── Step outcome ───────────────────────────────────────────────────
+
+/// Outcome of one step of a machine thread.
+#[derive(Debug)]
+pub enum StepOutcome {
+    /// Continue running the same machine on the next tick.
+    Continue(Machine),
+    /// The machine reached a Return with an empty stack (thread-level answer).
+    Returned(VClosure),
+    /// Object-language nondeterminism (Choice) or logic-variable case split.
+    /// Each alternative carries its own lenv/senv clone.
+    Fork(Vec<BranchAlternative>),
+    /// The machine tried to inspect a suspension that is not yet done.
+    /// (Used in Phase 3+; Phase 1–2 use inline reschedule via Continue.)
+    BlockedOn {
+        susp: SuspAt,
+        resume: Machine,
+    },
+    /// The machine failed (e.g. unification failure, empty Choice).
+    Failed,
+    /// The heap is over its watermark and wants collection.
+    NeedGc(Machine),
+    /// The deadline elapsed mid-computation.
+    TimedOut,
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/// Inline suspension evaluation (Phase 1–2 behaviour): push a Set frame
+/// and switch to the suspension's closure.
+fn reschedule(
+    heap: &mut Heap,
+    stack: Stack,
+    comp_id: CompId,
+    env: Env,
+    a: SuspAt,
+) -> Machine {
+    let new_stack = stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
+    Machine {
+        cclos: a.cclos,
+        stack: new_stack,
+        done: false,
+    }
+}
+
+/// Helper to build a Fork with one alternative reusing the current stores
+/// and others carrying clones.
+fn fork_alternatives(
+    machines: Vec<(Machine, LogicEnv)>,
+    current_lenv: &LogicEnv,
+    current_senv: &SuspEnv,
+) -> StepOutcome {
+    let mut alternatives: Vec<BranchAlternative> = machines
+        .into_iter()
+        .map(|(m, lenv)| BranchAlternative {
+            machine: m,
+            lenv,
+            senv: current_senv.clone(),
+        })
+        .collect();
+    // Last alternative reuses the original stores (already cloned).
+    StepOutcome::Fork(alternatives)
+}
+
+// ── run_to_event ───────────────────────────────────────────────────
+
 impl Machine {
-    /// Run deterministic steps in a tight loop, only returning to the
-    /// scheduler at branch points (Choice, logic-var splits), completion, a
-    /// timeout, or when the heap is over its watermark and wants collecting.
-    pub fn run_to_branch(mut self, cfg: &Config, heap: &mut Heap, deadline: Instant) -> RunResult {
+    /// Run deterministic steps in a tight loop, returning at the next
+    /// significant event (branch point, completion, block, timeout, or GC).
+    pub fn run_to_event(
+        mut self,
+        cfg: &Config,
+        heap: &mut Heap,
+        lenv: &mut LogicEnv,
+        senv: &mut SuspEnv,
+        deadline: Instant,
+    ) -> StepOutcome {
         let mut clock = Clock::new(deadline);
         loop {
             if clock.expired() {
-                return RunResult::TimedOut;
+                return StepOutcome::TimedOut;
             }
             if heap.nursery_full() {
-                return RunResult::NeedGc(self);
+                return StepOutcome::NeedGc(self);
             }
-            match self.step(cfg, heap) {
-                Step::Continue(m) => self = m,
-                Step::Done(m) => return RunResult::Yield(smallvec![m]),
-                Step::Branch(ms) => return RunResult::Yield(ms),
-                Step::Fail => return RunResult::Yield(smallvec![]),
+            match self.step(cfg, heap, lenv, senv) {
+                StepOutcome::Continue(m) => self = m,
+                other => return other,
             }
         }
     }
 
-    fn step(self, cfg: &Config, heap: &mut Heap) -> Step {
+    fn step(
+        self,
+        cfg: &Config,
+        heap: &mut Heap,
+        lenv: &mut LogicEnv,
+        senv: &mut SuspEnv,
+    ) -> StepOutcome {
         let Machine {
             cclos: (comp_id, env),
             stack,
-            lenv,
-            senv,
             done: _,
         } = self;
 
         match heap.comp(comp_id) {
+            // ── Return ──────────────────────────────────────────
             MComputation::Return(val) => {
                 let val = *val;
                 match heap.stack_inner(stack) {
                     StackInner::Nil => {
-                        let mut senv = senv;
-                        match senv.next() {
-                            Some(a) => {
-                                let new_stack = stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-                                Step::Continue(Machine {
-                                    cclos: (a.comp(), a.env()),
-                                    stack: new_stack,
-                                    lenv,
-                                    senv,
-                                    done: false,
-                                })
-                            }
-                            None => Step::Done(Machine {
-                                cclos: (comp_id, env),
-                                stack,
-                                lenv,
-                                senv,
-                                done: true,
-                            }),
-                        }
+                        StepOutcome::Returned(VClosure::mk_clos(val, env))
                     }
                     StackInner::Cons(sc, tail) => match sc.frame {
-                        StkFrame::Value(_) => unreachable!("return throws value to a value"),
+                        StkFrame::Value(_) => {
+                            unreachable!("return throws value to a value")
+                        }
                         StkFrame::To(cont) => {
                             let new_env = sc.env.extend_val(heap, val, env);
-                            Step::Continue(Machine {
+                            StepOutcome::Continue(Machine {
                                 cclos: (cont, new_env),
                                 stack: tail,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
                         StkFrame::Set(ident, cont) => {
-                            let mut senv = senv;
                             senv.set(&ident, val, env);
-                            Step::Continue(Machine {
+                            StepOutcome::Continue(Machine {
                                 cclos: (cont, sc.env),
                                 stack: tail,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
@@ -225,6 +235,7 @@ impl Machine {
                 }
             }
 
+            // ── Bind ────────────────────────────────────────────
             MComputation::Bind { comp: inner, cont } => {
                 let inner = *inner;
                 let cont = *cont;
@@ -236,26 +247,24 @@ impl Machine {
                 match inner_ret {
                     Some(v) => {
                         let new_env = env.extend_val(heap, v, env);
-                        Step::Continue(Machine {
+                        StepOutcome::Continue(Machine {
                             cclos: (cont, new_env),
                             stack,
-                            lenv,
-                            senv,
                             done: false,
                         })
                     }
                     None => {
                         let new_stack = stack.push(heap, StkFrame::To(cont), env);
-                        Step::Continue(Machine {
+                        StepOutcome::Continue(Machine {
                             cclos: (inner, env),
                             stack: new_stack,
-                            lenv,
-                            senv,
                             done: false,
                         })
                     }
                 }
             }
+
+            // ── Need ────────────────────────────────────────────
             MComputation::Need { comp: inner, cont } => {
                 let inner = *inner;
                 let cont = *cont;
@@ -267,189 +276,163 @@ impl Machine {
                 match inner_ret {
                     Some(v) => {
                         let new_env = env.extend_val(heap, v, env);
-                        Step::Continue(Machine {
+                        StepOutcome::Continue(Machine {
                             cclos: (cont, new_env),
                             stack,
-                            lenv,
-                            senv,
                             done: false,
                         })
                     }
                     None => {
-                        let mut senv = senv;
                         let ident = senv.fresh((inner, env));
                         let new_env = env.extend_susp(heap, ident);
-                        Step::Continue(Machine {
+                        StepOutcome::Continue(Machine {
                             cclos: (cont, new_env),
                             stack,
-                            lenv,
-                            senv,
                             done: false,
                         })
                     }
                 }
             }
 
+            // ── Lambda ──────────────────────────────────────────
+            MComputation::Lambda { body } => {
+                let body = *body;
+                match heap.stack_inner(stack) {
+                    StackInner::Cons(sc, tail) => match sc.frame {
+                        StkFrame::Value(arg) => {
+                            let new_env = env.extend_val(heap, arg, sc.env);
+                            StepOutcome::Continue(Machine {
+                                cclos: (body, new_env),
+                                stack: tail,
+                                done: false,
+                            })
+                        }
+                        _ => panic!("lambda but no value on the stack"),
+                    },
+                    StackInner::Nil => panic!("lambda met with empty stack"),
+                }
+            }
+
+            // ── App ─────────────────────────────────────────────
+            MComputation::App { op, arg } => {
+                let op = *op;
+                let arg = *arg;
+                let new_stack = stack.push(heap, StkFrame::Value(arg), env);
+                StepOutcome::Continue(Machine {
+                    cclos: (op, env),
+                    stack: new_stack,
+                    done: false,
+                })
+            }
+
+            // ── Choice ──────────────────────────────────────────
+            MComputation::Choice(choices) => {
+                let choices: SmallVec<[CompId; 4]> = choices.iter().copied().collect();
+                let n = choices.len();
+                if n == 0 {
+                    return StepOutcome::Failed;
+                }
+                if n == 1 {
+                    return StepOutcome::Continue(Machine {
+                        cclos: (choices[0], env),
+                        stack,
+                        done: false,
+                    });
+                }
+                let mut alternatives = Vec::with_capacity(n);
+                for c in choices.iter() {
+                    let m = Machine {
+                        cclos: (*c, env),
+                        stack,
+                        done: false,
+                    };
+                    alternatives.push(BranchAlternative {
+                        machine: m,
+                        lenv: lenv.clone(),
+                        senv: senv.clone(),
+                    });
+                }
+                StepOutcome::Fork(alternatives)
+            }
+
+            // ── Exists ──────────────────────────────────────────
+            MComputation::Exists { ptype, body } => {
+                let ptype = ptype.clone();
+                let body = *body;
+                let ident = lenv.fresh(ptype);
+                let new_env = env.extend_lvar(heap, ident);
+                StepOutcome::Continue(Machine {
+                    cclos: (body, new_env),
+                    stack,
+                    done: false,
+                })
+            }
+
+            // ── Equate ──────────────────────────────────────────
+            MComputation::Equate { lhs, rhs, body } => {
+                let lhs = *lhs;
+                let rhs = *rhs;
+                let body = *body;
+                match unify(cfg, heap, lhs, rhs, env, lenv, senv) {
+                    Ok(()) => StepOutcome::Continue(Machine {
+                        cclos: (body, env),
+                        stack,
+                        done: false,
+                    }),
+                    Err(UnifyError::Susp(a)) => {
+                        StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a))
+                    }
+                    Err(_) => StepOutcome::Failed,
+                }
+            }
+
+            // ── Force ───────────────────────────────────────────
             MComputation::Force(v) => {
                 let v = *v;
                 let vclos = VClosure::Clos { val: v, env };
-                match vclos.close_head(heap, &lenv, &senv) {
+                match vclos.close_head(heap, lenv, senv) {
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
-                        MValue::Thunk(t) => Step::Continue(Machine {
+                        MValue::Thunk(t) => StepOutcome::Continue(Machine {
                             cclos: (t, cenv),
                             stack,
-                            lenv,
-                            senv,
                             done: false,
                         }),
                         _ => panic!("forcing a non-thunk value"),
                     },
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
-                    Err(a) => reschedule(heap, lenv, senv, stack, comp_id, env, a),
+                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
                 }
             }
 
-            MComputation::Lambda { body } => {
-                let body = *body;
-                match heap.stack_inner(stack) {
-                    StackInner::Cons(sc, tail) => {
-                        if let StkFrame::Value(val) = sc.frame {
-                            let new_env = env.extend_val(heap, val, sc.env);
-                            Step::Continue(Machine {
-                                cclos: (body, new_env),
-                                stack: tail,
-                                lenv,
-                                senv,
-                                done: false,
-                            })
-                        } else {
-                            panic!("lambda but no value on the stack")
-                        }
-                    }
-                    StackInner::Nil => panic!("lambda met with empty stack"),
-                }
-            }
-
-            MComputation::App { op, arg } => {
-                let op = *op;
-                let arg = *arg;
-                let new_stack = stack.push(heap, StkFrame::Value(arg), env);
-                Step::Continue(Machine {
-                    cclos: (op, env),
-                    stack: new_stack,
-                    lenv,
-                    senv,
-                    done: false,
-                })
-            }
-
-            MComputation::Choice(choices) => {
-                let choices: SmallVec<[CompId; 4]> = choices.iter().copied().collect();
-                let n = choices.len();
-                if n == 0 {
-                    return Step::Fail;
-                }
-                if n == 1 {
-                    return Step::Continue(Machine {
-                        cclos: (choices[0], env),
-                        stack,
-                        lenv,
-                        senv,
-                        done: false,
-                    });
-                }
-                let mut result = SmallVec::with_capacity(n);
-                for (i, c) in choices.iter().enumerate() {
-                    if i < n - 1 {
-                        result.push(Machine {
-                            cclos: (*c, env),
-                            stack,
-                            lenv: lenv.clone(),
-                            senv: senv.clone(),
-                            done: false,
-                        });
-                    } else {
-                        result.push(Machine {
-                            cclos: (*c, env),
-                            stack,
-                            lenv,
-                            senv,
-                            done: false,
-                        });
-                        break;
-                    }
-                }
-                Step::Branch(result)
-            }
-
-            MComputation::Exists { ptype, body } => {
-                let ptype = ptype.clone();
-                let body = *body;
-                let mut lenv = lenv;
-                let ident = lenv.fresh(ptype);
-                let new_env = env.extend_lvar(heap, ident);
-                Step::Continue(Machine {
-                    cclos: (body, new_env),
-                    stack,
-                    lenv,
-                    senv,
-                    done: false,
-                })
-            }
-
-            MComputation::Equate { lhs, rhs, body } => {
-                let lhs = *lhs;
-                let rhs = *rhs;
-                let body = *body;
-                let mut lenv = lenv;
-                match unify(cfg, heap, lhs, rhs, env, &mut lenv, &senv) {
-                    Ok(()) => Step::Continue(Machine {
-                        cclos: (body, env),
-                        stack,
-                        lenv,
-                        senv,
-                        done: false,
-                    }),
-                    // Suspension needs to be evaluated!
-                    Err(UnifyError::Susp(a)) => reschedule(heap, lenv, senv, stack, comp_id, env, a),
-                    Err(_) => Step::Fail,
-                }
-            }
-
+            // ── Ifz ─────────────────────────────────────────────
             MComputation::Ifz { num, zk, sk } => {
                 let num = *num;
                 let zk = *zk;
                 let sk = *sk;
                 let vclos = VClosure::mk_clos(num, env);
-                match vclos.close_head(heap, &lenv, &senv) {
-                    Err(a) => reschedule(heap, lenv, senv, stack, comp_id, env, a),
+                match vclos.close_head(heap, lenv, senv) {
+                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
-                        MValue::Zero | MValue::Nat(0) => Step::Continue(Machine {
+                        MValue::Zero | MValue::Nat(0) => StepOutcome::Continue(Machine {
                             cclos: (zk, env),
                             stack,
-                            lenv,
-                            senv,
                             done: false,
                         }),
-                        MValue::Nat(n) => {
-                            let pred = heap.alloc_val(MValue::Nat(n - 1));
-                            let new_env = env.extend_val(heap, pred, cenv);
-                            Step::Continue(Machine {
+                        MValue::Succ(v) => {
+                            let new_env = env.extend_val(heap, v, cenv);
+                            StepOutcome::Continue(Machine {
                                 cclos: (sk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
-                        MValue::Succ(v) => {
+                        MValue::Nat(n) if n > 0 => {
+                            let v = heap.alloc_val(MValue::Nat(n - 1));
                             let new_env = env.extend_val(heap, v, cenv);
-                            Step::Continue(Machine {
+                            StepOutcome::Continue(Machine {
                                 cclos: (sk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
@@ -458,73 +441,73 @@ impl Machine {
                     Ok(VClosure::LogicVar { ident }) => {
                         let empty = Env::empty(heap);
                         let zero_val = heap.alloc_val(MValue::Nat(0));
-                        let m_zero = {
-                            let mut lenv = lenv.clone();
-                            lenv.set_vclos(
-                                ident,
-                                VClosure::Clos {
-                                    val: zero_val,
-                                    env: empty,
-                                },
-                            );
-                            Machine {
+                        let (m_zero, lenv_z) = {
+                            let mut lz = lenv.clone();
+                            lz.set_vclos(ident, VClosure::Clos {
+                                val: zero_val,
+                                env: empty,
+                            });
+                            let m = Machine {
                                 cclos: (zk, env),
                                 stack,
-                                lenv,
-                                senv: senv.clone(),
                                 done: false,
-                            }
+                            };
+                            (m, lz)
                         };
-                        let m_succ = {
-                            let mut lenv = lenv;
-                            let fresh = lenv.fresh(ValueType::Nat);
+                        let (m_succ, lenv_s) = {
+                            let mut ls = lenv.clone();
+                            let fresh = ls.fresh(ValueType::Nat);
                             let var0 = heap.alloc_val(MValue::Var(0));
                             let succ_val = heap.alloc_val(MValue::Succ(var0));
                             let clos_env = empty.extend_lvar(heap, fresh);
-                            lenv.set_vclos(
-                                ident,
-                                VClosure::Clos {
-                                    val: succ_val,
-                                    env: clos_env,
-                                },
-                            );
+                            ls.set_vclos(ident, VClosure::Clos {
+                                val: succ_val,
+                                env: clos_env,
+                            });
                             let new_env = env.extend_lvar(heap, fresh);
-                            Machine {
+                            let m = Machine {
                                 cclos: (sk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
-                            }
+                            };
+                            (m, ls)
                         };
-                        Step::Branch(smallvec![m_zero, m_succ])
+                        StepOutcome::Fork(vec![
+                            BranchAlternative {
+                                machine: m_zero,
+                                lenv: lenv_z,
+                                senv: senv.clone(),
+                            },
+                            BranchAlternative {
+                                machine: m_succ,
+                                lenv: lenv_s,
+                                senv: senv.clone(),
+                            },
+                        ])
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
             }
 
+            // ── Match ───────────────────────────────────────────
             MComputation::Match { list, nilk, consk } => {
                 let list = *list;
                 let nilk = *nilk;
                 let consk = *consk;
                 let vclos = VClosure::mk_clos(list, env);
-                match vclos.close_head(heap, &lenv, &senv) {
-                    Err(a) => reschedule(heap, lenv, senv, stack, comp_id, env, a),
+                match vclos.close_head(heap, lenv, senv) {
+                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
-                        MValue::Nil => Step::Continue(Machine {
+                        MValue::Nil => StepOutcome::Continue(Machine {
                             cclos: (nilk, env),
                             stack,
-                            lenv,
-                            senv,
                             done: false,
                         }),
                         MValue::Cons(v, w) => {
                             let new_env = env.extend_val(heap, v, cenv).extend_val(heap, w, cenv);
-                            Step::Continue(Machine {
+                            StepOutcome::Continue(Machine {
                                 cclos: (consk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
@@ -537,66 +520,72 @@ impl Machine {
                         };
                         let empty = Env::empty(heap);
                         let nil_val = heap.alloc_val(MValue::Nil);
-                        let m_nil = {
-                            let mut lenv = lenv.clone();
-                            lenv.set_vclos(ident, VClosure::mk_clos(nil_val, empty));
-                            Machine {
+                        let (m_nil, lenv_n) = {
+                            let mut ln = lenv.clone();
+                            ln.set_vclos(ident, VClosure::mk_clos(nil_val, empty));
+                            let m = Machine {
                                 cclos: (nilk, env),
                                 stack,
-                                lenv,
-                                senv: senv.clone(),
                                 done: false,
-                            }
+                            };
+                            (m, ln)
                         };
-                        let m_cons = {
-                            let mut lenv = lenv;
-                            let head = lenv.fresh(*ptype.clone());
-                            let tail = lenv.fresh(ValueType::List(ptype));
+                        let (m_cons, lenv_c) = {
+                            let mut lc = lenv.clone();
+                            let head = lc.fresh(*ptype.clone());
+                            let tail = lc.fresh(ValueType::List(ptype));
                             let var1 = heap.alloc_val(MValue::Var(1));
                             let var0 = heap.alloc_val(MValue::Var(0));
                             let cons_val = heap.alloc_val(MValue::Cons(var1, var0));
                             let clos_env = empty.extend_lvar(heap, head).extend_lvar(heap, tail);
-                            lenv.set_vclos(ident, VClosure::mk_clos(cons_val, clos_env));
+                            lc.set_vclos(ident, VClosure::mk_clos(cons_val, clos_env));
                             let new_env = env.extend_lvar(heap, head).extend_lvar(heap, tail);
-                            Machine {
+                            let m = Machine {
                                 cclos: (consk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
-                            }
+                            };
+                            (m, lc)
                         };
-                        Step::Branch(smallvec![m_nil, m_cons])
+                        StepOutcome::Fork(vec![
+                            BranchAlternative {
+                                machine: m_nil,
+                                lenv: lenv_n,
+                                senv: senv.clone(),
+                            },
+                            BranchAlternative {
+                                machine: m_cons,
+                                lenv: lenv_c,
+                                senv: senv.clone(),
+                            },
+                        ])
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
             }
 
+            // ── Case ────────────────────────────────────────────
             MComputation::Case { sum, inlk, inrk } => {
                 let sum = *sum;
                 let inlk = *inlk;
                 let inrk = *inrk;
                 let vclos = VClosure::mk_clos(sum, env);
-                match vclos.close_head(heap, &lenv, &senv) {
-                    Err(a) => reschedule(heap, lenv, senv, stack, comp_id, env, a),
+                match vclos.close_head(heap, lenv, senv) {
+                    Err(a) => StepOutcome::Continue(reschedule(heap, stack, comp_id, env, a)),
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Inl(v) => {
                             let new_env = env.extend_val(heap, v, cenv);
-                            Step::Continue(Machine {
+                            StepOutcome::Continue(Machine {
                                 cclos: (inlk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
                         MValue::Inr(v) => {
                             let new_env = env.extend_val(heap, v, cenv);
-                            Step::Continue(Machine {
+                            StepOutcome::Continue(Machine {
                                 cclos: (inrk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
                             })
                         }
@@ -608,56 +597,65 @@ impl Machine {
                             _ => panic!("casing on a non-sum logic variable"),
                         };
                         let empty = Env::empty(heap);
-                        let m_inl = {
-                            let mut lenv = lenv.clone();
-                            let fresh = lenv.fresh(*pt1);
+                        let (m_inl, lenv_l) = {
+                            let mut ll = lenv.clone();
+                            let fresh = ll.fresh(*pt1);
                             let var0 = heap.alloc_val(MValue::Var(0));
                             let inl_val = heap.alloc_val(MValue::Inl(var0));
                             let clos_env = empty.extend_lvar(heap, fresh);
-                            lenv.set_vclos(ident, VClosure::mk_clos(inl_val, clos_env));
+                            ll.set_vclos(ident, VClosure::mk_clos(inl_val, clos_env));
                             let new_env = env.extend_lvar(heap, fresh);
-                            Machine {
+                            let m = Machine {
                                 cclos: (inlk, new_env),
                                 stack,
-                                lenv,
-                                senv: senv.clone(),
                                 done: false,
-                            }
+                            };
+                            (m, ll)
                         };
-                        let m_inr = {
-                            let mut lenv = lenv;
-                            let fresh = lenv.fresh(*pt2);
+                        let (m_inr, lenv_r) = {
+                            let mut lr = lenv.clone();
+                            let fresh = lr.fresh(*pt2);
                             let var0 = heap.alloc_val(MValue::Var(0));
                             let inr_val = heap.alloc_val(MValue::Inr(var0));
                             let clos_env = empty.extend_lvar(heap, fresh);
-                            lenv.set_vclos(ident, VClosure::mk_clos(inr_val, clos_env));
+                            lr.set_vclos(ident, VClosure::mk_clos(inr_val, clos_env));
                             let new_env = env.extend_lvar(heap, fresh);
-                            Machine {
+                            let m = Machine {
                                 cclos: (inrk, new_env),
                                 stack,
-                                lenv,
-                                senv,
                                 done: false,
-                            }
+                            };
+                            (m, lr)
                         };
-                        Step::Branch(smallvec![m_inl, m_inr])
+                        StepOutcome::Fork(vec![
+                            BranchAlternative {
+                                machine: m_inl,
+                                lenv: lenv_l,
+                                senv: senv.clone(),
+                            },
+                            BranchAlternative {
+                                machine: m_inr,
+                                lenv: lenv_r,
+                                senv: senv.clone(),
+                            },
+                        ])
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
             }
 
+            // ── Rec ─────────────────────────────────────────────
             MComputation::Rec { body } => {
                 let body = *body;
                 let thunk_val = heap.alloc_thunk(comp_id);
                 let new_env = env.extend_val(heap, thunk_val, env);
-                Step::Continue(Machine {
+                StepOutcome::Continue(Machine {
                     cclos: (body, new_env),
                     stack,
-                    lenv,
-                    senv,
                     done: false,
                 })
             }
         }
     }
 }
+
