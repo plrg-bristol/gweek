@@ -1,25 +1,26 @@
 //! # The suspension environment
 //!
 //! [`SuspEnv`] holds *suspensions* — `let`-bound computations that have not yet run.
-//! Each entry is one of three states: [`SuspState::Suspended`] (a frozen computation),
-//! [`SuspState::Running`] (currently being forced by a thread), or [`SuspState::Done`]
+//! Each entry is one of three states: [`SuspState::Susp`] (a frozen computation),
+//! [`SuspState::Run`] (currently being forced by a thread), or [`SuspState::Done`]
 //! (fully evaluated and memoized). Entries sit behind an `Rc`, so backtracking clones
 //! them copy-on-write. The signal that matters is [`lookup`](SuspEnv::lookup): it returns
 //! the value, or an [`SuspAt`] meaning *not yet — force it and come back*.
 
 use std::rc::Rc;
 
+use super::branch::MachineId;
 use super::env::Env;
-use super::heap::{CompId, Heap};
+use super::heap::Heap;
 use super::{CClosure, NodeId, SuspId, VClosure};
 
 /// The three states a suspension can be in.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SuspState {
     /// Not yet evaluated — the frozen computation.
-    Suspended(CClosure),
-    /// Currently being evaluated by some thread.
-    Running(CClosure),
+    Susp(CClosure),
+    /// Currently being evaluated by a thread, which owns it.
+    Run(MachineId, CClosure),
     /// Evaluation complete, value memoized.
     Done(VClosure),
 }
@@ -33,17 +34,6 @@ pub struct SuspEnv {
 #[derive(Clone, Copy, Debug)]
 pub struct SuspAt {
     pub ident: SuspId,
-    pub cclos: CClosure,
-}
-
-impl SuspAt {
-    pub fn comp(&self) -> CompId {
-        self.cclos.0
-    }
-
-    pub fn env(&self) -> Env {
-        self.cclos.1
-    }
 }
 
 impl SuspEnv {
@@ -57,16 +47,15 @@ impl SuspEnv {
     pub fn fresh(&mut self, cclos: CClosure) -> SuspId {
         let entries = Rc::make_mut(&mut self.entries);
         let next = entries.len();
-        entries.push(SuspState::Suspended(cclos));
+        entries.push(SuspState::Susp(cclos));
         SuspId(next)
     }
 
     pub fn lookup(&self, ident: &SuspId) -> Result<VClosure, SuspAt> {
         match &self.entries[ident.0] {
             SuspState::Done(vclos) => Ok(*vclos),
-            SuspState::Suspended(cclos) | SuspState::Running(cclos) => Err(SuspAt {
+            SuspState::Susp(_) | SuspState::Run(_, _) => Err(SuspAt {
                 ident: *ident,
-                cclos: *cclos,
             }),
         }
     }
@@ -85,36 +74,38 @@ impl SuspEnv {
         self.entries[ident.0]
     }
 
-    /// Get the CClosure for a suspension that is not yet done.
+    /// Get the CClosure for a suspension that is in Susp state.
     pub fn get_suspension(&self, ident: SuspId) -> CClosure {
         match &self.entries[ident.0] {
-            SuspState::Suspended(cclos) | SuspState::Running(cclos) => *cclos,
+            SuspState::Susp(cclos) => *cclos,
+            SuspState::Run(mid, _) => panic!("get_suspension on running entry {mid:?}"),
             SuspState::Done(_) => panic!("get_suspension on done entry"),
         }
     }
 
-    /// Reset a Running suspension back to Suspended (used when forking branches).
-    pub fn reset_to_suspended(&mut self, ident: SuspId, cclos: CClosure) {
+    /// Reset a Run suspension back to Susp (used when forking branches).
+    pub fn reset_to_suspended(&mut self, ident: SuspId) {
         let entries = Rc::make_mut(&mut self.entries);
-        entries[ident.0] = SuspState::Suspended(cclos);
+        if let SuspState::Run(_, cclos) = entries[ident.0] {
+            entries[ident.0] = SuspState::Susp(cclos);
+        }
     }
 
     /// Mark a suspension as running (being evaluated by a thread).
-    pub fn mark_running(&mut self, ident: SuspId) {
+    pub fn mark_running(&mut self, ident: SuspId, mid: MachineId) {
         let entries = Rc::make_mut(&mut self.entries);
-        if let SuspState::Suspended(cclos) = entries[ident.0] {
-            entries[ident.0] = SuspState::Running(cclos);
+        if let SuspState::Susp(cclos) = entries[ident.0] {
+            entries[ident.0] = SuspState::Run(mid, cclos);
         }
     }
 
     pub fn next(&mut self) -> Option<SuspAt> {
         while self.next_pending < self.entries.len() {
             match &self.entries[self.next_pending] {
-                SuspState::Done(_) | SuspState::Running(_) => self.next_pending += 1,
-                SuspState::Suspended(cclos) => {
+                SuspState::Done(_) | SuspState::Run(_, _) => self.next_pending += 1,
+                SuspState::Susp(_) => {
                     return Some(SuspAt {
                         ident: SuspId(self.next_pending),
-                        cclos: *cclos,
                     })
                 }
             }
@@ -125,6 +116,11 @@ impl SuspEnv {
     /// Returns true when all entries are done (no pending or running suspensions).
     pub fn all_done(&self) -> bool {
         self.entries.iter().all(|e| matches!(e, SuspState::Done(_)))
+    }
+
+    /// Iterate over all suspensions for invariant checking.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (SuspId, SuspState)> + '_ {
+        self.entries.iter().enumerate().map(|(i, s)| (SuspId(i), *s))
     }
 
     /// Identity of the shared store, so a collection can rebuild each distinct
@@ -140,7 +136,10 @@ impl SuspEnv {
         for entry in entries.iter_mut() {
             match entry {
                 SuspState::Done(vc) => *vc = (*vc).forward(heap),
-                SuspState::Suspended((_, env)) | SuspState::Running((_, env)) => {
+                SuspState::Susp((_, env)) => {
+                    *env = heap.forward_env(*env)
+                }
+                SuspState::Run(_, (_, env)) => {
                     *env = heap.forward_env(*env)
                 }
             }
@@ -151,3 +150,4 @@ impl SuspEnv {
         }
     }
 }
+

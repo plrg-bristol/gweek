@@ -17,11 +17,11 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use super::branch::BranchAlternative;
+use super::branch::Alt;
 use super::config::Config;
 use super::heap::{CompId, Heap};
 use super::lvar::LogicEnv;
-use super::senv::{SuspAt, SuspEnv, SuspState};
+use super::senv::{SuspEnv, SuspState};
 use super::mterms::{MComputation, MValue};
 use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
@@ -37,18 +37,17 @@ pub(crate) enum StkFrame {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StkClosure {
-    pub(crate) frame: StkFrame,
-    pub(crate) env: Env,
-}
-
-#[derive(Clone, Copy)]
 pub(crate) enum StackInner {
     Nil,
     Cons(StkClosure, Stack),
 }
 
-/// Persistent cons-list stack of heap cells. Clone/Copy is O(1).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StkClosure {
+    pub frame: StkFrame,
+    pub env: Env,
+}
+
 #[derive(Clone, Copy)]
 pub struct Stack(pub(crate) NodeId);
 
@@ -74,8 +73,8 @@ impl Stack {
 pub struct Machine {
     pub cclos: CClosure,
     pub stack: Stack,
-    pub done: bool,
 }
+
 
 // ── Clock ──────────────────────────────────────────────────────────
 
@@ -98,114 +97,73 @@ impl Clock {
     }
 }
 
-// ── Step outcome ───────────────────────────────────────────────────
+// ── Event ──────────────────────────────────────────────────────────
 
-/// Outcome of one step of a machine thread.
-#[derive(Debug)]
-pub enum StepOutcome {
-    /// Continue running the same machine on the next tick.
-    Continue(Machine),
-    /// The machine reached a Return with an empty stack (thread-level answer).
-    Returned(VClosure),
-    /// Object-language nondeterminism (Choice) or logic-variable case split.
-    /// Each alternative carries its own lenv/senv clone.
-    Fork(Vec<BranchAlternative>),
-    /// The machine tried to inspect a suspension that is not yet done.
-    /// (Used in Phase 3+; Phase 1–2 use inline reschedule via Continue.)
-    BlockedOn {
-        susp: SuspAt,
-        resume: Machine,
-    },
-    /// Continue with an obligation registered (Need creates a concurrent obligation).
-    ContinueWithObligation {
-        machine: Machine,
-        obligation: SuspId,
-    },
+/// Events that a Machine can emit after running deterministic steps.
+pub(crate) enum Event {
+    /// The machine reached a value with an empty stack.
+    Ret(VClosure),
     /// The machine failed (e.g. unification failure, empty Choice).
-    Failed,
-    /// The heap is over its watermark and wants collection.
-    NeedGc(Machine),
+    Fail,
+    /// Object-language nondeterminism (Choice) or logic-variable case split.
+    Split(Vec<Alt>),
+    /// A need-obligation has been registered (fresh suspension created or
+    /// existing suspended suspension encountered).
+    Need(SuspId),
+    /// The machine is blocked waiting for a suspension to complete.
+    Wait(SuspId),
+    /// The heap nursery is full and wants collection.
+    Gc,
     /// The deadline elapsed mid-computation.
-    TimedOut,
+    Timeout,
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
-
-
-fn handle_suspension(
-    heap: &mut Heap,
-    senv: &mut SuspEnv,
-    stack: Stack,
-    comp_id: CompId,
-    env: Env,
-    a: SuspAt,
-) -> StepOutcome {
-    match senv.get(a.ident) {
-        SuspState::Suspended(_) => {
-            senv.mark_running(a.ident);
-            let _new_stack = stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-            StepOutcome::Continue(Machine {
-                cclos: a.cclos,
-                stack: _new_stack,
-                done: false,
-            })
-        }
-        SuspState::Running(_) => StepOutcome::BlockedOn {
-            susp: a,
-            resume: Machine { cclos: (comp_id, env), stack, done: false },
-        },
-        SuspState::Done(_) => unreachable!("handle_suspension on Done suspension"),
-    }
-}
-// ── run_to_event ───────────────────────────────────────────────────
+// ── run ─────────────────────────────────────────────────────────────
 
 impl Machine {
     /// Run deterministic steps in a tight loop, returning at the next
     /// significant event (branch point, completion, block, timeout, or GC).
-    pub fn run_to_event(
-        mut self,
-        cfg: &Config,
+    pub(crate) fn run(
+        &mut self,
         heap: &mut Heap,
         lenv: &mut LogicEnv,
         senv: &mut SuspEnv,
+        cfg: &Config,
         deadline: Instant,
-    ) -> StepOutcome {
+    ) -> Event {
         let mut clock = Clock::new(deadline);
         loop {
             if clock.expired() {
-                return StepOutcome::TimedOut;
+                return Event::Timeout;
             }
             if heap.nursery_full() {
-                return StepOutcome::NeedGc(self);
+                return Event::Gc;
             }
             match self.step(cfg, heap, lenv, senv) {
-                StepOutcome::Continue(m) => self = m,
-                other => return other,
+                None => {} // continue — self already updated
+                Some(event) => return event,
             }
         }
     }
 
     fn step(
-        self,
+        &mut self,
         cfg: &Config,
         heap: &mut Heap,
         lenv: &mut LogicEnv,
         senv: &mut SuspEnv,
-    ) -> StepOutcome {
-        let Machine {
-            cclos: (comp_id, env),
-            stack,
-            done: _,
-        } = self;
+    ) -> Option<Event> {
+        let (comp_id, env) = self.cclos;
 
         match heap.comp(comp_id) {
+
+
             // ── Return ──────────────────────────────────────────
             MComputation::Return(val) => {
                 let val = *val;
-                match heap.stack_inner(stack) {
+                match heap.stack_inner(self.stack) {
                     StackInner::Nil => {
-                        StepOutcome::Returned(VClosure::mk_clos(val, env))
+                        return Some(Event::Ret(VClosure::mk_clos(val, env)));
                     }
                     StackInner::Cons(sc, tail) => match sc.frame {
                         StkFrame::Value(_) => {
@@ -213,19 +171,15 @@ impl Machine {
                         }
                         StkFrame::To(cont) => {
                             let new_env = sc.env.extend_val(heap, val, env);
-                            StepOutcome::Continue(Machine {
-                                cclos: (cont, new_env),
-                                stack: tail,
-                                done: false,
-                            })
+                            self.cclos = (cont, new_env);
+                            self.stack = tail;
+                            None
                         }
                         StkFrame::Set(sid, cont) => {
                             senv.set(&sid, val, env);
-                            StepOutcome::Continue(Machine {
-                                cclos: (cont, sc.env),
-                                stack: tail,
-                                done: false,
-                            })
+                            self.cclos = (cont, sc.env);
+                            self.stack = tail;
+                            None
                         }
                     },
                 }
@@ -243,19 +197,14 @@ impl Machine {
                 match inner_ret {
                     Some(v) => {
                         let new_env = env.extend_val(heap, v, env);
-                        StepOutcome::Continue(Machine {
-                            cclos: (cont, new_env),
-                            stack,
-                            done: false,
-                        })
+                        self.cclos = (cont, new_env);
+                        None
                     }
                     None => {
-                        let new_stack = stack.push(heap, StkFrame::To(cont), env);
-                        StepOutcome::Continue(Machine {
-                            cclos: (inner, env),
-                            stack: new_stack,
-                            done: false,
-                        })
+                        let new_stack = self.stack.push(heap, StkFrame::To(cont), env);
+                        self.cclos = (inner, env);
+                        self.stack = new_stack;
+                        None
                     }
                 }
             }
@@ -272,39 +221,29 @@ impl Machine {
                 match inner_ret {
                     Some(v) => {
                         let new_env = env.extend_val(heap, v, env);
-                        StepOutcome::Continue(Machine {
-                            cclos: (cont, new_env),
-                            stack,
-                            done: false,
-                        })
+                        self.cclos = (cont, new_env);
+                        None
                     }
                     None => {
                         let ident = senv.fresh((inner, env));
                         let new_env = env.extend_susp(heap, ident);
-                        StepOutcome::ContinueWithObligation {
-                            machine: Machine {
-                                cclos: (cont, new_env),
-                                stack,
-                                done: false,
-                            },
-                            obligation: ident,
-                        }
+                        self.cclos = (cont, new_env);
+                        return Some(Event::Need(ident));
                     }
                 }
             }
 
+
             // ── Lambda ──────────────────────────────────────────
             MComputation::Lambda { body } => {
                 let body = *body;
-                match heap.stack_inner(stack) {
+                match heap.stack_inner(self.stack) {
                     StackInner::Cons(sc, tail) => match sc.frame {
                         StkFrame::Value(arg) => {
                             let new_env = env.extend_val(heap, arg, sc.env);
-                            StepOutcome::Continue(Machine {
-                                cclos: (body, new_env),
-                                stack: tail,
-                                done: false,
-                            })
+                            self.cclos = (body, new_env);
+                            self.stack = tail;
+                            None
                         }
                         _ => panic!("lambda but no value on the stack"),
                     },
@@ -316,12 +255,10 @@ impl Machine {
             MComputation::App { op, arg } => {
                 let op = *op;
                 let arg = *arg;
-                let new_stack = stack.push(heap, StkFrame::Value(arg), env);
-                StepOutcome::Continue(Machine {
-                    cclos: (op, env),
-                    stack: new_stack,
-                    done: false,
-                })
+                let new_stack = self.stack.push(heap, StkFrame::Value(arg), env);
+                self.cclos = (op, env);
+                self.stack = new_stack;
+                None
             }
 
             // ── Choice ──────────────────────────────────────────
@@ -329,30 +266,27 @@ impl Machine {
                 let choices: SmallVec<[CompId; 4]> = choices.iter().copied().collect();
                 let n = choices.len();
                 if n == 0 {
-                    return StepOutcome::Failed;
+                    return Some(Event::Fail);
                 }
                 if n == 1 {
-                    return StepOutcome::Continue(Machine {
-                        cclos: (choices[0], env),
-                        stack,
-                        done: false,
-                    });
+                    self.cclos = (choices[0], env);
+                    return None;
                 }
                 let mut alternatives = Vec::with_capacity(n);
                 for c in choices.iter() {
                     let m = Machine {
                         cclos: (*c, env),
-                        stack,
-                        done: false,
+                        stack: self.stack,
                     };
-                    alternatives.push(BranchAlternative {
+                    alternatives.push(Alt {
                         machine: m,
                         lenv: lenv.clone(),
                         senv: senv.clone(),
                     });
                 }
-                StepOutcome::Fork(alternatives)
+                return Some(Event::Split(alternatives));
             }
+
 
             // ── Exists ──────────────────────────────────────────
             MComputation::Exists { ptype, body } => {
@@ -360,11 +294,8 @@ impl Machine {
                 let body = *body;
                 let ident = lenv.fresh(ptype);
                 let new_env = env.extend_lvar(heap, ident);
-                StepOutcome::Continue(Machine {
-                    cclos: (body, new_env),
-                    stack,
-                    done: false,
-                })
+                self.cclos = (body, new_env);
+                None
             }
 
             // ── Equate ──────────────────────────────────────────
@@ -373,15 +304,26 @@ impl Machine {
                 let rhs = *rhs;
                 let body = *body;
                 match unify(cfg, heap, lhs, rhs, env, lenv, senv) {
-                    Ok(()) => StepOutcome::Continue(Machine {
-                        cclos: (body, env),
-                        stack,
-                        done: false,
-                    }),
-                    Err(UnifyError::Susp(a)) => {
-                        handle_suspension(heap, senv, stack, comp_id, env, a)
+                    Ok(()) => {
+                        self.cclos = (body, env);
+                        None
                     }
-                    Err(_) => StepOutcome::Failed,
+                    Err(UnifyError::Susp(a)) => {
+                        match senv.get(a.ident) {
+                            SuspState::Susp(_) => {
+                                let cclos = senv.get_suspension(a.ident);
+                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
+                                self.cclos = cclos;
+                                self.stack = new_stack;
+                                return Some(Event::Need(a.ident));
+                            }
+                            SuspState::Run(_, _) => {
+                                return Some(Event::Wait(a.ident));
+                            }
+                            SuspState::Done(_) => unreachable!("suspension already done"),
+                        }
+                    }
+                    Err(_) => return Some(Event::Fail),
                 }
             }
 
@@ -391,18 +333,32 @@ impl Machine {
                 let vclos = VClosure::Clos { val: v, env };
                 match vclos.close_head(heap, lenv, senv) {
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
-                        MValue::Thunk(t) => StepOutcome::Continue(Machine {
-                            cclos: (t, cenv),
-                            stack,
-                            done: false,
-                        }),
+                        MValue::Thunk(t) => {
+                            self.cclos = (t, cenv);
+                            None
+                        }
                         _ => panic!("forcing a non-thunk value"),
                     },
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
-                    Err(a) => handle_suspension(heap, senv, stack, comp_id, env, a),
+                    Err(a) => {
+                        match senv.get(a.ident) {
+                            SuspState::Susp(_) => {
+                                let cclos = senv.get_suspension(a.ident);
+                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
+                                self.cclos = cclos;
+                                self.stack = new_stack;
+                                return Some(Event::Need(a.ident));
+                            }
+                            SuspState::Run(_, _) => {
+                                return Some(Event::Wait(a.ident));
+                            }
+                            SuspState::Done(_) => unreachable!("suspension already done"),
+                        }
+                    }
                 }
             }
+
 
             // ── Ifz ─────────────────────────────────────────────
             MComputation::Ifz { num, zk, sk } => {
@@ -411,29 +367,36 @@ impl Machine {
                 let sk = *sk;
                 let vclos = VClosure::mk_clos(num, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => handle_suspension(heap, senv, stack, comp_id, env, a),
+                    Err(a) => {
+                        match senv.get(a.ident) {
+                            SuspState::Susp(_) => {
+                                let cclos = senv.get_suspension(a.ident);
+                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
+                                self.cclos = cclos;
+                                self.stack = new_stack;
+                                return Some(Event::Need(a.ident));
+                            }
+                            SuspState::Run(_, _) => {
+                                return Some(Event::Wait(a.ident));
+                            }
+                            SuspState::Done(_) => unreachable!("suspension already done"),
+                        }
+                    }
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
-                        MValue::Zero | MValue::Nat(0) => StepOutcome::Continue(Machine {
-                            cclos: (zk, env),
-                            stack,
-                            done: false,
-                        }),
+                        MValue::Zero | MValue::Nat(0) => {
+                            self.cclos = (zk, env);
+                            None
+                        }
                         MValue::Succ(v) => {
                             let new_env = env.extend_val(heap, v, cenv);
-                            StepOutcome::Continue(Machine {
-                                cclos: (sk, new_env),
-                                stack,
-                                done: false,
-                            })
+                            self.cclos = (sk, new_env);
+                            None
                         }
                         MValue::Nat(n) if n > 0 => {
                             let v = heap.alloc_val(MValue::Nat(n - 1));
                             let new_env = env.extend_val(heap, v, cenv);
-                            StepOutcome::Continue(Machine {
-                                cclos: (sk, new_env),
-                                stack,
-                                done: false,
-                            })
+                            self.cclos = (sk, new_env);
+                            None
                         }
                         other => panic!("Ifz on {:?}", other),
                     },
@@ -448,8 +411,7 @@ impl Machine {
                             });
                             let m = Machine {
                                 cclos: (zk, env),
-                                stack,
-                                done: false,
+                                stack: self.stack,
                             };
                             (m, lz)
                         };
@@ -457,36 +419,34 @@ impl Machine {
                             let mut ls = lenv.clone();
                             let fresh = ls.fresh(ValueType::Nat);
                             let var0 = heap.alloc_val(MValue::Var(0));
-                            let succ_val = heap.alloc_val(MValue::Succ(var0));
-                            let clos_env = empty.extend_lvar(heap, fresh);
                             ls.set_vclos(ident, VClosure::Clos {
-                                val: succ_val,
-                                env: clos_env,
+                                val: var0,
+                                env: empty.extend_lvar(heap, fresh),
                             });
                             let new_env = env.extend_lvar(heap, fresh);
                             let m = Machine {
                                 cclos: (sk, new_env),
-                                stack,
-                                done: false,
+                                stack: self.stack,
                             };
                             (m, ls)
                         };
-                        StepOutcome::Fork(vec![
-                            BranchAlternative {
+                        return Some(Event::Split(vec![
+                            Alt {
                                 machine: m_zero,
                                 lenv: lenv_z,
                                 senv: senv.clone(),
                             },
-                            BranchAlternative {
+                            Alt {
                                 machine: m_succ,
                                 lenv: lenv_s,
                                 senv: senv.clone(),
                             },
-                        ])
+                        ]));
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
             }
+
 
             // ── Match ───────────────────────────────────────────
             MComputation::Match { list, nilk, consk } => {
@@ -495,20 +455,30 @@ impl Machine {
                 let consk = *consk;
                 let vclos = VClosure::mk_clos(list, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => handle_suspension(heap, senv, stack, comp_id, env, a),
+                    Err(a) => {
+                        match senv.get(a.ident) {
+                            SuspState::Susp(_) => {
+                                let cclos = senv.get_suspension(a.ident);
+                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
+                                self.cclos = cclos;
+                                self.stack = new_stack;
+                                return Some(Event::Need(a.ident));
+                            }
+                            SuspState::Run(_, _) => {
+                                return Some(Event::Wait(a.ident));
+                            }
+                            SuspState::Done(_) => unreachable!("suspension already done"),
+                        }
+                    }
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
-                        MValue::Nil => StepOutcome::Continue(Machine {
-                            cclos: (nilk, env),
-                            stack,
-                            done: false,
-                        }),
+                        MValue::Nil => {
+                            self.cclos = (nilk, env);
+                            None
+                        }
                         MValue::Cons(v, w) => {
                             let new_env = env.extend_val(heap, v, cenv).extend_val(heap, w, cenv);
-                            StepOutcome::Continue(Machine {
-                                cclos: (consk, new_env),
-                                stack,
-                                done: false,
-                            })
+                            self.cclos = (consk, new_env);
+                            None
                         }
                         _ => panic!("Match on non-list"),
                     },
@@ -518,50 +488,49 @@ impl Machine {
                             _ => panic!("matching on a non-list logic variable"),
                         };
                         let empty = Env::empty(heap);
-                        let nil_val = heap.alloc_val(MValue::Nil);
                         let (m_nil, lenv_n) = {
                             let mut ln = lenv.clone();
+                            let nil_val = heap.alloc_val(MValue::Nil);
                             ln.set_vclos(ident, VClosure::mk_clos(nil_val, empty));
                             let m = Machine {
                                 cclos: (nilk, env),
-                                stack,
-                                done: false,
+                                stack: self.stack,
                             };
                             (m, ln)
                         };
                         let (m_cons, lenv_c) = {
                             let mut lc = lenv.clone();
-                            let head = lc.fresh(*ptype.clone());
-                            let tail = lc.fresh(ValueType::List(ptype));
-                            let var1 = heap.alloc_val(MValue::Var(1));
-                            let var0 = heap.alloc_val(MValue::Var(0));
-                            let cons_val = heap.alloc_val(MValue::Cons(var1, var0));
-                            let clos_env = empty.extend_lvar(heap, head).extend_lvar(heap, tail);
+                            let fresh_hd = lc.fresh((*ptype).clone());
+                            let fresh_tl = lc.fresh(ValueType::List(ptype));
+                            let var_hd = heap.alloc_val(MValue::Var(1));
+                            let var_tl = heap.alloc_val(MValue::Var(0));
+                            let cons_val = heap.alloc_val(MValue::Cons(var_hd, var_tl));
+                            let clos_env = empty.extend_lvar(heap, fresh_hd).extend_lvar(heap, fresh_tl);
                             lc.set_vclos(ident, VClosure::mk_clos(cons_val, clos_env));
-                            let new_env = env.extend_lvar(heap, head).extend_lvar(heap, tail);
+                            let new_env = env.extend_lvar(heap, fresh_hd).extend_lvar(heap, fresh_tl);
                             let m = Machine {
                                 cclos: (consk, new_env),
-                                stack,
-                                done: false,
+                                stack: self.stack,
                             };
                             (m, lc)
                         };
-                        StepOutcome::Fork(vec![
-                            BranchAlternative {
+                        return Some(Event::Split(vec![
+                            Alt {
                                 machine: m_nil,
                                 lenv: lenv_n,
                                 senv: senv.clone(),
                             },
-                            BranchAlternative {
+                            Alt {
                                 machine: m_cons,
                                 lenv: lenv_c,
                                 senv: senv.clone(),
                             },
-                        ])
+                        ]));
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
             }
+
 
             // ── Case ────────────────────────────────────────────
             MComputation::Case { sum, inlk, inrk } => {
@@ -570,23 +539,31 @@ impl Machine {
                 let inrk = *inrk;
                 let vclos = VClosure::mk_clos(sum, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => handle_suspension(heap, senv, stack, comp_id, env, a),
+                    Err(a) => {
+                        match senv.get(a.ident) {
+                            SuspState::Susp(_) => {
+                                let cclos = senv.get_suspension(a.ident);
+                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
+                                self.cclos = cclos;
+                                self.stack = new_stack;
+                                return Some(Event::Need(a.ident));
+                            }
+                            SuspState::Run(_, _) => {
+                                return Some(Event::Wait(a.ident));
+                            }
+                            SuspState::Done(_) => unreachable!("suspension already done"),
+                        }
+                    }
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Inl(v) => {
                             let new_env = env.extend_val(heap, v, cenv);
-                            StepOutcome::Continue(Machine {
-                                cclos: (inlk, new_env),
-                                stack,
-                                done: false,
-                            })
+                            self.cclos = (inlk, new_env);
+                            None
                         }
                         MValue::Inr(v) => {
                             let new_env = env.extend_val(heap, v, cenv);
-                            StepOutcome::Continue(Machine {
-                                cclos: (inrk, new_env),
-                                stack,
-                                done: false,
-                            })
+                            self.cclos = (inrk, new_env);
+                            None
                         }
                         _ => panic!("Case on non-sum"),
                     },
@@ -606,8 +583,7 @@ impl Machine {
                             let new_env = env.extend_lvar(heap, fresh);
                             let m = Machine {
                                 cclos: (inlk, new_env),
-                                stack,
-                                done: false,
+                                stack: self.stack,
                             };
                             (m, ll)
                         };
@@ -621,23 +597,22 @@ impl Machine {
                             let new_env = env.extend_lvar(heap, fresh);
                             let m = Machine {
                                 cclos: (inrk, new_env),
-                                stack,
-                                done: false,
+                                stack: self.stack,
                             };
                             (m, lr)
                         };
-                        StepOutcome::Fork(vec![
-                            BranchAlternative {
+                        return Some(Event::Split(vec![
+                            Alt {
                                 machine: m_inl,
                                 lenv: lenv_l,
                                 senv: senv.clone(),
                             },
-                            BranchAlternative {
+                            Alt {
                                 machine: m_inr,
                                 lenv: lenv_r,
                                 senv: senv.clone(),
                             },
-                        ])
+                        ]));
                     }
                     Ok(VClosure::Susp { .. }) => unreachable!(),
                 }
@@ -648,11 +623,8 @@ impl Machine {
                 let body = *body;
                 let thunk_val = heap.alloc_thunk(comp_id);
                 let new_env = env.extend_val(heap, thunk_val, env);
-                StepOutcome::Continue(Machine {
-                    cclos: (body, new_env),
-                    stack,
-                    done: false,
-                })
+                self.cclos = (body, new_env);
+                None
             }
         }
     }
