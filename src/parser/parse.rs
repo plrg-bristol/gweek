@@ -139,7 +139,7 @@ fn expression() -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
             .ignore_then(
                 keyword("strict")
                     .ignore_then(ident().map(|var| (true, var)))
-                    .or(ident().map(|var| (false, var)))
+                    .or(ident().map(|var| (false, var))),
             )
             .then_ignore(just('=').padded())
             .then(expr.clone())
@@ -147,9 +147,17 @@ fn expression() -> impl Parser<char, Expr, Error = Simple<char>> + Clone {
             .then(expr.clone())
             .map(|(((is_strict, var), val), body)| {
                 if is_strict {
-                    Expr::LetStrict { var, val: Box::new(val), body: Box::new(body) }
+                    Expr::LetStrict {
+                        var,
+                        val: Box::new(val),
+                        body: Box::new(body),
+                    }
                 } else {
-                    Expr::Let { var, val: Box::new(val), body: Box::new(body) }
+                    Expr::Let {
+                        var,
+                        val: Box::new(val),
+                        body: Box::new(body),
+                    }
                 }
             });
         let exists = keyword("exists")

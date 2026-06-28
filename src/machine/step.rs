@@ -21,8 +21,8 @@ use super::branch::Alt;
 use super::config::Config;
 use super::heap::{CompId, Heap};
 use super::lvar::LogicEnv;
-use super::senv::{SuspEnv, SuspState};
 use super::mterms::{MComputation, MValue};
+use super::senv::{SuspEnv, SuspState};
 use super::unify::{unify, UnifyError};
 use super::value_type::ValueType;
 use super::{CClosure, Env, NodeId, SuspId, VClosure};
@@ -33,7 +33,6 @@ use super::{CClosure, Env, NodeId, SuspId, VClosure};
 pub(crate) enum StkFrame {
     Value(NodeId),
     To(CompId),
-    Set(SuspId, CompId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -75,7 +74,6 @@ pub struct Machine {
     pub stack: Stack,
 }
 
-
 // ── Clock ──────────────────────────────────────────────────────────
 
 /// Polls a deadline cheaply from a hot loop.
@@ -107,8 +105,7 @@ pub(crate) enum Event {
     Fail,
     /// Object-language nondeterminism (Choice) or logic-variable case split.
     Split(Vec<Alt>),
-    /// A need-obligation has been registered (fresh suspension created or
-    /// existing suspended suspension encountered).
+    /// A need-obligation has been created (fresh suspension registered).
     Need(SuspId),
     /// The machine is blocked waiting for a suspension to complete.
     Wait(SuspId),
@@ -156,8 +153,6 @@ impl Machine {
         let (comp_id, env) = self.cclos;
 
         match heap.comp(comp_id) {
-
-
             // ── Return ──────────────────────────────────────────
             MComputation::Return(val) => {
                 let val = *val;
@@ -172,12 +167,6 @@ impl Machine {
                         StkFrame::To(cont) => {
                             let new_env = sc.env.extend_val(heap, val, env);
                             self.cclos = (cont, new_env);
-                            self.stack = tail;
-                            None
-                        }
-                        StkFrame::Set(sid, cont) => {
-                            senv.set(&sid, val, env);
-                            self.cclos = (cont, sc.env);
                             self.stack = tail;
                             None
                         }
@@ -233,7 +222,6 @@ impl Machine {
                 }
             }
 
-
             // ── Lambda ──────────────────────────────────────────
             MComputation::Lambda { body } => {
                 let body = *body;
@@ -287,7 +275,6 @@ impl Machine {
                 return Some(Event::Split(alternatives));
             }
 
-
             // ── Exists ──────────────────────────────────────────
             MComputation::Exists { ptype, body } => {
                 let ptype = ptype.clone();
@@ -308,21 +295,15 @@ impl Machine {
                         self.cclos = (body, env);
                         None
                     }
-                    Err(UnifyError::Susp(a)) => {
-                        match senv.get(a.ident) {
-                            SuspState::Susp(_) => {
-                                let cclos = senv.get_suspension(a.ident);
-                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-                                self.cclos = cclos;
-                                self.stack = new_stack;
-                                return Some(Event::Need(a.ident));
-                            }
-                            SuspState::Run(_, _) => {
-                                return Some(Event::Wait(a.ident));
-                            }
-                            SuspState::Done(_) => unreachable!("suspension already done"),
+                    Err(UnifyError::Susp(a)) => match senv.get(a.ident) {
+                        SuspState::Susp(_) => {
+                            return Some(Event::Wait(a.ident));
                         }
-                    }
+                        SuspState::Run(_) => {
+                            return Some(Event::Wait(a.ident));
+                        }
+                        SuspState::Done(_) => unreachable!("suspension already done"),
+                    },
                     Err(_) => return Some(Event::Fail),
                 }
             }
@@ -341,24 +322,17 @@ impl Machine {
                     },
                     Ok(VClosure::LogicVar { .. }) => panic!("forcing a logic variable"),
                     Ok(VClosure::Susp { .. }) => unreachable!("forcing a suspension"),
-                    Err(a) => {
-                        match senv.get(a.ident) {
-                            SuspState::Susp(_) => {
-                                let cclos = senv.get_suspension(a.ident);
-                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-                                self.cclos = cclos;
-                                self.stack = new_stack;
-                                return Some(Event::Need(a.ident));
-                            }
-                            SuspState::Run(_, _) => {
-                                return Some(Event::Wait(a.ident));
-                            }
-                            SuspState::Done(_) => unreachable!("suspension already done"),
+                    Err(a) => match senv.get(a.ident) {
+                        SuspState::Susp(_) => {
+                            return Some(Event::Wait(a.ident));
                         }
-                    }
+                        SuspState::Run(_) => {
+                            return Some(Event::Wait(a.ident));
+                        }
+                        SuspState::Done(_) => unreachable!("suspension already done"),
+                    },
                 }
             }
-
 
             // ── Ifz ─────────────────────────────────────────────
             MComputation::Ifz { num, zk, sk } => {
@@ -367,21 +341,15 @@ impl Machine {
                 let sk = *sk;
                 let vclos = VClosure::mk_clos(num, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => {
-                        match senv.get(a.ident) {
-                            SuspState::Susp(_) => {
-                                let cclos = senv.get_suspension(a.ident);
-                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-                                self.cclos = cclos;
-                                self.stack = new_stack;
-                                return Some(Event::Need(a.ident));
-                            }
-                            SuspState::Run(_, _) => {
-                                return Some(Event::Wait(a.ident));
-                            }
-                            SuspState::Done(_) => unreachable!("suspension already done"),
+                    Err(a) => match senv.get(a.ident) {
+                        SuspState::Susp(_) => {
+                            return Some(Event::Wait(a.ident));
                         }
-                    }
+                        SuspState::Run(_) => {
+                            return Some(Event::Wait(a.ident));
+                        }
+                        SuspState::Done(_) => unreachable!("suspension already done"),
+                    },
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Zero | MValue::Nat(0) => {
                             self.cclos = (zk, env);
@@ -405,10 +373,13 @@ impl Machine {
                         let zero_val = heap.alloc_val(MValue::Nat(0));
                         let (m_zero, lenv_z) = {
                             let mut lz = lenv.clone();
-                            lz.set_vclos(ident, VClosure::Clos {
-                                val: zero_val,
-                                env: empty,
-                            });
+                            lz.set_vclos(
+                                ident,
+                                VClosure::Clos {
+                                    val: zero_val,
+                                    env: empty,
+                                },
+                            );
                             let m = Machine {
                                 cclos: (zk, env),
                                 stack: self.stack,
@@ -419,10 +390,13 @@ impl Machine {
                             let mut ls = lenv.clone();
                             let fresh = ls.fresh(ValueType::Nat);
                             let var0 = heap.alloc_val(MValue::Var(0));
-                            ls.set_vclos(ident, VClosure::Clos {
-                                val: var0,
-                                env: empty.extend_lvar(heap, fresh),
-                            });
+                            ls.set_vclos(
+                                ident,
+                                VClosure::Clos {
+                                    val: var0,
+                                    env: empty.extend_lvar(heap, fresh),
+                                },
+                            );
                             let new_env = env.extend_lvar(heap, fresh);
                             let m = Machine {
                                 cclos: (sk, new_env),
@@ -447,7 +421,6 @@ impl Machine {
                 }
             }
 
-
             // ── Match ───────────────────────────────────────────
             MComputation::Match { list, nilk, consk } => {
                 let list = *list;
@@ -455,21 +428,15 @@ impl Machine {
                 let consk = *consk;
                 let vclos = VClosure::mk_clos(list, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => {
-                        match senv.get(a.ident) {
-                            SuspState::Susp(_) => {
-                                let cclos = senv.get_suspension(a.ident);
-                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-                                self.cclos = cclos;
-                                self.stack = new_stack;
-                                return Some(Event::Need(a.ident));
-                            }
-                            SuspState::Run(_, _) => {
-                                return Some(Event::Wait(a.ident));
-                            }
-                            SuspState::Done(_) => unreachable!("suspension already done"),
+                    Err(a) => match senv.get(a.ident) {
+                        SuspState::Susp(_) => {
+                            return Some(Event::Wait(a.ident));
                         }
-                    }
+                        SuspState::Run(_) => {
+                            return Some(Event::Wait(a.ident));
+                        }
+                        SuspState::Done(_) => unreachable!("suspension already done"),
+                    },
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Nil => {
                             self.cclos = (nilk, env);
@@ -505,9 +472,12 @@ impl Machine {
                             let var_hd = heap.alloc_val(MValue::Var(1));
                             let var_tl = heap.alloc_val(MValue::Var(0));
                             let cons_val = heap.alloc_val(MValue::Cons(var_hd, var_tl));
-                            let clos_env = empty.extend_lvar(heap, fresh_hd).extend_lvar(heap, fresh_tl);
+                            let clos_env = empty
+                                .extend_lvar(heap, fresh_hd)
+                                .extend_lvar(heap, fresh_tl);
                             lc.set_vclos(ident, VClosure::mk_clos(cons_val, clos_env));
-                            let new_env = env.extend_lvar(heap, fresh_hd).extend_lvar(heap, fresh_tl);
+                            let new_env =
+                                env.extend_lvar(heap, fresh_hd).extend_lvar(heap, fresh_tl);
                             let m = Machine {
                                 cclos: (consk, new_env),
                                 stack: self.stack,
@@ -531,7 +501,6 @@ impl Machine {
                 }
             }
 
-
             // ── Case ────────────────────────────────────────────
             MComputation::Case { sum, inlk, inrk } => {
                 let sum = *sum;
@@ -539,21 +508,15 @@ impl Machine {
                 let inrk = *inrk;
                 let vclos = VClosure::mk_clos(sum, env);
                 match vclos.close_head(heap, lenv, senv) {
-                    Err(a) => {
-                        match senv.get(a.ident) {
-                            SuspState::Susp(_) => {
-                                let cclos = senv.get_suspension(a.ident);
-                                let new_stack = self.stack.push(heap, StkFrame::Set(a.ident, comp_id), env);
-                                self.cclos = cclos;
-                                self.stack = new_stack;
-                                return Some(Event::Need(a.ident));
-                            }
-                            SuspState::Run(_, _) => {
-                                return Some(Event::Wait(a.ident));
-                            }
-                            SuspState::Done(_) => unreachable!("suspension already done"),
+                    Err(a) => match senv.get(a.ident) {
+                        SuspState::Susp(_) => {
+                            return Some(Event::Wait(a.ident));
                         }
-                    }
+                        SuspState::Run(_) => {
+                            return Some(Event::Wait(a.ident));
+                        }
+                        SuspState::Done(_) => unreachable!("suspension already done"),
+                    },
                     Ok(VClosure::Clos { val, env: cenv }) => match heap.val(val) {
                         MValue::Inl(v) => {
                             let new_env = env.extend_val(heap, v, cenv);
@@ -629,4 +592,3 @@ impl Machine {
         }
     }
 }
-

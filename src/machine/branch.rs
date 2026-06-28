@@ -12,17 +12,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
+use super::config::Config;
 use super::heap::Heap;
 use super::lvar::LogicEnv;
 use super::senv::{SuspEnv, SuspState};
-use super::config::Config;
 use super::step::{Event, Machine, Stack};
+use super::vclosure::VClosure;
+use super::SuspId;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant as StepInstant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant as StepInstant;
-use super::vclosure::VClosure;
-use super::SuspId;
 
 /// Identifies a machine thread within a branch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -93,7 +93,6 @@ pub(crate) enum BranchEvent {
     Timeout,
 }
 
-
 /// A single search branch: shared stores plus a set of live machines.
 #[derive(Clone)]
 pub struct Branch {
@@ -136,13 +135,6 @@ impl Branch {
         branch.ready.push_back(main_id);
         branch
     }
-
-    pub fn insert_thread(&mut self, thread: Thread) -> MachineId {
-        let id = MachineId(self.machines.len());
-        self.machines.push(Some(thread));
-        id
-    }
-
     pub fn put_runnable(&mut self, mid: MachineId, role: MachineRole, machine: Machine) {
         let thread = Thread {
             machine,
@@ -152,10 +144,26 @@ impl Branch {
         self.machines[mid.0] = Some(thread);
         self.ready.push_back(mid);
     }
-
-    pub fn block_on(&mut self, mid: MachineId, role: MachineRole, resume: Machine, sid: SuspId) {
+    /// Start evaluating a suspension if it is not already running or done.
+    pub fn start(&mut self, sid: SuspId, heap: &mut Heap) {
+        match self.senv.get(sid) {
+            SuspState::Susp(cclos) => {
+                let mid = MachineId(self.machines.len());
+                self.senv.mark_running(sid, mid);
+                let machine = Machine {
+                    cclos,
+                    stack: Stack::empty(heap),
+                };
+                let thread = Thread::new(machine, MachineRole::SuspEval { target: sid });
+                self.machines.push(Some(thread));
+                self.ready.push_back(mid);
+            }
+            _ => {} // already Done or Run — nothing to do
+        }
+    }
+    pub fn wait(&mut self, mid: MachineId, role: MachineRole, machine: Machine, sid: SuspId) {
         let thread = Thread {
-            machine: resume,
+            machine,
             role,
             state: ThreadState::WaitingOn(sid),
         };
@@ -181,7 +189,7 @@ impl Branch {
     }
 
     /// Check if the branch is ready to emit its candidate answer.
-    fn check_emit(&self) -> Option<VClosure> {
+    fn emit(&self) -> Option<VClosure> {
         if self.candidate_answer.is_some() && self.obligations_done() {
             self.candidate_answer
         } else {
@@ -190,7 +198,9 @@ impl Branch {
     }
 
     fn obligations_done(&self) -> bool {
-        self.obligations.iter().all(|sid| matches!(self.senv.get(*sid), SuspState::Done(_)))
+        self.obligations
+            .iter()
+            .all(|sid| matches!(self.senv.get(*sid), SuspState::Done(_)))
     }
 
     fn has_runnable(&self) -> bool {
@@ -209,12 +219,18 @@ impl Branch {
         None
     }
 
-
     /// Clone the branch, replacing the thread at `mid` with a new one.
     /// The original thread should have been taken out (its slot is `None`).
     /// The new thread gets the given `machine` and `role`, and is added to ready.
     /// The branch's `lenv` and `senv` are replaced with the given ones.
-    pub fn clone_with_thread(&self, mid: MachineId, role: MachineRole, machine: Machine, lenv: LogicEnv, senv: SuspEnv) -> Branch {
+    pub fn clone_with_thread(
+        &self,
+        mid: MachineId,
+        role: MachineRole,
+        machine: Machine,
+        lenv: LogicEnv,
+        senv: SuspEnv,
+    ) -> Branch {
         let mut cloned = self.clone();
         let new_thread = Thread::new(machine, role);
         cloned.machines[mid.0] = Some(new_thread);
@@ -230,78 +246,106 @@ impl Branch {
             .map(|alt| self.clone_with_thread(mid, role, alt.machine, alt.lenv, alt.senv))
             .collect()
     }
-/// Verify internal consistency. Panics on violation.
-pub fn check(&self) {
-    // 1. Every machine in ready has state Runnable and its slot is occupied
-    for &mid in &self.ready {
-        match self.machines.get(mid.0) {
-            Some(Some(thread)) => {
-                assert!(matches!(thread.state, ThreadState::Runnable),
-                    "ready machine {mid:?} not Runnable: {:?}", thread.state);
-            }
-            _ => panic!("ready machine {mid:?} has empty or missing slot"),
-        }
-    }
-
-    // 2. Waiter consistency: every waiter has WaitingOn state matching the map key
-    for (&sid, mids) in &self.waiters {
-        for &mid in mids {
+    /// Verify internal consistency. Panics on violation.
+    pub fn check(&self) {
+        // 1. Every machine in ready has state Runnable and its slot is occupied
+        for &mid in &self.ready {
             match self.machines.get(mid.0) {
                 Some(Some(thread)) => {
-                    assert!(matches!(thread.state, ThreadState::WaitingOn(s) if s == sid),
-                        "waiter {mid:?} expected WaitingOn({sid:?}), got {:?}", thread.state);
+                    assert!(
+                        matches!(thread.state, ThreadState::Runnable),
+                        "ready machine {mid:?} not Runnable: {:?}",
+                        thread.state
+                    );
                 }
-                _ => panic!("waiter {mid:?} for {sid:?} has empty or missing slot"),
+                _ => panic!("ready machine {mid:?} has empty or missing slot"),
             }
         }
-    }
 
-    // 3. Main machine id is valid
-    assert!(self.machines.get(self.main.0).is_some(), "main {:?} out of bounds (machines len {})", self.main, self.machines.len());
-
-    // 4. SuspEval targets consistent with SuspState::Run
-    for (i, slot) in self.machines.iter().enumerate() {
-        if let Some(thread) = slot {
-            if let MachineRole::SuspEval { target } = thread.role {
-                match self.senv.get(target) {
-                    SuspState::Run(mid, _) => {
-                        assert!(mid.0 == i, "SuspEval at {i} target {target:?} but senv says Run({})", mid.0);
+        // 2. Waiter consistency: every waiter has WaitingOn state matching the map key
+        for (&sid, mids) in &self.waiters {
+            for &mid in mids {
+                match self.machines.get(mid.0) {
+                    Some(Some(thread)) => {
+                        assert!(
+                            matches!(thread.state, ThreadState::WaitingOn(s) if s == sid),
+                            "waiter {mid:?} expected WaitingOn({sid:?}), got {:?}",
+                            thread.state
+                        );
                     }
-                    SuspState::Done(_) => {} // already done, stale machine slot
-                    SuspState::Susp(_) => panic!("SuspEval at {i} target {target:?} but senv says Susp"),
+                    _ => panic!("waiter {mid:?} for {sid:?} has empty or missing slot"),
                 }
             }
         }
-    }
 
-    // 5. Every Running suspension has a corresponding SuspEval machine
-    for (sid, state) in self.senv.iter() {
-        if let SuspState::Run(mid, _) = state {
-            match self.machines.get(mid.0) {
-                Some(Some(thread)) => {
-                    assert!(matches!(thread.role, MachineRole::SuspEval { target } if target == sid),
-                        "Run({sid:?}) points to {mid:?} but role is {:?}", thread.role);
+        // 3. Main machine id is valid
+        assert!(
+            self.machines.get(self.main.0).is_some(),
+            "main {:?} out of bounds (machines len {})",
+            self.main,
+            self.machines.len()
+        );
+
+        // 4. SuspEval targets consistent with SuspState::Run
+        for (i, slot) in self.machines.iter().enumerate() {
+            if let Some(thread) = slot {
+                if let MachineRole::SuspEval { target } = thread.role {
+                    match self.senv.get(target) {
+                        SuspState::Run(mid) => {
+                            assert!(
+                                mid.0 == i,
+                                "SuspEval at {i} target {target:?} but senv says Run({})",
+                                mid.0
+                            );
+                        }
+                        SuspState::Done(_) => {} // already done, stale machine slot
+                        SuspState::Susp(_) => {
+                            panic!("SuspEval at {i} target {target:?} but senv says Susp")
+                        }
+                    }
                 }
-                _ => panic!("Run({sid:?}) points to empty or missing slot {mid:?}"),
             }
         }
-    }
 
-    // 6. If candidate_answer is set and there is no runnable work left,
-    if self.candidate_answer.is_some() && !self.has_runnable() {
-        assert!(self.obligations_done(),
-            "candidate_answer set but obligations not done: {:?}", self.obligations);
+        // 5. Every Running suspension has a corresponding SuspEval machine
+        for (sid, state) in self.senv.iter() {
+            if let SuspState::Run(mid) = state {
+                match self.machines.get(mid.0) {
+                    Some(Some(thread)) => {
+                        assert!(
+                            matches!(thread.role, MachineRole::SuspEval { target } if target == sid),
+                            "Run({sid:?}) points to {mid:?} but role is {:?}",
+                            thread.role
+                        );
+                    }
+                    _ => panic!("Run({sid:?}) points to empty or missing slot {mid:?}"),
+                }
+            }
+        }
+
+        // 6. If candidate_answer is set and there is no runnable work left,
+        if self.candidate_answer.is_some() && !self.has_runnable() {
+            assert!(
+                self.obligations_done(),
+                "candidate_answer set but obligations not done: {:?}",
+                self.obligations
+            );
+        }
     }
-}
     /// Advance the branch by one quantum: pop the next ready thread, run it,
     /// and handle the resulting event.
-pub(crate) fn step(&mut self, heap: &mut Heap, cfg: &Config, deadline: StepInstant) -> BranchEvent {
-    #[cfg(debug_assertions)]
-    self.check();
+    pub(crate) fn step(
+        &mut self,
+        heap: &mut Heap,
+        cfg: &Config,
+        deadline: StepInstant,
+    ) -> BranchEvent {
+        #[cfg(debug_assertions)]
+        self.check();
         let (mid, thread) = match self.pop_ready() {
             Some(p) => p,
             None => {
-                if let Some(v) = self.check_emit() {
+                if let Some(v) = self.emit() {
                     return BranchEvent::Emit(v);
                 }
                 return BranchEvent::Dead;
@@ -315,7 +359,7 @@ pub(crate) fn step(&mut self, heap: &mut Heap, cfg: &Config, deadline: StepInsta
                     MachineRole::Main => self.candidate_answer = Some(vclos),
                     MachineRole::SuspEval { target } => self.done(target, vclos),
                 }
-                if let Some(v) = self.check_emit() {
+                if let Some(v) = self.emit() {
                     BranchEvent::Emit(v)
                 } else if self.has_runnable() {
                     BranchEvent::More
@@ -330,26 +374,13 @@ pub(crate) fn step(&mut self, heap: &mut Heap, cfg: &Config, deadline: StepInsta
             }
             Event::Need(sid) => {
                 self.obligations.push(sid);
-                // Start evaluating the suspension
-                let cclos = self.senv.get_suspension(sid);
-                self.senv.mark_running(sid, MachineId(self.machines.len()));
-                let susp_machine = Machine { cclos, stack: Stack::empty(heap) };
-                let susp_mid = self.insert_thread(Thread::new(susp_machine, MachineRole::SuspEval { target: sid }));
-                self.ready.push_back(susp_mid);
-                // Continue current machine
+                self.start(sid, heap);
                 self.put_runnable(mid, role, machine);
                 BranchEvent::More
             }
             Event::Wait(sid) => {
-                let need_eval = matches!(self.senv.get(sid), SuspState::Susp(_));
-                self.block_on(mid, role, machine, sid);
-                if need_eval {
-                    let cclos = self.senv.get_suspension(sid);
-                    self.senv.mark_running(sid, MachineId(self.machines.len()));
-                    let susp_machine = Machine { cclos, stack: Stack::empty(heap) };
-                    let susp_mid = self.insert_thread(Thread::new(susp_machine, MachineRole::SuspEval { target: sid }));
-                    self.ready.push_back(susp_mid);
-                }
+                self.wait(mid, role, machine, sid);
+                self.start(sid, heap);
                 BranchEvent::More
             }
             Event::Gc => {
@@ -360,4 +391,3 @@ pub(crate) fn step(&mut self, heap: &mut Heap, cfg: &Config, deadline: StepInsta
         }
     }
 }
-

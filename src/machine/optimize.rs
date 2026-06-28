@@ -172,14 +172,12 @@ fn comp_eq(heap: &Heap, a: CompId, b: CompId) -> bool {
     match (heap.comp(a), heap.comp(b)) {
         (MComputation::Return(x), MComputation::Return(y))
         | (MComputation::Force(x), MComputation::Force(y)) => val_eq(heap, *x, *y),
-        (
-            MComputation::Bind { comp: c1, cont: k1 },
-            MComputation::Bind { comp: c2, cont: k2 },
-        ) => comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2),
-        (
-            MComputation::Need { comp: c1, cont: k1 },
-            MComputation::Need { comp: c2, cont: k2 },
-        ) => comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2),
+        (MComputation::Bind { comp: c1, cont: k1 }, MComputation::Bind { comp: c2, cont: k2 }) => {
+            comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2)
+        }
+        (MComputation::Need { comp: c1, cont: k1 }, MComputation::Need { comp: c2, cont: k2 }) => {
+            comp_eq(heap, *c1, *c2) && comp_eq(heap, *k1, *k2)
+        }
         (MComputation::Lambda { body: b1 }, MComputation::Lambda { body: b2 })
         | (MComputation::Rec { body: b1 }, MComputation::Rec { body: b2 }) => {
             comp_eq(heap, *b1, *b2)
@@ -188,28 +186,65 @@ fn comp_eq(heap: &Heap, a: CompId, b: CompId) -> bool {
             comp_eq(heap, *o1, *o2) && val_eq(heap, *a1, *a2)
         }
         (MComputation::Choice(c1), MComputation::Choice(c2)) => {
-            c1.len() == c2.len()
-                && c1.iter().zip(c2.iter()).all(|(x, y)| comp_eq(heap, *x, *y))
+            c1.len() == c2.len() && c1.iter().zip(c2.iter()).all(|(x, y)| comp_eq(heap, *x, *y))
         }
         (
-            MComputation::Exists { ptype: p1, body: b1 },
-            MComputation::Exists { ptype: p2, body: b2 },
+            MComputation::Exists {
+                ptype: p1,
+                body: b1,
+            },
+            MComputation::Exists {
+                ptype: p2,
+                body: b2,
+            },
         ) => p1 == p2 && comp_eq(heap, *b1, *b2),
         (
-            MComputation::Equate { lhs: l1, rhs: r1, body: b1 },
-            MComputation::Equate { lhs: l2, rhs: r2, body: b2 },
+            MComputation::Equate {
+                lhs: l1,
+                rhs: r1,
+                body: b1,
+            },
+            MComputation::Equate {
+                lhs: l2,
+                rhs: r2,
+                body: b2,
+            },
         ) => val_eq(heap, *l1, *l2) && val_eq(heap, *r1, *r2) && comp_eq(heap, *b1, *b2),
         (
-            MComputation::Ifz { num: n1, zk: z1, sk: s1 },
-            MComputation::Ifz { num: n2, zk: z2, sk: s2 },
+            MComputation::Ifz {
+                num: n1,
+                zk: z1,
+                sk: s1,
+            },
+            MComputation::Ifz {
+                num: n2,
+                zk: z2,
+                sk: s2,
+            },
         ) => val_eq(heap, *n1, *n2) && comp_eq(heap, *z1, *z2) && comp_eq(heap, *s1, *s2),
         (
-            MComputation::Match { list: l1, nilk: n1, consk: c1 },
-            MComputation::Match { list: l2, nilk: n2, consk: c2 },
+            MComputation::Match {
+                list: l1,
+                nilk: n1,
+                consk: c1,
+            },
+            MComputation::Match {
+                list: l2,
+                nilk: n2,
+                consk: c2,
+            },
         ) => val_eq(heap, *l1, *l2) && comp_eq(heap, *n1, *n2) && comp_eq(heap, *c1, *c2),
         (
-            MComputation::Case { sum: s1, inlk: i1, inrk: r1 },
-            MComputation::Case { sum: s2, inlk: i2, inrk: r2 },
+            MComputation::Case {
+                sum: s1,
+                inlk: i1,
+                inrk: r1,
+            },
+            MComputation::Case {
+                sum: s2,
+                inlk: i2,
+                inrk: r2,
+            },
         ) => val_eq(heap, *s1, *s2) && comp_eq(heap, *i1, *i2) && comp_eq(heap, *r1, *r2),
         _ => false,
     }
@@ -1326,7 +1361,11 @@ mod tests {
         let inner = imm(&mut heap, MValue::Zero);
         let succ = imm(&mut heap, MValue::Succ(inner));
         let body = ret(&mut heap, succ);
-        let term = heap.alloc_comp(MComputation::Equate { lhs: v, rhs: v, body });
+        let term = heap.alloc_comp(MComputation::Equate {
+            lhs: v,
+            rhs: v,
+            body,
+        });
         let result = opt_comp(&mut heap, term);
         assert!(comp_eq(&heap, result, body));
     }

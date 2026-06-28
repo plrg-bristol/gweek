@@ -94,7 +94,9 @@ pub fn count_nodes_comp(heap: &Heap, id: CompId) -> usize {
         MComputation::App { op, arg } => {
             1 + count_nodes_comp(heap, *op) + count_nodes_val(heap, *arg)
         }
-        MComputation::Choice(cs) => 1 + cs.iter().map(|c| count_nodes_comp(heap, *c)).sum::<usize>(),
+        MComputation::Choice(cs) => {
+            1 + cs.iter().map(|c| count_nodes_comp(heap, *c)).sum::<usize>()
+        }
         MComputation::Exists { body, .. } => 1 + count_nodes_comp(heap, *body),
         MComputation::Equate { lhs, rhs, body } => {
             1 + count_nodes_val(heap, *lhs)

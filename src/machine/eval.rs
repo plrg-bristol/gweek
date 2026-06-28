@@ -22,7 +22,12 @@ use super::vclosure::VClosure;
 use super::NodeId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Strategy { Bfs, Dfs, Iddfs, Fair }
+pub enum Strategy {
+    Bfs,
+    Dfs,
+    Iddfs,
+    Fair,
+}
 
 // ── Public entry points ───────────────────────────────────────────
 
@@ -33,8 +38,14 @@ pub fn eval(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId]) {
     let mut sink = Sink::new(cfg, &mut on_solution);
     let timed_out = run_internal(cfg, heap, comp, env, deadline, &mut sink);
     let solns = sink.count;
-    if timed_out { println!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns); }
-    else { println!(">>> {} solutions", solns); }
+    if timed_out {
+        println!(
+            ">>> timed out after {}s, {} solutions found",
+            cfg.timeout_secs, solns
+        );
+    } else {
+        println!(">>> {} solutions", solns);
+    }
 }
 
 pub fn eval_collect(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId]) -> String {
@@ -47,20 +58,38 @@ pub fn eval_collect(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId]
         run_internal(cfg, heap, comp, env, deadline, &mut sink)
     };
     let solns = solutions.len();
-    if timed_out { solutions.push(format!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns)); }
-    else { solutions.push(format!(">>> {} solutions", solns)); }
+    if timed_out {
+        solutions.push(format!(
+            ">>> timed out after {}s, {} solutions found",
+            cfg.timeout_secs, solns
+        ));
+    } else {
+        solutions.push(format!(">>> {} solutions", solns));
+    }
     solutions.join("\n")
 }
 
-pub fn eval_streaming(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId], mut on_solution: impl FnMut(&str)) -> String {
+pub fn eval_streaming(
+    cfg: &Config,
+    heap: &mut Heap,
+    comp: CompId,
+    vals: &[NodeId],
+    mut on_solution: impl FnMut(&str),
+) -> String {
     let env = import_env(heap, vals);
     let deadline = deadline_from(cfg);
     let mut cb = |s: &str| on_solution(&format!("> {}", s));
     let mut sink = Sink::new(cfg, &mut cb);
     let timed_out = run_internal(cfg, heap, comp, env, deadline, &mut sink);
     let solns = sink.count;
-    if timed_out { format!(">>> timed out after {}s, {} solutions found", cfg.timeout_secs, solns) }
-    else { format!(">>> {} solutions", solns) }
+    if timed_out {
+        format!(
+            ">>> timed out after {}s, {} solutions found",
+            cfg.timeout_secs, solns
+        )
+    } else {
+        format!(">>> {} solutions", solns)
+    }
 }
 
 pub fn run(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId], print: bool) -> usize {
@@ -79,12 +108,13 @@ pub fn run(cfg: &Config, heap: &mut Heap, comp: CompId, vals: &[NodeId], print: 
     }
 }
 
-
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn import_env(heap: &mut Heap, vals: &[NodeId]) -> Env {
     let mut env = Env::empty_imm(heap);
-    for val in vals { env = env.extend_val_imm(heap, *val, env); }
+    for val in vals {
+        env = env.extend_val_imm(heap, *val, env);
+    }
     env
 }
 
@@ -92,7 +122,14 @@ fn deadline_from(cfg: &Config) -> Instant {
     Instant::now() + std::time::Duration::from_secs(cfg.timeout_secs)
 }
 
-fn run_internal(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Instant, sink: &mut Sink) -> bool {
+fn run_internal(
+    cfg: &Config,
+    heap: &mut Heap,
+    comp: CompId,
+    env: Env,
+    deadline: Instant,
+    sink: &mut Sink,
+) -> bool {
     match cfg.strategy {
         Strategy::Bfs => eval_bfs(cfg, heap, comp, env, deadline, sink),
         Strategy::Dfs => eval_dfs(cfg, heap, comp, env, deadline, sink),
@@ -110,10 +147,19 @@ struct Sink<'a> {
 
 impl<'a> Sink<'a> {
     fn new(cfg: &Config, on_solution: &'a mut dyn FnMut(&str)) -> Self {
-        Sink { count: 0, seen: cfg.distinct.then(HashSet::new), first_only: cfg.first_only, on_solution }
+        Sink {
+            count: 0,
+            seen: cfg.distinct.then(HashSet::new),
+            first_only: cfg.first_only,
+            on_solution,
+        }
     }
     fn record(&mut self, rendered: String) -> bool {
-        if let Some(seen) = &mut self.seen { if !seen.insert(rendered.clone()) { return false; } }
+        if let Some(seen) = &mut self.seen {
+            if !seen.insert(rendered.clone()) {
+                return false;
+            }
+        }
         (self.on_solution)(&rendered);
         self.count += 1;
         self.first_only
@@ -125,7 +171,10 @@ fn record_solution(heap: &Heap, branch: &Branch, vclos: VClosure, sink: &mut Sin
 }
 
 fn fresh_branch(heap: &mut Heap, comp: CompId, env: Env) -> Branch {
-    let machine = Machine { cclos: (comp, env), stack: Stack::empty(heap) };
+    let machine = Machine {
+        cclos: (comp, env),
+        stack: Stack::empty(heap),
+    };
     Branch::new(heap, LogicEnv::new(), SuspEnv::new(), machine)
 }
 
@@ -150,12 +199,24 @@ fn forward_roots(heap: &mut Heap, branches: &mut [&mut Branch]) {
     let mut senv_map: HashMap<usize, SuspEnv> = HashMap::new();
     for b in branches.iter_mut() {
         let lkey = b.lenv.store_ptr();
-        if let Some(c) = lenv_map.get(&lkey) { b.lenv = c.clone(); }
-        else { let n = b.lenv.forwarded(heap); lenv_map.insert(lkey, n.clone()); b.lenv = n; }
+        if let Some(c) = lenv_map.get(&lkey) {
+            b.lenv = c.clone();
+        } else {
+            let n = b.lenv.forwarded(heap);
+            lenv_map.insert(lkey, n.clone());
+            b.lenv = n;
+        }
         let skey = b.senv.store_ptr();
-        if let Some(c) = senv_map.get(&skey) { b.senv = c.clone(); }
-        else { let n = b.senv.forwarded(heap); senv_map.insert(skey, n.clone()); b.senv = n; }
-        if let Some(vc) = &mut b.candidate_answer { *vc = (*vc).forward(heap); }
+        if let Some(c) = senv_map.get(&skey) {
+            b.senv = c.clone();
+        } else {
+            let n = b.senv.forwarded(heap);
+            senv_map.insert(skey, n.clone());
+            b.senv = n;
+        }
+        if let Some(vc) = &mut b.candidate_answer {
+            *vc = (*vc).forward(heap);
+        }
         for slot in b.machines.iter_mut().flatten() {
             slot.machine.cclos.1 = heap.forward_env(slot.machine.cclos.1);
             slot.machine.stack = Stack(heap.forward(slot.machine.stack.0));
@@ -199,19 +260,36 @@ fn drive_branch(
         }
     }
 }
-fn eval_bfs(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Instant, sink: &mut Sink) -> bool {
+fn eval_bfs(
+    cfg: &Config,
+    heap: &mut Heap,
+    comp: CompId,
+    env: Env,
+    deadline: Instant,
+    sink: &mut Sink,
+) -> bool {
     let mut branches = vec![fresh_branch(heap, comp, env)];
     let mut next = Vec::new();
     let mut clock = Clock::new(deadline);
     while !branches.is_empty() {
         while let Some(mut branch) = branches.pop() {
-            if clock.expired() { return true; }
+            if clock.expired() {
+                return true;
+            }
             loop {
                 match drive_branch(&mut branch, heap, cfg, deadline, sink) {
                     Drive::Done => break,
-                    Drive::Split(nb) => { next.extend(nb); break; }
+                    Drive::Split(nb) => {
+                        next.extend(nb);
+                        break;
+                    }
                     Drive::Gc => {
-                        collect_branches(heap, std::iter::once(&mut branch).chain(branches.iter_mut()).chain(next.iter_mut()));
+                        collect_branches(
+                            heap,
+                            std::iter::once(&mut branch)
+                                .chain(branches.iter_mut())
+                                .chain(next.iter_mut()),
+                        );
                     }
                     Drive::TimedOut => return true,
                 }
@@ -222,15 +300,29 @@ fn eval_bfs(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Ins
     false
 }
 
-fn eval_dfs(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Instant, sink: &mut Sink) -> bool {
+fn eval_dfs(
+    cfg: &Config,
+    heap: &mut Heap,
+    comp: CompId,
+    env: Env,
+    deadline: Instant,
+    sink: &mut Sink,
+) -> bool {
     let mut stack = vec![fresh_branch(heap, comp, env)];
     let mut clock = Clock::new(deadline);
     while let Some(mut branch) = stack.pop() {
-        if clock.expired() { return true; }
+        if clock.expired() {
+            return true;
+        }
         loop {
             match drive_branch(&mut branch, heap, cfg, deadline, sink) {
                 Drive::Done => break,
-                Drive::Split(nb) => { for b in nb.into_iter().rev() { stack.push(b); } break; }
+                Drive::Split(nb) => {
+                    for b in nb.into_iter().rev() {
+                        stack.push(b);
+                    }
+                    break;
+                }
                 Drive::Gc => {
                     collect_branches(heap, std::iter::once(&mut branch).chain(stack.iter_mut()));
                 }
@@ -241,37 +333,62 @@ fn eval_dfs(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Ins
     false
 }
 
-fn eval_iddfs(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Instant, sink: &mut Sink) -> bool {
+fn eval_iddfs(
+    cfg: &Config,
+    heap: &mut Heap,
+    comp: CompId,
+    env: Env,
+    deadline: Instant,
+    sink: &mut Sink,
+) -> bool {
     let mut depth_limit: usize = 1;
     loop {
         let mut cutoff = false;
         let mut stack: Vec<(Branch, usize)> = vec![(fresh_branch(heap, comp, env), 0)];
         let mut clock = Clock::new(deadline);
         while let Some((mut branch, depth)) = stack.pop() {
-            if clock.expired() { return true; }
-            if depth > depth_limit { cutoff = true; continue; }
+            if clock.expired() {
+                return true;
+            }
+            if depth > depth_limit {
+                cutoff = true;
+                continue;
+            }
             loop {
                 match drive_branch(&mut branch, heap, cfg, deadline, sink) {
                     Drive::Done => break,
                     Drive::Split(nb) => {
                         let nd = depth + 1;
-                        for b in nb.into_iter().rev() { stack.push((b, nd)); }
+                        for b in nb.into_iter().rev() {
+                            stack.push((b, nd));
+                        }
                         break;
                     }
                     Drive::Gc => {
-                        collect_branches(heap, std::iter::once(&mut branch).chain(stack.iter_mut().map(|(b, _)| b)));
+                        collect_branches(
+                            heap,
+                            std::iter::once(&mut branch).chain(stack.iter_mut().map(|(b, _)| b)),
+                        );
                     }
                     Drive::TimedOut => return true,
                 }
             }
         }
-        if !cutoff { return false; }
+        if !cutoff {
+            return false;
+        }
         depth_limit += 1;
     }
 }
 
-
-fn eval_fair(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: Instant, sink: &mut Sink) -> bool {
+fn eval_fair(
+    cfg: &Config,
+    heap: &mut Heap,
+    comp: CompId,
+    env: Env,
+    deadline: Instant,
+    sink: &mut Sink,
+) -> bool {
     const QUOTA: usize = 10000;
     const MAX_THREADS: usize = 10000;
     let mut queue: VecDeque<Vec<Branch>> = VecDeque::new();
@@ -280,16 +397,32 @@ fn eval_fair(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: In
     while let Some(mut local) = queue.pop_front() {
         let mut steps = 0;
         while let Some(mut branch) = local.pop() {
-            if clock.expired() { return true; }
-            if steps >= QUOTA { local.push(branch); break; }
+            if clock.expired() {
+                return true;
+            }
+            if steps >= QUOTA {
+                local.push(branch);
+                break;
+            }
             steps += 1;
             match drive_branch(&mut branch, heap, cfg, deadline, sink) {
                 Drive::Done => {}
                 Drive::Split(nb) => {
                     if nb.len() > 1 && queue.len() < MAX_THREADS {
                         let mut first = true;
-                        for b in nb { if first { local.push(b); first = false; } else { queue.push_back(vec![b]); } }
-                    } else { for b in nb.into_iter().rev() { local.push(b); } }
+                        for b in nb {
+                            if first {
+                                local.push(b);
+                                first = false;
+                            } else {
+                                queue.push_back(vec![b]);
+                            }
+                        }
+                    } else {
+                        for b in nb.into_iter().rev() {
+                            local.push(b);
+                        }
+                    }
                 }
                 Drive::Gc => {
                     local.push(branch);
@@ -298,7 +431,9 @@ fn eval_fair(cfg: &Config, heap: &mut Heap, comp: CompId, env: Env, deadline: In
                 Drive::TimedOut => return true,
             }
         }
-        if !local.is_empty() { queue.push_back(local); }
+        if !local.is_empty() {
+            queue.push_back(local);
+        }
     }
     false
 }
@@ -312,7 +447,14 @@ mod tests {
     use crate::parser;
 
     fn test_config(strategy: Strategy) -> Config {
-        Config { strategy, optimize: false, timeout_secs: 60, occurs_check: true, first_only: false, distinct: false }
+        Config {
+            strategy,
+            optimize: false,
+            timeout_secs: 60,
+            occurs_check: true,
+            first_only: false,
+            distinct: false,
+        }
     }
 
     fn solutions(src: &str, strategy: Strategy) -> Vec<String> {
@@ -336,7 +478,11 @@ mod tests {
     fn inert_reports_free_variable() {
         let src = std::fs::read_to_string("examples/inert.gwk").unwrap();
         let solns = solutions(&src, Strategy::Bfs);
-        assert!(solns[0].starts_with('_'), "expected a free-variable placeholder, got {:?}", solns[0]);
+        assert!(
+            solns[0].starts_with('_'),
+            "expected a free-variable placeholder, got {:?}",
+            solns[0]
+        );
     }
     #[test]
     fn need_fail_absorbs_body() {
@@ -375,4 +521,3 @@ mod tests {
         assert_eq!(solns.len(), 2);
     }
 }
-

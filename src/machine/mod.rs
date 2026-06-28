@@ -26,9 +26,9 @@ mod value_type;
 mod vclosure;
 
 pub use config::Config;
+pub(crate) use env::Env;
 pub use eval::{eval, eval_collect, eval_streaming, run, Strategy};
 pub use heap::Heap;
-pub(crate) use env::Env;
 pub(crate) use heap::{CompId, NodeId};
 pub(crate) use vclosure::VClosure;
 
@@ -39,4 +39,3 @@ pub struct SuspId(pub usize);
 
 /// A computation closure: a computation paired with its environment.
 pub type CClosure = (CompId, env::Env);
-

@@ -10,9 +10,8 @@
 use std::rc::Rc;
 
 use super::branch::MachineId;
-use super::env::Env;
 use super::heap::Heap;
-use super::{CClosure, NodeId, SuspId, VClosure};
+use super::{CClosure, SuspId, VClosure};
 
 /// The three states a suspension can be in.
 #[derive(Clone, Copy, Debug)]
@@ -20,7 +19,7 @@ pub(crate) enum SuspState {
     /// Not yet evaluated — the frozen computation.
     Susp(CClosure),
     /// Currently being evaluated by a thread, which owns it.
-    Run(MachineId, CClosure),
+    Run(MachineId),
     /// Evaluation complete, value memoized.
     Done(VClosure),
 }
@@ -54,16 +53,9 @@ impl SuspEnv {
     pub fn lookup(&self, ident: &SuspId) -> Result<VClosure, SuspAt> {
         match &self.entries[ident.0] {
             SuspState::Done(vclos) => Ok(*vclos),
-            SuspState::Susp(_) | SuspState::Run(_, _) => Err(SuspAt {
-                ident: *ident,
-            }),
+            SuspState::Susp(_) | SuspState::Run(_) => Err(SuspAt { ident: *ident }),
         }
     }
-
-    pub fn set(&mut self, ident: &SuspId, val: NodeId, env: Env) {
-        Rc::make_mut(&mut self.entries)[ident.0] = SuspState::Done(VClosure::mk_clos(val, env));
-    }
-
     /// Set a suspension entry directly from a VClosure (for branch-level use).
     pub fn set_done(&mut self, ident: SuspId, vclos: VClosure) {
         Rc::make_mut(&mut self.entries)[ident.0] = SuspState::Done(vclos);
@@ -74,35 +66,18 @@ impl SuspEnv {
         self.entries[ident.0]
     }
 
-    /// Get the CClosure for a suspension that is in Susp state.
-    pub fn get_suspension(&self, ident: SuspId) -> CClosure {
-        match &self.entries[ident.0] {
-            SuspState::Susp(cclos) => *cclos,
-            SuspState::Run(mid, _) => panic!("get_suspension on running entry {mid:?}"),
-            SuspState::Done(_) => panic!("get_suspension on done entry"),
-        }
-    }
-
-    /// Reset a Run suspension back to Susp (used when forking branches).
-    pub fn reset_to_suspended(&mut self, ident: SuspId) {
-        let entries = Rc::make_mut(&mut self.entries);
-        if let SuspState::Run(_, cclos) = entries[ident.0] {
-            entries[ident.0] = SuspState::Susp(cclos);
-        }
-    }
-
     /// Mark a suspension as running (being evaluated by a thread).
     pub fn mark_running(&mut self, ident: SuspId, mid: MachineId) {
         let entries = Rc::make_mut(&mut self.entries);
-        if let SuspState::Susp(cclos) = entries[ident.0] {
-            entries[ident.0] = SuspState::Run(mid, cclos);
+        if matches!(entries[ident.0], SuspState::Susp(_)) {
+            entries[ident.0] = SuspState::Run(mid);
         }
     }
 
     pub fn next(&mut self) -> Option<SuspAt> {
         while self.next_pending < self.entries.len() {
             match &self.entries[self.next_pending] {
-                SuspState::Done(_) | SuspState::Run(_, _) => self.next_pending += 1,
+                SuspState::Done(_) | SuspState::Run(_) => self.next_pending += 1,
                 SuspState::Susp(_) => {
                     return Some(SuspAt {
                         ident: SuspId(self.next_pending),
@@ -120,7 +95,10 @@ impl SuspEnv {
 
     /// Iterate over all suspensions for invariant checking.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (SuspId, SuspState)> + '_ {
-        self.entries.iter().enumerate().map(|(i, s)| (SuspId(i), *s))
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (SuspId(i), *s))
     }
 
     /// Identity of the shared store, so a collection can rebuild each distinct
@@ -137,11 +115,9 @@ impl SuspEnv {
             match entry {
                 SuspState::Done(vc) => *vc = (*vc).forward(heap),
                 SuspState::Susp((_, env)) => {
-                    *env = heap.forward_env(*env)
+                    *env = heap.forward_env(*env);
                 }
-                SuspState::Run(_, (_, env)) => {
-                    *env = heap.forward_env(*env)
-                }
+                SuspState::Run(_) => {}
             }
         }
         SuspEnv {
@@ -150,4 +126,3 @@ impl SuspEnv {
         }
     }
 }
-
