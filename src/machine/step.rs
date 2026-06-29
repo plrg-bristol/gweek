@@ -390,10 +390,11 @@ impl Machine {
                             let mut ls = lenv.clone();
                             let fresh = ls.fresh(ValueType::Nat);
                             let var0 = heap.alloc_val(MValue::Var(0));
+                            let succ_val = heap.alloc_val(MValue::Succ(var0));
                             ls.set_vclos(
                                 ident,
                                 VClosure::Clos {
-                                    val: var0,
+                                    val: succ_val,
                                     env: empty.extend_lvar(heap, fresh),
                                 },
                             );
