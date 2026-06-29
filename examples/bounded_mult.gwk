@@ -1,0 +1,36 @@
+-- Bounded search for integer square roots.
+--
+-- The naive version,
+--
+--     exists n :: Nat. mult n n =:= 16. n.
+--
+-- does not terminate without --first: after finding n=4 the
+-- narrowing keeps generating n=5,6,7,… forever, each one
+-- failing after O(n²) work.
+--
+-- Since n² = K implies n ≤ K (for K > 0), we can bound the
+-- candidate set with a generator that produces precisely the
+-- naturals up to K.  The search tree becomes finite.
+
+add :: Nat -> Nat -> Nat
+add n m = case m of
+    Z -> n
+  | S z -> S (add n z).
+
+mult :: Nat -> Nat -> Nat
+mult n m = case m of
+    Z -> Z
+  | S z -> add n (mult n z).
+
+-- gen_upto k produces every natural 0 … k via non-deterministic
+-- choice.  It recurses structurally on k, so the number of
+-- alternatives is exactly k+1.
+gen_upto :: Nat -> Nat
+gen_upto n = case n of
+    Z -> Z
+  | S m -> Z <> S (gen_upto m).
+
+exists n :: Nat.
+    n =:= gen_upto 16.     -- n ∈ {0,…,16}
+    mult n n =:= 16.       -- n² = 16
+    n.                     -- answer: 4
